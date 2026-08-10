@@ -1,0 +1,5 @@
+{"sequence":4,"event":"p0-stopped","phase":"outage","actor":"test-driver","summary":"The sole writable origin is stopped.","evidence":[]}
+{"sequence":1,"event":"delegation-checked","phase":"delegation","actor":"resolver","summary":"The parent named only public-a and public-b.","evidence":["evidence/delegation/dig-ns.txt"]}
+{"sequence":3,"event":"zone-converged","phase":"replication","actor":"test-driver","summary":"P0, P1, public-a, and public-b reached serial 2.","evidence":["evidence/resolution/public-answers.txt"]}
+{"sequence":2,"event":"update-accepted","phase":"authorization","actor":"p0","summary":"The identity-derived pi-001 address set became durable.","evidence":["evidence/update/controller.txt"]}
+{"sequence":5,"event":"public-answer-retained","phase":"outage","actor":"public-a","summary":"The public secondary retained the last published answer.","evidence":["evidence/outage/public-a.txt"]}

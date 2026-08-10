@@ -1,0 +1,2 @@
+kaiba.test. 300 IN NS ns1.kaiba.test.
+kaiba.test. 300 IN NS ns2.kaiba.test.

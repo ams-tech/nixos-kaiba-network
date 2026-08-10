@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.network/schemas/dns-pilot-result-v1.json",
+  "title": "Kaiba DNS pilot canonical test result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "suite",
+    "overall",
+    "assertions",
+    "claims",
+    "serials",
+    "answers"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "suite": {"const": "kaiba-dns-pilot"},
+    "overall": {"enum": ["passed", "failed"]},
+    "assertions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/assertion"}
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exercised", "simulated", "deferred"],
+      "properties": {
+        "exercised": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/exercisedClaim"}
+        },
+        "simulated": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/claim"}
+        },
+        "deferred": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/claim"}
+        }
+      }
+    },
+    "serials": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/serialObservation"}
+    },
+    "answers": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/answerObservation"}
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "evidencePath": {
+      "type": "string",
+      "pattern": "^evidence/[A-Za-z0-9._/-]+$"
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "phase",
+        "status",
+        "description",
+        "expected",
+        "observed",
+        "evidence"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "phase": {"$ref": "#/$defs/identifier"},
+        "status": {"enum": ["passed", "failed"]},
+        "description": {"type": "string", "minLength": 1},
+        "expected": {},
+        "observed": {},
+        "evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidencePath"},
+          "uniqueItems": true
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "statement": {"type": "string", "minLength": 1}
+      }
+    },
+    "exercisedClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement", "assertions"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "statement": {"type": "string", "minLength": 1},
+        "assertions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/identifier"},
+          "uniqueItems": true
+        }
+      }
+    },
+    "serialObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "server", "serial"],
+      "properties": {
+        "phase": {"$ref": "#/$defs/identifier"},
+        "server": {"$ref": "#/$defs/identifier"},
+        "serial": {"type": "integer", "minimum": 0}
+      }
+    },
+    "answerObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "server", "name", "type", "values", "authoritative"],
+      "properties": {
+        "phase": {"$ref": "#/$defs/identifier"},
+        "server": {"$ref": "#/$defs/identifier"},
+        "name": {"type": "string", "minLength": 1},
+        "type": {"type": "string", "pattern": "^[A-Z][A-Z0-9]*$"},
+        "values": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "authoritative": {"type": "boolean"},
+        "transport": {"enum": ["udp", "tcp", "https"]}
+      }
+    }
+  }
+}

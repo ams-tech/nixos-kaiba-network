@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "assertions": {
+    "delegation-public-only": {"phase": "delegation", "security": false},
+    "device-identity": {"phase": "authorization", "security": true},
+    "p0-outage": {"phase": "outage", "security": false},
+    "public-resolution": {"phase": "resolution", "security": false}
+  }
+}

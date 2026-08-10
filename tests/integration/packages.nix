@@ -1,0 +1,110 @@
+{
+  pkgs,
+  lib,
+  kaibaPackage,
+  kaibaModules,
+}:
+
+let
+  testPki = import ./test-pki.nix { inherit pkgs; };
+  reportPython = pkgs.python3.withPackages (pythonPackages: [ pythonPackages.jsonschema ]);
+  raw = pkgs.testers.runNixOSTest (
+    import ./topology.nix {
+      inherit
+        pkgs
+        lib
+        kaibaPackage
+        kaibaModules
+        testPki
+        ;
+    }
+  );
+
+  report =
+    pkgs.runCommand "kaiba-dns-test-report"
+      {
+        nativeBuildInputs = [ pkgs.python3 ];
+      }
+      ''
+        set -eu
+        input="$TMPDIR/input"
+        mkdir -p "$input"
+        cp -R ${raw}/raw/. "$input/"
+        mkdir -p "$out"
+        python3 ${../report/render.py} \
+          --result "$input/result.json" \
+          --events "$input/events.jsonl" \
+          --evidence "$input/evidence" \
+          --zones "$input/zones" \
+          --topology ${../topology.json} \
+          --schema ${../report/result.schema.json} \
+          --output "$out"
+      '';
+
+  gate =
+    pkgs.runCommand "kaiba-dns-test-gate"
+      {
+        nativeBuildInputs = [ pkgs.python3 ];
+      }
+      ''
+        set -eu
+        python3 ${../report/gate.py} \
+          --manifest ${../report/required-assertions.json} \
+          --scope functional \
+          ${report}/result.json
+        mkdir -p "$out"
+        cp ${report}/result.json "$out/result.json"
+      '';
+
+  schemaGate =
+    pkgs.runCommand "kaiba-dns-schema-gate"
+      {
+        nativeBuildInputs = [ reportPython ];
+      }
+      ''
+        set -eu
+        python3 ${../report/schema_gate.py} \
+          --schema ${report}/result.schema.json \
+          --instance ${report}/result.json
+        mkdir -p "$out"
+        cp ${report}/result.schema.json "$out/result.schema.json"
+      '';
+
+  securityGate =
+    pkgs.runCommand "kaiba-dns-security-gate"
+      {
+        nativeBuildInputs = [ pkgs.python3 ];
+      }
+      ''
+        set -eu
+        python3 ${../report/gate.py} \
+          --manifest ${../report/required-assertions.json} \
+          --scope security \
+          ${report}/result.json
+        mkdir -p "$out"
+        cp ${report}/result.json "$out/result.json"
+      '';
+
+  reportUnit =
+    pkgs.runCommand "kaiba-dns-report-unit"
+      {
+        nativeBuildInputs = [ reportPython ];
+      }
+      ''
+        set -eu
+        export PYTHONDONTWRITEBYTECODE=1
+        cd ${../..}
+        python3 -m unittest discover -s tests/report -p 'test_*.py' -v
+        mkdir -p "$out"
+        printf '%s\n' 'report unit tests: pass' > "$out/results.txt"
+      '';
+in
+{
+  dns-test-raw = raw;
+  dns-test-report = report;
+  dns-test-gate = gate;
+  dns-schema-gate = schemaGate;
+  dns-security-gate = securityGate;
+  report-unit = reportUnit;
+  dns-test-driver = raw.driverInteractive;
+}

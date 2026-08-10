@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "assertions": {
+    "api-001": {"phase": "authorized-update", "security": false},
+    "api-002": {"phase": "idempotency", "security": true},
+    "api-002a": {"phase": "idempotency", "security": false},
+    "api-003": {"phase": "idempotency", "security": true},
+    "api-004": {"phase": "stale-replay", "security": true},
+    "boot-001": {"phase": "bootstrap", "security": false},
+    "dns-001": {"phase": "delegation", "security": false},
+    "dns-002": {"phase": "baseline", "security": false},
+    "dns-002a": {"phase": "baseline", "security": false},
+    "dns-003": {"phase": "transport", "security": false},
+    "dns-004": {"phase": "transport", "security": false},
+    "dns-005": {"phase": "changed-update", "security": false},
+    "dns-006": {"phase": "changed-update", "security": false},
+    "dns-007": {"phase": "changed-update", "security": false},
+    "fail-001": {"phase": "p0-outage", "security": false},
+    "fail-002": {"phase": "p0-outage", "security": false},
+    "fail-003": {"phase": "p1-bootstrap", "security": false},
+    "fail-004": {"phase": "public-outage", "security": false},
+    "fail-005": {"phase": "recovery", "security": false},
+    "https-001": {"phase": "https", "security": false},
+    "lease-001": {"phase": "lease-expiry", "security": false},
+    "sec-001": {"phase": "security", "security": true},
+    "sec-002": {"phase": "security", "security": true},
+    "sec-003": {"phase": "security", "security": true},
+    "sec-004": {"phase": "security", "security": true}
+  }
+}

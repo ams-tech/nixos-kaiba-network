@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "title": "Kaiba DNS pilot integration topology",
+  "zone": "kaiba.test",
+  "production_analogue": "kaiba.network",
+  "networks": [
+    {
+      "id": "public-query",
+      "kind": "vlan",
+      "vlan": 1,
+      "purpose": "Delegation, recursive DNS queries, and direct device HTTPS",
+      "trust": "public"
+    },
+    {
+      "id": "origin-transfer",
+      "kind": "vlan",
+      "vlan": 2,
+      "purpose": "Authenticated origin and secondary replication",
+      "trust": "dns-control-plane"
+    },
+    {
+      "id": "device-update",
+      "kind": "vlan",
+      "vlan": 3,
+      "purpose": "Mutually authenticated device update ingress",
+      "trust": "update-control-plane"
+    },
+    {
+      "id": "p0-loopback",
+      "kind": "local",
+      "vlan": null,
+      "purpose": "Local publisher-to-origin mutation boundary",
+      "trust": "p0-host"
+    }
+  ],
+  "trust_boundaries": [
+    {
+      "id": "registrar-simulation",
+      "label": "Registrar / parent authority simulation"
+    },
+    {
+      "id": "hidden-origin",
+      "label": "Hidden DNS origin control plane"
+    },
+    {
+      "id": "managed-secondary-simulation",
+      "label": "Managed public secondary simulation"
+    },
+    {
+      "id": "untrusted-client",
+      "label": "Public recursive client"
+    },
+    {
+      "id": "secure-device",
+      "label": "Provisioned secure device"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "parent",
+      "label": "Parent authority",
+      "role": "Simulates registry and Namecheap delegation",
+      "trust_boundary": "registrar-simulation",
+      "networks": ["public-query"],
+      "position": {"x": 90, "y": 70}
+    },
+    {
+      "id": "p0",
+      "label": "P0",
+      "role": "Controller, publisher, and sole writable hidden origin",
+      "trust_boundary": "hidden-origin",
+      "networks": ["device-update", "origin-transfer", "public-query", "p0-loopback"],
+      "position": {"x": 350, "y": 70}
+    },
+    {
+      "id": "p1",
+      "label": "P1",
+      "role": "Read-only hidden standby origin",
+      "trust_boundary": "hidden-origin",
+      "networks": ["origin-transfer"],
+      "position": {"x": 610, "y": 70}
+    },
+    {
+      "id": "public-a",
+      "label": "Public secondary A",
+      "role": "Managed public secondary emulator",
+      "trust_boundary": "managed-secondary-simulation",
+      "networks": ["public-query", "origin-transfer"],
+      "position": {"x": 270, "y": 270}
+    },
+    {
+      "id": "public-b",
+      "label": "Public secondary B",
+      "role": "Managed public secondary emulator",
+      "trust_boundary": "managed-secondary-simulation",
+      "networks": ["public-query", "origin-transfer"],
+      "position": {"x": 690, "y": 270}
+    },
+    {
+      "id": "resolver",
+      "label": "Resolver / client",
+      "role": "Recursive DNS and direct HTTPS observer",
+      "trust_boundary": "untrusted-client",
+      "networks": ["public-query"],
+      "position": {"x": 90, "y": 470}
+    },
+    {
+      "id": "pi-001",
+      "label": "pi-001",
+      "role": "Device agent and HTTPS endpoint",
+      "trust_boundary": "secure-device",
+      "networks": ["public-query", "device-update"],
+      "position": {"x": 610, "y": 470}
+    }
+  ],
+  "edges": [
+    {
+      "id": "recursive-to-parent",
+      "from": "resolver",
+      "to": "parent",
+      "network": "public-query",
+      "protocol": "DNS UDP/TCP",
+      "ports": [53],
+      "authentication": "DNS delegation",
+      "purpose": "Discover the delegated public nameservers"
+    },
+    {
+      "id": "recursive-to-public-a",
+      "from": "resolver",
+      "to": "public-a",
+      "network": "public-query",
+      "protocol": "Authoritative DNS UDP/TCP",
+      "ports": [53],
+      "authentication": "Public DNS",
+      "purpose": "Resolve delegated records"
+    },
+    {
+      "id": "recursive-to-public-b",
+      "from": "resolver",
+      "to": "public-b",
+      "network": "public-query",
+      "protocol": "Authoritative DNS UDP/TCP",
+      "ports": [53],
+      "authentication": "Public DNS",
+      "purpose": "Resolve delegated records"
+    },
+    {
+      "id": "device-update",
+      "from": "pi-001",
+      "to": "p0",
+      "network": "device-update",
+      "protocol": "HTTPS",
+      "ports": [8443],
+      "authentication": "Mutual TLS with device URI SAN",
+      "purpose": "Replace the device's complete A and AAAA address set"
+    },
+    {
+      "id": "publisher-update",
+      "from": "p0",
+      "to": "p0",
+      "network": "p0-loopback",
+      "protocol": "RFC 2136 DNS UPDATE",
+      "ports": [53],
+      "authentication": "HMAC-SHA256 TSIG: kaiba-publisher",
+      "purpose": "Project durable desired state into the writable origin"
+    },
+    {
+      "id": "publisher-observation-a",
+      "from": "p0",
+      "to": "public-a",
+      "network": "public-query",
+      "protocol": "Authoritative DNS observation",
+      "ports": [53],
+      "authentication": "Public DNS answer",
+      "purpose": "Confirm the projected A and AAAA set is externally served before marking publicly observed"
+    },
+    {
+      "id": "publisher-observation-b",
+      "from": "p0",
+      "to": "public-b",
+      "network": "public-query",
+      "protocol": "Authoritative DNS observation",
+      "ports": [53],
+      "authentication": "Public DNS answer",
+      "purpose": "Confirm the projected A and AAAA set is externally served before marking publicly observed"
+    },
+    {
+      "id": "p0-to-p1",
+      "from": "p0",
+      "to": "p1",
+      "network": "origin-transfer",
+      "protocol": "DNS NOTIFY and AXFR/IXFR",
+      "ports": [53],
+      "authentication": "HMAC-SHA256 TSIG: kaiba-p1-transfer",
+      "purpose": "Replicate the hidden origin to the read-only standby"
+    },
+    {
+      "id": "p0-to-public-a",
+      "from": "p0",
+      "to": "public-a",
+      "network": "origin-transfer",
+      "protocol": "DNS NOTIFY and AXFR/IXFR",
+      "ports": [53],
+      "authentication": "HMAC-SHA256 TSIG: kaiba-public-transfer",
+      "purpose": "Publish to public secondary A"
+    },
+    {
+      "id": "p0-to-public-b",
+      "from": "p0",
+      "to": "public-b",
+      "network": "origin-transfer",
+      "protocol": "DNS NOTIFY and AXFR/IXFR",
+      "ports": [53],
+      "authentication": "HMAC-SHA256 TSIG: kaiba-public-transfer",
+      "purpose": "Publish to public secondary B"
+    },
+    {
+      "id": "p1-bootstrap-public-a",
+      "from": "p1",
+      "to": "public-a",
+      "network": "origin-transfer",
+      "protocol": "DNS AXFR/IXFR bootstrap",
+      "ports": [53],
+      "authentication": "HMAC-SHA256 TSIG: kaiba-public-transfer",
+      "purpose": "Bootstrap a fresh public secondary while P0 is unavailable"
+    },
+    {
+      "id": "p1-bootstrap-public-b",
+      "from": "p1",
+      "to": "public-b",
+      "network": "origin-transfer",
+      "protocol": "DNS AXFR/IXFR bootstrap",
+      "ports": [53],
+      "authentication": "HMAC-SHA256 TSIG: kaiba-public-transfer",
+      "purpose": "Bootstrap a fresh public secondary while P0 is unavailable"
+    },
+    {
+      "id": "direct-https",
+      "from": "resolver",
+      "to": "pi-001",
+      "network": "public-query",
+      "protocol": "HTTPS",
+      "ports": [443],
+      "authentication": "Test public-key infrastructure",
+      "purpose": "Prove browser-style HTTPS terminates directly on the device"
+    }
+  ],
+  "delegation": {
+    "parent": "parent",
+    "zone": "kaiba.test",
+    "nameservers": ["public-a", "public-b"],
+    "hidden_origins": ["p0", "p1"]
+  }
+}

@@ -1,0 +1,4 @@
+$ORIGIN kaiba.test.
+$TTL 300
+@ IN SOA p0.kaiba.test. hostmaster.kaiba.test. 2 60 30 604800 30
+pi-001 IN A 203.0.113.42

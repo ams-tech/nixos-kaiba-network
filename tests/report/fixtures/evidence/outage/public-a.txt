@@ -1,0 +1,2 @@
+p0 state: stopped
+public-a udp: pi-001.kaiba.test. 300 IN A 203.0.113.42; authoritative=yes

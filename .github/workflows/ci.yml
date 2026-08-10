@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Formatting, unit tests, and module evaluation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: false
+          github_access_token: ${{ github.token }}
+
+      - name: Check formatting
+        run: nix fmt -- --ci
+
+      - name: Evaluate every flake system
+        run: nix flake check --all-systems --no-build -L
+
+      - name: Run fast checks
+        run: |
+          nix build --no-link -L \
+            .#checks.x86_64-linux.ci-workflow \
+            .#checks.x86_64-linux.module-eval \
+            .#checks.x86_64-linux.report-unit \
+            .#checks.x86_64-linux.unit
+
+  aarch64-packages:
+    name: ARM64 production packages
+    needs: quality
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: false
+          github_access_token: ${{ github.token }}
+
+      - name: Build and test all production binaries
+        run: |
+          nix build --no-link -L \
+            .#checks.aarch64-linux.unit \
+            .#packages.aarch64-linux.kaiba-agent \
+            .#packages.aarch64-linux.kaiba-controller \
+            .#packages.aarch64-linux.kaiba-publisher
+
+  dns-integration:
+    name: Seven-VM DNS topology
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix with NixOS test support
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: true
+          extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+          github_access_token: ${{ github.token }}
+
+      - name: Report virtualization mode
+        run: |
+          if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+            echo "KVM acceleration is available."
+          else
+            echo "::warning title=KVM unavailable::The topology will use its slower QEMU TCG fallback."
+          fi
+
+      - name: Build the canonical DNS test report
+        run: nix build .#dns-test-report --out-link result -L
+
+      - name: Verify the report manifest
+        working-directory: result
+        run: sha256sum --check manifest.sha256
+
+      - name: Enforce schema, security, and functional gates
+        run: |
+          nix build --no-link -L \
+            .#dns-schema-gate \
+            .#dns-security-gate \
+            .#dns-test-gate
+
+      - name: Collect the DNS test report
+        if: ${{ always() }}
+        run: |
+          if [[ ! -e result ]]; then
+            echo "::error title=Report unavailable::The report derivation did not produce an output."
+            exit 1
+          fi
+          mkdir -p ci-report
+          cp --recursive --dereference result/. ci-report/
+
+      - name: Upload the DNS test report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kaiba-dns-test-report
+          path: ci-report/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9

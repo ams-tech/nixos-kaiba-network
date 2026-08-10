@@ -1,0 +1,4 @@
+request status: accepted
+identity: spiffe://kaiba.network/device/001
+derived name: pi-001.kaiba.test
+address types: A, AAAA

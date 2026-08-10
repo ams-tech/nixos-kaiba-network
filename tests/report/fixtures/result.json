@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "suite": "kaiba-dns-pilot",
+  "overall": "passed",
+  "assertions": [
+    {
+      "id": "public-resolution",
+      "phase": "resolution",
+      "status": "passed",
+      "description": "Both public secondaries answer the device A record authoritatively",
+      "expected": ["public-a", "public-b"],
+      "observed": ["public-a", "public-b"],
+      "evidence": ["evidence/resolution/public-answers.txt"]
+    },
+    {
+      "id": "p0-outage",
+      "phase": "outage",
+      "status": "passed",
+      "description": "Public DNS retains the last published answer while P0 is stopped",
+      "expected": "203.0.113.42",
+      "observed": "203.0.113.42",
+      "evidence": ["evidence/outage/public-a.txt"]
+    },
+    {
+      "id": "delegation-public-only",
+      "phase": "delegation",
+      "status": "passed",
+      "description": "The parent delegates only to the two public secondary emulators",
+      "expected": ["ns1.kaiba.test.", "ns2.kaiba.test."],
+      "observed": ["ns1.kaiba.test.", "ns2.kaiba.test."],
+      "evidence": ["evidence/delegation/dig-ns.txt"]
+    },
+    {
+      "id": "device-identity",
+      "phase": "authorization",
+      "status": "passed",
+      "description": "The authenticated device identity controls only pi-001 address records",
+      "expected": {"hostname": "pi-001.kaiba.test", "types": ["A", "AAAA"]},
+      "observed": {"hostname": "pi-001.kaiba.test", "types": ["A", "AAAA"]},
+      "evidence": ["evidence/update/controller.txt"]
+    }
+  ],
+  "claims": {
+    "exercised": [
+      {
+        "id": "delegation-path",
+        "statement": "Recursive lookup follows the parent delegation to public secondaries only.",
+        "assertions": ["public-resolution", "delegation-public-only"]
+      },
+      {
+        "id": "single-writer-outage",
+        "statement": "Stopping P0 preserves public answers without promoting another writer.",
+        "assertions": ["p0-outage"]
+      },
+      {
+        "id": "identity-derived-name",
+        "statement": "A device update is constrained by its authenticated identity.",
+        "assertions": ["device-identity"]
+      }
+    ],
+    "simulated": [
+      {
+        "id": "managed-public-dns",
+        "statement": "Two local authoritative servers model managed public secondary DNS."
+      },
+      {
+        "id": "namecheap-delegation",
+        "statement": "A local parent authority models registrar delegation; Namecheap is not contacted."
+      },
+      {
+        "id": "public-network",
+        "statement": "An isolated VM VLAN models public DNS and direct HTTPS reachability."
+      }
+    ],
+    "deferred": [
+      {
+        "id": "automatic-origin-failover",
+        "statement": "Automatic P1 promotion, writer election, and fencing are not implemented."
+      },
+      {
+        "id": "device-image",
+        "statement": "Raspberry Pi images, secure boot integration, deployment, production credentials, and monitoring are not tested."
+      },
+      {
+        "id": "external-connectivity",
+        "statement": "ISP, modem, NAT, CGNAT, public Internet, and outside-in probes are not tested."
+      },
+      {
+        "id": "production-dns",
+        "statement": "Real Namecheap and managed-provider configuration is not changed or tested."
+      },
+      {
+        "id": "public-pki-dnssec",
+        "statement": "Public ACME issuance and DNSSEC are not implemented."
+      },
+      {
+        "id": "redundant-update-plane",
+        "statement": "Redundant controllers and replicated desired-state storage are not implemented."
+      },
+      {
+        "id": "scale",
+        "statement": "Large-fleet load testing, sharding, and multi-zone publication are not tested."
+      }
+    ]
+  },
+  "serials": [
+    {"phase": "published", "server": "public-b", "serial": 2},
+    {"phase": "initial", "server": "p0", "serial": 1},
+    {"phase": "published", "server": "p1", "serial": 2},
+    {"phase": "published", "server": "p0", "serial": 2},
+    {"phase": "published", "server": "public-a", "serial": 2}
+  ],
+  "answers": [
+    {
+      "phase": "published",
+      "server": "public-b",
+      "name": "pi-001.kaiba.test.",
+      "type": "A",
+      "values": ["203.0.113.42"],
+      "authoritative": true,
+      "transport": "tcp"
+    },
+    {
+      "phase": "published",
+      "server": "public-a",
+      "name": "pi-001.kaiba.test.",
+      "type": "A",
+      "values": ["203.0.113.42"],
+      "authoritative": true,
+      "transport": "udp"
+    },
+    {
+      "phase": "p0-down",
+      "server": "public-a",
+      "name": "pi-001.kaiba.test.",
+      "type": "A",
+      "values": ["203.0.113.42"],
+      "authoritative": true,
+      "transport": "udp"
+    }
+  ]
+}
