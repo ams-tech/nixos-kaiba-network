@@ -287,41 +287,88 @@ def wait_api_status(expected, timeout=30):
     return api_status()
 
 
-booted = True
+BOOT_TIMEOUT_SECONDS = 300
+booted = False
+boot_stage = "start-all"
+boot_machine = "all"
+boot_unit = ""
 try:
     start_all()
-    for machine, unit in [
-        (parent, "knot.service"),
-        (p0, "knot.service"),
-        (p1, "knot.service"),
-        (public_a, "knot.service"),
-        (public_b, "knot.service"),
-        (p0, "kaiba-controller.service"),
-        (resolver, "unbound.service"),
-        (pi_001, "nginx.service"),
+    for machine, label, unit in [
+        (parent, "parent", "knot.service"),
+        (p0, "p0", "knot.service"),
+        (p1, "p1", "knot.service"),
+        (public_a, "public-a", "knot.service"),
+        (public_b, "public-b", "knot.service"),
+        (p0, "p0", "kaiba-controller.service"),
+        (resolver, "resolver", "unbound.service"),
+        (pi_001, "pi-001", "nginx.service"),
     ]:
-        machine.wait_for_unit(unit, timeout=60)
-    for machine, server in [
-        (p0, "198.51.100.10"),
-        (p1, "198.51.100.11"),
-        (public_a, "192.0.2.11"),
-        (public_b, "192.0.2.12"),
+        boot_stage = "unit-readiness"
+        boot_machine = label
+        boot_unit = unit
+        machine.wait_for_unit(unit, timeout=BOOT_TIMEOUT_SECONDS)
+    for machine, label, server in [
+        (p0, "p0", "198.51.100.10"),
+        (p1, "p1", "198.51.100.11"),
+        (public_a, "public-a", "192.0.2.11"),
+        (public_b, "public-b", "192.0.2.12"),
     ]:
+        boot_stage = "authoritative-soa"
+        boot_machine = label
+        boot_unit = "knot.service"
         poll(
             machine,
             f'test -n "$(dig @{server} kaiba.test. SOA +short +tcp +time=1 +tries=1)"',
             timeout=90,
         )
-    for machine in [p1, public_a, public_b]:
+    for machine, label in [
+        (p1, "p1"),
+        (public_a, "public-a"),
+        (public_b, "public-b"),
+    ]:
+        boot_stage = "initial-axfr"
+        boot_machine = label
+        boot_unit = "knot.service"
         poll(
             machine,
             "journalctl -u knot.service -o cat --no-pager | grep -Eiq 'AXFR, incoming.*finished'",
             timeout=90,
         )
+    boot_stage = "publisher-readiness"
+    boot_machine = "p0"
+    boot_unit = "kaiba-publisher.service"
     p0.succeed("systemctl start kaiba-publisher.service")
-    p0.wait_for_unit("kaiba-publisher.service", timeout=30)
+    p0.wait_for_unit("kaiba-publisher.service", timeout=BOOT_TIMEOUT_SECONDS)
+    booted = True
 except Exception:
-    booted = False
+    pass
+
+
+def check_bootstrap():
+    observed = {"ready": booted}
+    details = [
+        f"ready={str(booted).lower()}",
+        f"timeout_seconds={BOOT_TIMEOUT_SECONDS}",
+    ]
+    if not booted:
+        observed.update(
+            {
+                "stage": boot_stage,
+                "machine": boot_machine,
+                "unit": boot_unit,
+            }
+        )
+        details.extend(
+            [
+                f"stage={boot_stage}",
+                f"machine={boot_machine}",
+                f"unit={boot_unit}",
+            ]
+        )
+    path = evidence_path("bootstrap", "readiness.txt", "\n".join(details) + "\n")
+    require(booted, observed)
+    return observed, [path]
 
 
 record(
@@ -329,7 +376,7 @@ record(
     "bootstrap",
     "All seven nodes and required services become ready",
     {"ready": True},
-    lambda: (require(booted, {"ready": booted}), []),
+    check_bootstrap,
 )
 
 
@@ -1289,10 +1336,30 @@ def check_ixfr_evidence():
     serial_before, serial_after = transition
     observed = {}
     evidence = []
-    for machine, label, source in [
-        (p1, "p1", "198.51.100.10"),
-        (public_a, "public-a", "198.51.100.10"),
-        (public_b, "public-b", "198.51.100.10"),
+    ixfr_pattern = re.compile(
+        r"\[kaiba\.test\.\] IXFR, incoming, remote (?P<source>\S+)@53"
+        r"(?: TCP)?, key (?P<key>[^,\s]+), finished, remote serial "
+        r"(?P<after>\d+)(?:,|$)"
+    )
+    transition_pattern = re.compile(
+        r"\[kaiba\.test\.\] refresh, remote (?P<source>\S+)@53"
+        r"(?: TCP)?, key (?P<key>[^,\s]+), zone updated, .*\bserial "
+        r"(?P<before>\d+) -> (?P<after>\d+)(?:,|$)"
+    )
+    for machine, label, allowed_sources, expected_key in [
+        (p1, "p1", ["198.51.100.10"], "kaiba-p1-transfer."),
+        (
+            public_a,
+            "public-a",
+            ["198.51.100.10", "198.51.100.11"],
+            "kaiba-public-transfer.",
+        ),
+        (
+            public_b,
+            "public-b",
+            ["198.51.100.10", "198.51.100.11"],
+            "kaiba-public-transfer.",
+        ),
     ]:
         status, output = command(
             machine,
@@ -1306,42 +1373,104 @@ def check_ixfr_evidence():
                 f"--after-cursor={ixfr_journal_cursors[label]}",
             ],
         )
-        ixfr_finished = sorted(
+        lines = output.splitlines()
+        ixfr_by_identity = {}
+        transition_by_identity = {}
+        relevant_lines = []
+        for line in lines:
+            ixfr_match = ixfr_pattern.search(line)
+            if (
+                ixfr_match is not None
+                and int(ixfr_match.group("after")) == serial_after
+            ):
+                identity = (
+                    ixfr_match.group("source"),
+                    ixfr_match.group("key"),
+                )
+                ixfr_by_identity.setdefault(identity, []).append(line)
+                relevant_lines.append(line)
+            transition_match = transition_pattern.search(line)
+            if (
+                transition_match is not None
+                and int(transition_match.group("before")) == serial_before
+                and int(transition_match.group("after")) == serial_after
+            ):
+                identity = (
+                    transition_match.group("source"),
+                    transition_match.group("key"),
+                )
+                transition_by_identity.setdefault(identity, []).append(line)
+                relevant_lines.append(line)
+
+        allowed_identities = [
+            (source, expected_key) for source in allowed_sources
+        ]
+        ixfr_sources = [
+            source
+            for source, key in allowed_identities
+            if ixfr_by_identity.get((source, key))
+        ]
+        transition_sources = [
+            source
+            for source, key in allowed_identities
+            if transition_by_identity.get((source, key))
+        ]
+        matching_identities = [
+            identity
+            for identity in allowed_identities
+            if ixfr_by_identity.get(identity)
+            and transition_by_identity.get(identity)
+        ]
+        selected_identity = matching_identities[0] if matching_identities else None
+        source = selected_identity[0] if selected_identity is not None else None
+        complete_identities = set(ixfr_by_identity).intersection(
+            transition_by_identity
+        )
+        unexpected_identities = sorted(
+            complete_identities.difference(allowed_identities)
+        )
+        same_source = selected_identity is not None
+        authorized = same_source and not unexpected_identities
+        fallback_lines = sorted(
             {
                 line
-                for line in output.splitlines()
-                if "IXFR, incoming" in line
-                and f"remote {source}@53" in line
-                and "finished" in line
+                for line in lines
+                if "[kaiba.test.]" in line and "fallback to AXFR" in line
             }
         )
-        serial_updated = sorted(
-            {
-                line
-                for line in output.splitlines()
-                if "refresh" in line.lower()
-                and "zone updated" in line.lower()
-                and f"serial {serial_before} -> {serial_after}" in line
-            }
-        )
-        fallback = any("fallback to AXFR" in line for line in output.splitlines())
+        fallback = bool(fallback_lines)
         observed[label] = {
+            "allowed_sources": allowed_sources,
+            "expected_key": expected_key,
             "source": source,
+            "ixfr_sources": ixfr_sources,
+            "transition_sources": transition_sources,
+            "same_source": same_source,
+            "authorized": authorized,
+            "unexpected_identities": [
+                {"source": item[0], "key": item[1]}
+                for item in unexpected_identities
+            ],
             "serial_before": serial_before,
             "serial_after": serial_after,
-            "ixfr_finished": status == 0 and bool(ixfr_finished),
-            "serial_transition": bool(serial_updated),
+            "journal_status": status,
+            "ixfr_finished": bool(ixfr_sources),
+            "serial_transition": bool(transition_sources),
             "axfr_fallback": fallback,
         }
-        matching = sorted(set(ixfr_finished + serial_updated))
+        matching = sorted(set(relevant_lines + fallback_lines))
         evidence.append(
             evidence_path(
                 "changed-update",
                 f"{label}-ixfr-log.txt",
                 (
                     f"server={label}\n"
-                    f"source={source}\n"
+                    f"allowed_sources={','.join(allowed_sources)}\n"
+                    f"expected_key={expected_key}\n"
+                    f"source={source or 'none'}\n"
                     f"serial={serial_before}->{serial_after}\n"
+                    f"same_source={str(same_source).lower()}\n"
+                    f"authorized={str(authorized).lower()}\n"
                     + "\n".join(matching)
                     + ("\n" if matching else "")
                 ),
@@ -1349,8 +1478,11 @@ def check_ixfr_evidence():
         )
     require(
         all(
-            item["ixfr_finished"]
+            item["journal_status"] == 0
+            and item["ixfr_finished"]
             and item["serial_transition"]
+            and item["same_source"]
+            and item["authorized"]
             and not item["axfr_fallback"]
             for item in observed.values()
         ),
@@ -1364,9 +1496,24 @@ record(
     "changed-update",
     "The subsequent change is explicitly logged as IXFR on P1 and both public secondaries",
     {
-        "p1": {"ixfr_finished": True, "serial_transition": True},
-        "public-a": {"ixfr_finished": True, "serial_transition": True},
-        "public-b": {"ixfr_finished": True, "serial_transition": True},
+        "p1": {
+            "ixfr_finished": True,
+            "serial_transition": True,
+            "same_source": True,
+            "authorized": True,
+        },
+        "public-a": {
+            "ixfr_finished": True,
+            "serial_transition": True,
+            "same_source": True,
+            "authorized": True,
+        },
+        "public-b": {
+            "ixfr_finished": True,
+            "serial_transition": True,
+            "same_source": True,
+            "authorized": True,
+        },
     },
     check_ixfr_evidence,
 )
