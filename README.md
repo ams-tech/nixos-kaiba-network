@@ -15,6 +15,9 @@ The integration environment is isolated. It uses `kaiba.test` and a simulated
 parent authority; it never contacts Namecheap, changes `kaiba.network`, or
 depends on Internet access while running.
 
+- [Project homepage](https://ams-tech.github.io/nixos-kaiba-network/)
+- [Latest main-branch test report](https://ams-tech.github.io/nixos-kaiba-network/reports/latest/)
+
 ## Commands
 
 ```console
@@ -36,26 +39,28 @@ module evaluation. The interactive driver is for topology debugging.
 The GitHub Actions workflow in `.github/workflows/ci.yml` runs on pull requests,
 pushes to `main`, and manual dispatches. It separates the test workload into:
 
-- x86 formatting, flake evaluation, Go tests, report tests, workflow linting,
-  and NixOS module evaluation;
+- x86 formatting, flake evaluation, Go tests, report and Pages site tests,
+  workflow linting, and NixOS module evaluation;
 - native ARM64 builds and tests for all three production binaries; and
 - the complete seven-VM DNS topology with KVM acceleration when available.
 
 The topology job uploads `kaiba-dns-test-report` for 14 days. On pushes or
-manual runs of `main`, it also publishes the latest verified report through the
-repository's `github-pages` environment. Report generation precedes the
-assertion gates and artifact collection/upload runs unconditionally, so a
-functional or security failure still preserves and publishes the normalized
-HTML, Markdown, JUnit, JSON, topology, evidence, and zone data for diagnosis.
-The Pages deployment replaces the previous site; the retained Actions artifacts
+manual runs of `main`, it also assembles and publishes the project homepage and
+the latest verified report through the repository's `github-pages` environment.
+The homepage is at the Pages root; the canonical report is at
+`reports/latest/`. Report generation precedes the assertion gates and artifact
+collection/upload runs unconditionally, so a functional or security failure
+still preserves and publishes the normalized HTML, Markdown, JUnit, JSON,
+topology, evidence, and zone data for diagnosis. Each Pages deployment replaces
+the homepage and canonical report together; the retained Actions artifacts
 provide per-run history.
 
 Enable the site once in **Settings → Pages → Build and deployment** by selecting
-**GitHub Actions** as the source. Pages can make the report and its normalized
-evidence public, including for some private-repository plans. All referenced
-actions are pinned to immutable commit SHAs. Test jobs keep read-only repository
-access; only the main-only deployment job receives Pages write and OIDC token
-permissions.
+**GitHub Actions** as the source. Pages can make the homepage, report, and its
+normalized evidence public, including for some private-repository plans. All
+referenced actions are pinned to immutable commit SHAs. Test jobs keep read-only
+repository access; only the main-only deployment job receives Pages write and
+OIDC token permissions.
 
 ## Device API
 

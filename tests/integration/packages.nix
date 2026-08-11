@@ -88,15 +88,20 @@ let
   reportUnit =
     pkgs.runCommand "kaiba-dns-report-unit"
       {
-        nativeBuildInputs = [ reportPython ];
+        nativeBuildInputs = [
+          pkgs.nodejs
+          reportPython
+        ];
       }
       ''
         set -eu
         export PYTHONDONTWRITEBYTECODE=1
         cd ${../..}
+        node --check site/site.js
         python3 -m unittest discover -s tests/report -p 'test_*.py' -v
+        python3 -m unittest discover -s tests/site -p 'test_*.py' -v
         mkdir -p "$out"
-        printf '%s\n' 'report unit tests: pass' > "$out/results.txt"
+        printf '%s\n' 'report and site unit tests: pass' > "$out/results.txt"
       '';
 in
 {

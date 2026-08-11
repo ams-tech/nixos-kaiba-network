@@ -134,16 +134,33 @@ jobs:
           retention-days: 14
           compression-level: 9
 
-      - name: Upload the DNS test report for GitHub Pages
-        id: pages_artifact
+      - name: Assemble and validate the GitHub Pages site
+        id: assemble_pages
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.verify_report.outcome == 'success' && steps.collect_report.outcome == 'success' }}
+        run: |
+          if [[ -e site/reports ]]; then
+            echo "::error title=Reserved site path::site/reports is reserved for generated reports."
+            exit 1
+          fi
+          if [[ -e pages-site ]]; then
+            echo "::error title=Reserved build path::pages-site must not exist before assembly."
+            exit 1
+          fi
+          mkdir -p pages-site/reports/latest
+          cp --recursive --no-dereference site/. pages-site/
+          cp --recursive --no-dereference ci-report/. pages-site/reports/latest/
+          python3 tests/site/validate.py pages-site
+
+      - name: Upload the project site for GitHub Pages
+        id: pages_artifact
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.assemble_pages.outcome == 'success' }}
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: ci-report/
+          path: pages-site/
           retention-days: 1
 
   deploy-report:
-    name: Publish DNS test report
+    name: Publish project site
     needs: dns-integration
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.dns-integration.outputs.pages_artifact_id != '' }}
     runs-on: ubuntu-24.04
@@ -162,6 +179,6 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
-      - name: Deploy the DNS test report
+      - name: Deploy the project site
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
