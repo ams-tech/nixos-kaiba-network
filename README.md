@@ -41,12 +41,21 @@ pushes to `main`, and manual dispatches. It separates the test workload into:
 - native ARM64 builds and tests for all three production binaries; and
 - the complete seven-VM DNS topology with KVM acceleration when available.
 
-The topology job uploads `kaiba-dns-test-report` for 14 days. Report generation
-precedes the assertion gates and artifact collection/upload runs unconditionally,
-so a functional or security failure still preserves the normalized HTML,
-Markdown, JUnit, JSON, topology, evidence, and zone artifacts for diagnosis.
-All referenced actions are pinned to immutable commit SHAs, and the workflow's
-token has read-only repository access.
+The topology job uploads `kaiba-dns-test-report` for 14 days. On pushes or
+manual runs of `main`, it also publishes the latest verified report through the
+repository's `github-pages` environment. Report generation precedes the
+assertion gates and artifact collection/upload runs unconditionally, so a
+functional or security failure still preserves and publishes the normalized
+HTML, Markdown, JUnit, JSON, topology, evidence, and zone data for diagnosis.
+The Pages deployment replaces the previous site; the retained Actions artifacts
+provide per-run history.
+
+Enable the site once in **Settings → Pages → Build and deployment** by selecting
+**GitHub Actions** as the source. Pages can make the report and its normalized
+evidence public, including for some private-repository plans. All referenced
+actions are pinned to immutable commit SHAs. Test jobs keep read-only repository
+access; only the main-only deployment job receives Pages write and OIDC token
+permissions.
 
 ## Device API
 
