@@ -67,7 +67,9 @@ OIDC token permissions.
 The authenticated certificate identity determines the device and hostname; for
 example, `spiffe://kaiba.network/device/001` maps to
 `pi-001.kaiba.network`. The request cannot supply a hostname, zone, TTL, or
-record type.
+record type. The [device identity and credential lifecycle](docs/device-identity.md)
+defines the target production requirements for protecting, enrolling, rotating,
+recovering, and retiring those credentials.
 
 ```http
 PUT /v1/devices/self/endpoints
