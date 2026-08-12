@@ -2108,7 +2108,10 @@ claims = {
         {"id": "writer-promotion", "statement": "Automatic P1 promotion, election, fencing, and split-brain recovery are deferred."},
         {"id": "control-plane-ha", "statement": "Redundant update gateways and replicated desired-state storage are deferred."},
         {"id": "fleet-scale", "statement": "Fleet-scale load, sharding, multi-zone publication, and geographic latency are deferred."},
-        {"id": "device-platform", "statement": "Raspberry Pi images, secure boot, deployment, production secrets, and monitoring are deferred."},
+        {
+            "id": "device-platform",
+            "statement": "Physical Raspberry Pi images, secure-boot mutation, persistent provisioning, production secrets, and monitoring are deferred; probe software verification is reported separately.",
+        },
     ],
 }
 

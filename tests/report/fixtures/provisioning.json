@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "suite": "kaiba-rpi5-provisioning-probe",
+  "automated": {
+    "overall": "partial",
+    "checks": [
+      {
+        "id": "go-probe-tests",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Provisioning probe Go tests pass on the target platform",
+        "evidence": []
+      },
+      {
+        "id": "bundle-integrity",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "The metadata-only recovery bundle and compiled manifest pass their integrity checks",
+        "evidence": []
+      },
+      {
+        "id": "go-probe-tests",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Provisioning probe Go tests pass on the target platform",
+        "evidence": []
+      }
+    ]
+  },
+  "hardware_qualification": {
+    "status": "pending",
+    "description": "The two-probe, full-power-cycle ceremony on a sacrificial fresh Raspberry Pi 5 Model B has not been recorded.",
+    "evidence": []
+  },
+  "mutation_eligible": false
+}

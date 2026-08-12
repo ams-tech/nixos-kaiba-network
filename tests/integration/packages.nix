@@ -3,6 +3,7 @@
   lib,
   kaibaPackage,
   kaibaModules,
+  provisioningTestResult,
 }:
 
 let
@@ -38,6 +39,8 @@ let
           --zones "$input/zones" \
           --topology ${../topology.json} \
           --schema ${../report/result.schema.json} \
+          --provisioning ${provisioningTestResult}/report-input.json \
+          --provisioning-schema ${../report/provisioning.schema.json} \
           --output "$out"
       '';
 
@@ -66,8 +69,12 @@ let
         python3 ${../report/schema_gate.py} \
           --schema ${report}/result.schema.json \
           --instance ${report}/result.json
+        python3 ${../report/schema_gate.py} \
+          --schema ${report}/provisioning.schema.json \
+          --instance ${report}/provisioning.json
         mkdir -p "$out"
         cp ${report}/result.schema.json "$out/result.schema.json"
+        cp ${report}/provisioning.schema.json "$out/provisioning.schema.json"
       '';
 
   securityGate =

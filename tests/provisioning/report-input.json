@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "suite": "kaiba-rpi5-provisioning-probe",
+  "automated": {
+    "overall": "partial",
+    "checks": [
+      {
+        "id": "device-profile-schema",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Experimental Raspberry Pi 5 device-profile conformance with the strict v1alpha1 schema.",
+        "evidence": []
+      },
+      {
+        "id": "go-tests",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.",
+        "evidence": []
+      },
+      {
+        "id": "nixos-module-evaluation",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Provisioning-probe NixOS module evaluation and its narrow USB access boundary.",
+        "evidence": []
+      },
+      {
+        "id": "probe-bundle-integrity",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Immutable metadata-only probe bundle and compiled digest-manifest integrity.",
+        "evidence": []
+      },
+      {
+        "id": "provision-package",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "kaiba-provision package with pinned probe-tool, profile, schema, manifest, and bundle inputs.",
+        "evidence": []
+      },
+      {
+        "id": "device-profile-schema",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Experimental Raspberry Pi 5 device-profile conformance with the strict v1alpha1 schema.",
+        "evidence": []
+      },
+      {
+        "id": "go-tests",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.",
+        "evidence": []
+      },
+      {
+        "id": "nixos-module-evaluation",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Provisioning-probe NixOS module evaluation and its narrow USB access boundary.",
+        "evidence": []
+      },
+      {
+        "id": "probe-bundle-integrity",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Immutable metadata-only probe bundle and compiled digest-manifest integrity.",
+        "evidence": []
+      },
+      {
+        "id": "provision-package",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "kaiba-provision package with pinned probe-tool, profile, schema, manifest, and bundle inputs.",
+        "evidence": []
+      }
+    ]
+  },
+  "hardware_qualification": {
+    "status": "pending",
+    "description": "The required two-probe, full-power-cycle qualification on a sacrificial fresh Raspberry Pi 5 Model B has not been completed.",
+    "evidence": []
+  },
+  "mutation_eligible": false
+}

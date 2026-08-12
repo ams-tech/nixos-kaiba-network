@@ -24,7 +24,16 @@ import schema_gate  # noqa: E402
 class ReportRendererTest(unittest.TestCase):
     gate_args = ["--manifest", str(FIXTURES / "required-assertions.json")]
 
-    def render_fixture(self, output: Path, *, result_path: Path | None = None, evidence: Path | None = None) -> None:
+    def render_fixture(
+        self,
+        output: Path,
+        *,
+        result_path: Path | None = None,
+        evidence: Path | None = None,
+        provisioning_path: Path | None = None,
+        platform_results: list[Path] | None = None,
+        expected_source_revision: str | None = None,
+    ) -> None:
         render.render(
             result_path or FIXTURES / "result.json",
             FIXTURES / "events.jsonl",
@@ -32,6 +41,10 @@ class ReportRendererTest(unittest.TestCase):
             REPO_ROOT / "tests" / "topology.json",
             output,
             zones_root=FIXTURES / "zones",
+            provisioning_path=provisioning_path or FIXTURES / "provisioning.json",
+            provisioning_schema_path=REPORT_DIR / "provisioning.schema.json",
+            platform_result_paths=platform_results or [],
+            expected_source_revision=expected_source_revision,
         )
 
     def test_complete_report_is_byte_deterministic(self) -> None:
@@ -54,6 +67,8 @@ class ReportRendererTest(unittest.TestCase):
                     Path("index.md"),
                     Path("junit.xml"),
                     Path("manifest.sha256"),
+                    Path("provisioning.json"),
+                    Path("provisioning.schema.json"),
                     Path("result.json"),
                     Path("result.schema.json"),
                     Path("topology.dot"),
@@ -110,6 +125,9 @@ class ReportRendererTest(unittest.TestCase):
             self.assertEqual([item["id"] for item in result["assertions"]], sorted(item["id"] for item in result["assertions"]))
             self.assertEqual([item["sequence"] for item in events], list(range(1, len(events) + 1)))
             self.assertEqual(result["claims"]["deferred"], sorted(result["claims"]["deferred"], key=lambda item: item["id"]))
+            provisioning = json.loads((output / "provisioning.json").read_text(encoding="utf-8"))
+            pairs = [(item["id"], item["system"]) for item in provisioning["automated"]["checks"]]
+            self.assertEqual(pairs, sorted(pairs))
 
     def test_failed_suite_still_renders_and_gate_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -182,6 +200,10 @@ class ReportRendererTest(unittest.TestCase):
                     str(FIXTURES / "zones"),
                     "--topology",
                     str(REPO_ROOT / "tests" / "topology.json"),
+                    "--provisioning",
+                    str(FIXTURES / "provisioning.json"),
+                    "--provisioning-schema",
+                    str(REPORT_DIR / "provisioning.schema.json"),
                     "--output",
                     str(output),
                 ],
@@ -217,6 +239,107 @@ class ReportRendererTest(unittest.TestCase):
             )
             self.assertEqual(0, gated.returncode, gated.stderr)
             self.assertEqual("all 4 required assertions passed\n", gated.stdout)
+
+    def test_provisioning_section_separates_automated_and_hardware_states(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "report"
+            self.render_fixture(output)
+            markdown = (output / "index.md").read_text(encoding="utf-8")
+            page = (output / "index.html").read_text(encoding="utf-8")
+            junit = (output / "junit.xml").read_text(encoding="utf-8")
+            self.assertIn("Provisioning automation:** PARTIAL", markdown)
+            self.assertIn("Hardware qualification:** PENDING", markdown)
+            self.assertIn("Hardware qualification is a separate manual gate", page)
+            self.assertIn('name="kaiba-rpi5-provisioning-probe"', junit)
+            self.assertIn('skipped="1"', junit)
+            self.assertNotIn("Hardware qualification", junit)
+
+    def test_provisioning_rejects_inconsistent_status_duplicate_and_invalid_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = json.loads((FIXTURES / "provisioning.json").read_text(encoding="utf-8"))
+            cases: list[tuple[str, dict[str, object], str]] = []
+
+            inconsistent = json.loads(json.dumps(base))
+            inconsistent["automated"]["overall"] = "passed"
+            cases.append(("inconsistent", inconsistent, "must be 'partial'"))
+
+            duplicate = json.loads(json.dumps(base))
+            duplicate["automated"]["checks"].append(json.loads(json.dumps(duplicate["automated"]["checks"][0])))
+            cases.append(("duplicate", duplicate, "duplicate value"))
+
+            completed_without_evidence = json.loads(json.dumps(base))
+            completed_without_evidence["hardware_qualification"]["status"] = "passed"
+            cases.append(("hardware", completed_without_evidence, "must cite evidence"))
+
+            pending_with_evidence = json.loads(json.dumps(base))
+            pending_with_evidence["hardware_qualification"]["evidence"] = ["evidence/resolution/public-answers.txt"]
+            cases.append(("pending", pending_with_evidence, "must be empty"))
+
+            missing_evidence = json.loads(json.dumps(base))
+            missing_evidence["automated"]["checks"][1]["evidence"] = ["evidence/provisioning/missing.txt"]
+            cases.append(("missing", missing_evidence, "missing evidence files"))
+
+            for name, value, expected in cases:
+                with self.subTest(name=name):
+                    path = root / f"{name}.json"
+                    path.write_text(json.dumps(value), encoding="utf-8")
+                    with self.assertRaisesRegex(render.ReportError, expected):
+                        self.render_fixture(root / f"report-{name}", provisioning_path=path)
+
+    def test_platform_result_replaces_only_matching_placeholder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            receipt = {
+                "schema_version": 1,
+                "suite": "kaiba-rpi5-provisioning-platform-result",
+                "system": "aarch64-linux",
+                "source_revision": "a" * 40,
+                "checks": [
+                    {
+                        "id": "go-probe-tests",
+                        "status": "passed",
+                        "description": "Provisioning probe Go tests pass on the target platform",
+                        "evidence": [],
+                    }
+                ],
+            }
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            output = root / "report"
+            self.render_fixture(output, platform_results=[receipt_path])
+            provisioning = json.loads((output / "provisioning.json").read_text(encoding="utf-8"))
+            self.assertEqual("passed", provisioning["automated"]["overall"])
+            arm = next(item for item in provisioning["automated"]["checks"] if item["system"] == "aarch64-linux")
+            self.assertEqual("passed", arm["status"])
+            self.assertEqual("a" * 40, arm["source_revision"])
+
+            bad = json.loads(json.dumps(receipt))
+            bad["checks"][0]["id"] = "uncontracted-check"
+            bad_path = root / "bad-receipt.json"
+            bad_path.write_text(json.dumps(bad), encoding="utf-8")
+            with self.assertRaisesRegex(render.ReportError, "missing checks.*unexpected"):
+                self.render_fixture(root / "bad-report", platform_results=[bad_path])
+
+            with self.assertRaisesRegex(render.ReportError, "does not match"):
+                self.render_fixture(
+                    root / "revision-mismatch-report",
+                    platform_results=[receipt_path],
+                    expected_source_revision="b" * 40,
+                )
+
+            with self.assertRaisesRegex(render.ReportError, "requires at least one"):
+                self.render_fixture(
+                    root / "receipt-missing-report",
+                    expected_source_revision="a" * 40,
+                )
+
+    def test_published_provisioning_schema_is_valid_and_strict(self) -> None:
+        schema = json.loads((REPORT_DIR / "provisioning.schema.json").read_text(encoding="utf-8"))
+        provisioning = json.loads((FIXTURES / "provisioning.json").read_text(encoding="utf-8"))
+        self.assertEqual([], schema_gate.validate(schema, provisioning))
+        provisioning["mutation_eligible"] = True
+        self.assertTrue(any("mutation_eligible" in item for item in schema_gate.validate(schema, provisioning)))
 
     def test_gate_rejects_missing_extra_and_wrong_phase_assertions(self) -> None:
         manifest = gate.load_manifest(FIXTURES / "required-assertions.json")

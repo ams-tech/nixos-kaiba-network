@@ -15,6 +15,9 @@ from urllib.parse import unquote, urlsplit
 
 MANIFEST_LINE = re.compile(r"^([0-9a-f]{64})  (.+)$")
 CSS_URL = re.compile(r"url\(\s*(['\"]?)([^)'\"]+)\1\s*\)")
+PROVISIONING_IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
+SOURCE_REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+EVIDENCE_PATH = re.compile(r"^evidence/[A-Za-z0-9._/-]+$")
 ALLOWED_EXTERNAL_SCHEMES = {"http", "https", "mailto"}
 REQUIRED_PATHS = (
     "index.html",
@@ -22,6 +25,8 @@ REQUIRED_PATHS = (
     "site.js",
     "reports/latest/index.html",
     "reports/latest/result.json",
+    "reports/latest/provisioning.json",
+    "reports/latest/provisioning.schema.json",
     "reports/latest/manifest.sha256",
 )
 
@@ -44,7 +49,7 @@ class PageParser(HTMLParser):
         self.title_parts: list[str] = []
         self.in_title = False
         self.images_without_alt = 0
-        self.status_is_accessible = False
+        self.accessible_status_ids: set[str] = set()
 
     def handle_decl(self, decl: str) -> None:
         if decl.lower().strip() == "doctype html":
@@ -77,10 +82,10 @@ class PageParser(HTMLParser):
         elif tag == "a":
             self.anchor_stack.append({"text": "", "aria": values.get("aria-label", "")})
 
-        if values.get("id") == "report-status" and (
+        if values.get("id") and (
             values.get("role") == "status" or values.get("aria-live") in {"polite", "assertive"}
         ):
-            self.status_is_accessible = True
+            self.accessible_status_ids.add(values["id"])
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -245,10 +250,24 @@ def validate_homepage(root: Path, parser: PageParser, errors: list[str]) -> None
         errors.append("index.html: every image must have an alt attribute")
     if parser.unnamed_links:
         errors.append("index.html: every link must have accessible text or an aria-label")
-    if not parser.status_is_accessible:
-        errors.append("index.html: report status must use role=status or aria-live")
+    required_status_ids = {
+        "report-status",
+        "provisioning-automated-status",
+        "provisioning-hardware-status",
+    }
+    missing_status_ids = sorted(required_status_ids - parser.accessible_status_ids)
+    if missing_status_ids:
+        errors.append(
+            "index.html: dynamic status must use role=status or aria-live: "
+            + ", ".join(missing_status_ids)
+        )
     if not any(urlsplit(reference).path in {"reports/latest/", "./reports/latest/"} for reference in parser.references):
         errors.append("index.html: direct reports/latest/ link is required")
+    if not any(
+        urlsplit(reference).path in {"reports/latest/provisioning.json", "./reports/latest/provisioning.json"}
+        for reference in parser.references
+    ):
+        errors.append("index.html: direct provisioning result link is required")
 
 
 def validate_result(root: Path, errors: list[str]) -> None:
@@ -276,6 +295,124 @@ def validate_result(root: Path, errors: list[str]) -> None:
         errors.append(f"reports/latest/result.json: overall must be {expected!r}")
 
 
+def valid_evidence_paths(value: object) -> bool:
+    if not isinstance(value, list) or len(value) != len(set(item for item in value if isinstance(item, str))):
+        return False
+    for item in value:
+        if not isinstance(item, str) or not EVIDENCE_PATH.fullmatch(item):
+            return False
+        path = PurePosixPath(item)
+        if path.is_absolute() or ".." in path.parts or path.as_posix() != item:
+            return False
+    return True
+
+
+def validate_provisioning(root: Path, errors: list[str]) -> None:
+    path = root / "reports" / "latest" / "provisioning.json"
+    if not path.is_file():
+        return
+    try:
+        result = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        errors.append(f"reports/latest/provisioning.json: cannot parse JSON: {exc}")
+        return
+    if not isinstance(result, dict) or result.get("suite") != "kaiba-rpi5-provisioning-probe":
+        errors.append("reports/latest/provisioning.json: unexpected suite")
+        return
+    expected_top_level = {
+        "schema_version",
+        "suite",
+        "automated",
+        "hardware_qualification",
+        "mutation_eligible",
+    }
+    if set(result) != expected_top_level:
+        errors.append("reports/latest/provisioning.json: malformed top-level fields")
+    if result.get("schema_version") != 1:
+        errors.append("reports/latest/provisioning.json: schema_version must be 1")
+    if result.get("mutation_eligible") is not False:
+        errors.append("reports/latest/provisioning.json: mutation_eligible must be false")
+
+    automated = result.get("automated")
+    if not isinstance(automated, dict):
+        errors.append("reports/latest/provisioning.json: automated must be an object")
+        return
+    if set(automated) != {"overall", "checks"}:
+        errors.append("reports/latest/provisioning.json: malformed automated fields")
+    overall = automated.get("overall")
+    if overall not in {"passed", "failed", "partial"}:
+        errors.append("reports/latest/provisioning.json: malformed automated overall")
+        return
+    checks = automated.get("checks")
+    if not isinstance(checks, list) or not checks:
+        errors.append("reports/latest/provisioning.json: automated checks must be a non-empty list")
+        return
+
+    statuses: list[str] = []
+    check_keys: list[tuple[str, str]] = []
+    for index, check in enumerate(checks):
+        context = f"reports/latest/provisioning.json: automated check {index}"
+        if not isinstance(check, dict):
+            errors.append(f"{context} must be an object")
+            continue
+        if set(check) - {"id", "system", "status", "description", "evidence", "source_revision"}:
+            errors.append(f"{context} has unknown fields")
+        if not {"id", "system", "status", "description", "evidence"}.issubset(check):
+            errors.append(f"{context} is missing required fields")
+        for field in ("id", "system", "description"):
+            value = check.get(field)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{context} has malformed {field}")
+        if isinstance(check.get("id"), str) and not PROVISIONING_IDENTIFIER.fullmatch(check["id"]):
+            errors.append(f"{context} has malformed id")
+        if check.get("system") not in {"x86_64-linux", "aarch64-linux"}:
+            errors.append(f"{context} has malformed system")
+        status = check.get("status")
+        if status not in {"passed", "failed", "not-observed"}:
+            errors.append(f"{context} has malformed status")
+        else:
+            statuses.append(status)
+        if isinstance(check.get("id"), str) and isinstance(check.get("system"), str):
+            check_keys.append((check["system"], check["id"]))
+        evidence = check.get("evidence")
+        if not valid_evidence_paths(evidence):
+            errors.append(f"{context} has malformed evidence")
+        elif any(not (root / "reports" / "latest" / item).is_file() for item in evidence):
+            errors.append(f"{context} references missing evidence")
+        revision = check.get("source_revision")
+        if revision is not None and (not isinstance(revision, str) or not SOURCE_REVISION.fullmatch(revision)):
+            errors.append(f"{context} has malformed source_revision")
+        if status == "not-observed" and (evidence or revision is not None):
+            errors.append(f"{context} must not claim evidence or a source revision when not observed")
+
+    duplicate_keys = sorted({item for item in check_keys if check_keys.count(item) > 1})
+    if duplicate_keys:
+        errors.append(
+            "reports/latest/provisioning.json: duplicate automated system/check pairs: "
+            + ", ".join(f"{system}/{check_id}" for system, check_id in duplicate_keys)
+        )
+    if len(statuses) == len(checks):
+        expected = "failed" if "failed" in statuses else "partial" if "not-observed" in statuses else "passed"
+        if overall != expected:
+            errors.append(f"reports/latest/provisioning.json: automated overall must be {expected!r}")
+
+    hardware = result.get("hardware_qualification")
+    if not isinstance(hardware, dict) or hardware.get("status") not in {"pending", "passed", "failed"}:
+        errors.append("reports/latest/provisioning.json: malformed hardware qualification status")
+    elif set(hardware) != {"status", "description", "evidence"}:
+        errors.append("reports/latest/provisioning.json: malformed hardware qualification fields")
+    elif not isinstance(hardware.get("description"), str) or not hardware["description"].strip():
+        errors.append("reports/latest/provisioning.json: malformed hardware qualification description")
+    elif not valid_evidence_paths(hardware.get("evidence")):
+        errors.append("reports/latest/provisioning.json: malformed hardware qualification evidence")
+    elif any(not (root / "reports" / "latest" / item).is_file() for item in hardware["evidence"]):
+        errors.append("reports/latest/provisioning.json: hardware qualification references missing evidence")
+    elif hardware["status"] == "pending" and hardware["evidence"]:
+        errors.append("reports/latest/provisioning.json: pending hardware qualification must not claim evidence")
+    elif hardware["status"] != "pending" and not hardware["evidence"]:
+        errors.append("reports/latest/provisioning.json: completed hardware qualification must cite evidence")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="assembled GitHub Pages tree")
@@ -297,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         validate_homepage(root, homepage, errors)
     validate_references(root, pages, errors)
     validate_result(root, errors)
+    validate_provisioning(root, errors)
 
     if errors:
         for error in errors:
