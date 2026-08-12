@@ -102,5 +102,8 @@ Reusable NixOS modules cover the device agent, update services, hidden P0,
 hidden P1, and public-secondary role. The seven-VM QEMU topology and interactive
 lab are `x86_64-linux` outputs.
 
-See [the architecture notes](docs/architecture.md) for trust boundaries,
-failure semantics, and intentionally deferred work.
+See [the architecture notes](docs/architecture.md), the
+[device identity lifecycle](docs/device-identity.md), and the
+[provisioning station design](docs/provisioning-station.md) for trust
+boundaries, credential and provisioning requirements, failure semantics, and
+intentionally deferred work.

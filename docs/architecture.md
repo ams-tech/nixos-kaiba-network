@@ -124,6 +124,11 @@ documentation, not an implemented production provisioning path. The current
 agent still consumes a file-backed private key, and the current controller does
 not maintain an authoritative active-credential inventory.
 
+The [provisioning station design](provisioning-station.md) defines the dedicated
+execution environment, control-service boundaries, station and lane fencing,
+secret handling, recovery, and acceptance criteria for that future path. It is
+also design documentation rather than an implemented station.
+
 Deferred, rather than exercised: real Namecheap or provider changes and SLAs,
 Internet/ISP/modem/NAT behavior, outside-in probes, public ACME, DNSSEC,
 automatic promotion or fencing, redundant controllers or replicated desired
