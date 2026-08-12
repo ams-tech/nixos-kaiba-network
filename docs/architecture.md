@@ -127,7 +127,11 @@ not maintain an authoritative active-credential inventory.
 The [provisioning station design](provisioning-station.md) defines the dedicated
 execution environment, control-service boundaries, station and lane fencing,
 secret handling, recovery, and acceptance criteria for that future path. It is
-also design documentation rather than an implemented station.
+also design documentation rather than an implemented station. The experimental
+[Raspberry Pi 5 provisioning probe](raspberry-pi-5-provisioning-probe.md)
+implements only target observation and partial baseline evaluation: it has no
+transaction coordinator, mutation authority, key handling, enrollment, or
+activation path.
 
 Deferred, rather than exercised: real Namecheap or provider changes and SLAs,
 Internet/ISP/modem/NAT behavior, outside-in probes, public ACME, DNSSEC,

@@ -41,7 +41,7 @@ pushes to `main`, and manual dispatches. It separates the test workload into:
 
 - x86 formatting, flake evaluation, Go tests, report and Pages site tests,
   workflow linting, and NixOS module evaluation;
-- native ARM64 builds and tests for all three production binaries; and
+- native ARM64 builds and tests for all four packaged binaries; and
 - the complete seven-VM DNS topology with KVM acceleration when available.
 
 The topology job uploads `kaiba-dns-test-report` for 14 days. On pushes or
@@ -97,6 +97,16 @@ Production binaries are built for both `x86_64-linux` and `aarch64-linux`:
 - `kaiba-agent`
 - `kaiba-controller`
 - `kaiba-publisher`
+- `kaiba-provision`
+
+`kaiba-provision probe` is an experimental, non-persistent Raspberry Pi 5
+preflight slice. It can normalize imported OTP metadata or acquire it from one
+lane-bound Pi 5 Model B using a digest-pinned metadata-only recovery bundle.
+Its result is correlation and partial preflight evidence, never authentication,
+attestation, or permission to mutate a target. See the
+[Raspberry Pi 5 provisioning probe](docs/raspberry-pi-5-provisioning-probe.md)
+for the safety boundary, station setup, command contract, and required hardware
+qualification.
 
 Reusable NixOS modules cover the device agent, update services, hidden P0,
 hidden P1, and public-secondary role. The seven-VM QEMU topology and interactive

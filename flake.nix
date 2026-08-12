@@ -27,6 +27,7 @@
         hidden-primary = import ./nix/modules/hidden-primary.nix;
         hidden-standby = import ./nix/modules/hidden-standby.nix;
         public-secondary = import ./nix/modules/public-secondary.nix;
+        provisioning-probe = import ./nix/modules/provisioning-probe.nix;
       };
 
       packages = forAllSystems (
@@ -46,6 +47,7 @@
           default = built.suite;
           kaiba-agent = built.agent;
           kaiba-controller = built.controller;
+          kaiba-provision = built.provision;
           kaiba-publisher = built.publisher;
         }
         // integration
@@ -59,6 +61,45 @@
         in
         {
           unit = built.suite;
+          device-profile-schema =
+            pkgs.runCommand "kaiba-device-profile-schema-check"
+              { nativeBuildInputs = [ pkgs.check-jsonschema ]; }
+              ''
+                check-jsonschema \
+                  --schemafile ${./schemas/device-profile-v1alpha1.schema.json} \
+                  ${./profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json}
+                mkdir -p "$out"
+                touch "$out/passed"
+              '';
+          rpi5-probe-bundle =
+            pkgs.runCommand "kaiba-rpi5-probe-bundle-check" { nativeBuildInputs = [ pkgs.jq ]; }
+              ''
+                test "$(find ${built.rpi5ProbeBundle}/bundle -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)" = $'bootcode5.bin\nconfig.txt'
+                test ! -L ${built.rpi5ProbeBundle}/bundle/bootcode5.bin
+                test ! -L ${built.rpi5ProbeBundle}/bundle/config.txt
+                test "$(cat ${built.rpi5ProbeBundle}/bundle/config.txt)" = 'recovery_metadata=1'
+                test "$(wc -c < ${built.rpi5ProbeBundle}/bundle/config.txt)" -eq 20
+                test "$(jq -r .schema ${built.rpi5ProbeBundle}/manifest.json)" = 'kaiba.rpi5-probe-bundle/v1alpha1'
+                test "$(jq -c 'keys | sort' ${built.rpi5ProbeBundle}/manifest.json)" = '["bundle_sha256","files","schema","tool_sha256","tool_version"]'
+                test "$(jq -c '.files | keys | sort' ${built.rpi5ProbeBundle}/manifest.json)" = '["bootcode5.bin","config.txt"]'
+                test "$(jq -r .tool_version ${built.rpi5ProbeBundle}/manifest.json)" = '${pkgs.rpiboot.version}'
+                tool_digest="sha256:$(sha256sum ${pkgs.rpiboot}/bin/rpiboot | cut -d ' ' -f 1)"
+                firmware_digest="sha256:$(sha256sum ${built.rpi5ProbeBundle}/bundle/bootcode5.bin | cut -d ' ' -f 1)"
+                config_digest="sha256:$(sha256sum ${built.rpi5ProbeBundle}/bundle/config.txt | cut -d ' ' -f 1)"
+                bundle_digest="sha256:$(
+                  printf '%s\0%s\0%s\0%s\0%s\0' \
+                    'kaiba.rpi5.probe-bundle.v1' \
+                    'bootcode5.bin' "$firmware_digest" \
+                    'config.txt' "$config_digest" \
+                    | sha256sum | cut -d ' ' -f 1
+                )"
+                test "$(jq -r .tool_sha256 ${built.rpi5ProbeBundle}/manifest.json)" = "$tool_digest"
+                test "$(jq -r '.files["bootcode5.bin"]' ${built.rpi5ProbeBundle}/manifest.json)" = "$firmware_digest"
+                test "$(jq -r '.files["config.txt"]' ${built.rpi5ProbeBundle}/manifest.json)" = "$config_digest"
+                test "$(jq -r .bundle_sha256 ${built.rpi5ProbeBundle}/manifest.json)" = "$bundle_digest"
+                mkdir -p "$out"
+                touch "$out/passed"
+              '';
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
               {
@@ -77,6 +118,7 @@
           module-eval = import ./tests/module-eval.nix {
             inherit pkgs lib;
             kaibaPackage = built.suite;
+            kaibaProvisionPackage = built.provision;
             kaibaModules = self.nixosModules;
           };
           report-unit = self.packages.${system}.report-unit;

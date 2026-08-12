@@ -18,7 +18,11 @@ one-time-programmable memory, secure element, trusted platform module, debug
 interface, boot chain, or storage technology. Hardware-specific behavior is
 supplied by a signed device-class profile and a pinned platform adapter.
 
-This is a target design, not an implemented feature of the current pilot.
+This remains the target design rather than a complete implemented station. The
+experimental [Raspberry Pi 5 provisioning probe](raspberry-pi-5-provisioning-probe.md)
+implements one deliberately non-persistent adapter slice: target observation
+and partial unprovisioned-baseline evaluation. It cannot authorize or perform a
+device mutation.
 
 ## Objectives and invariants
 
@@ -848,10 +852,13 @@ A future implementation must demonstrate that:
 
 ## Kaiba implementation boundary
 
-The current repository has no production provisioning station, coordinator,
-device RA, inventory activation service, bundle authority, pending-credential
-verifier, or independent provisioning audit service. The integration PKI and
-file-backed agent key remain test fixtures.
+The current repository has an experimental Raspberry Pi 5 probe and profile,
+but no production provisioning station, coordinator, device RA, inventory
+activation service, bundle authority, pending-credential verifier, or
+independent provisioning audit service. The probe establishes only public
+target correlation and a partial observable baseline; it has no mutation or
+activation authority. The integration PKI and file-backed agent key remain
+test fixtures.
 
 An implementation following this design will require, at minimum:
 

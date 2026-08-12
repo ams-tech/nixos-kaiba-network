@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.network/schemas/device-profile-v1alpha1.schema.json",
+  "title": "Kaiba device-class profile v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "provisioning.kaiba.network/v1alpha1"
+    },
+    "kind": {
+      "const": "DeviceClassProfile"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "status": {
+          "enum": ["experimental", "stable", "deprecated"]
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "requiredFacts",
+        "classConditions",
+        "baselineConditions",
+        "deferredChecks"
+      ],
+      "properties": {
+        "adapter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version"],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "version": { "type": "string", "minLength": 1, "maxLength": 64 }
+          }
+        },
+        "requiredFacts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$", "maxLength": 128 }
+        },
+        "classConditions": {
+          "$ref": "#/$defs/conditions"
+        },
+        "baselineConditions": {
+          "$ref": "#/$defs/conditions"
+        },
+        "deferredChecks": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/deferredCheck" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "conditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/condition" }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "fact", "operator"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "fact": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$", "maxLength": 128 },
+        "operator": { "enum": ["present", "equals", "not_equals"] },
+        "value": { "type": "string", "maxLength": 256 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "operator": { "const": "present" } },
+            "required": ["operator"]
+          },
+          "then": { "not": { "required": ["value"] } },
+          "else": { "required": ["value"] }
+        }
+      ]
+    },
+    "deferredCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "description": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    }
+  }
+}

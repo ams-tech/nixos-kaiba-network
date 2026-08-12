@@ -41,9 +41,12 @@ jobs:
         run: |
           nix build --no-link -L \
             .#checks.x86_64-linux.ci-workflow \
+            .#checks.x86_64-linux.device-profile-schema \
             .#checks.x86_64-linux.module-eval \
+            .#checks.x86_64-linux.rpi5-probe-bundle \
             .#checks.x86_64-linux.report-unit \
-            .#checks.x86_64-linux.unit
+            .#checks.x86_64-linux.unit \
+            .#packages.x86_64-linux.kaiba-provision
 
   aarch64-packages:
     name: ARM64 production packages
@@ -66,8 +69,10 @@ jobs:
         run: |
           nix build --no-link -L \
             .#checks.aarch64-linux.unit \
+            .#checks.aarch64-linux.rpi5-probe-bundle \
             .#packages.aarch64-linux.kaiba-agent \
             .#packages.aarch64-linux.kaiba-controller \
+            .#packages.aarch64-linux.kaiba-provision \
             .#packages.aarch64-linux.kaiba-publisher
 
   dns-integration:
