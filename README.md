@@ -42,16 +42,31 @@ nix build ./nix/dns#dns-test-report -L
 nix run ./nix/dns#dns-test-driver
 ```
 
-On `x86_64-linux`, `nix build .#dns-test-report` produces a report even if a functional DNS
-assertion fails. Its `result` output contains HTML, Markdown, JUnit XML,
+The Go implementation follows the same boundary. `dns` and `provisioning`
+are independent modules, coordinated for local development by the root
+`go.work` file:
+
+```console
+go test ./dns/...
+go test ./provisioning/...
+```
+
+See the [DNS module guide](dns/README.md) and
+[provisioning module guide](provisioning/README.md) for their commands,
+packages, dependencies, and corresponding Nix flakes. Neither Go module
+depends on the other; cross-domain report and site composition remains at the
+repository integration layer.
+
+On `x86_64-linux`, `nix build .#dns-test-report` produces a report even if a
+functional DNS assertion fails. Its `result` output contains HTML, Markdown, JUnit XML,
 canonical DNS and provisioning JSON, topology diagrams, normalized evidence
 and zone snapshots, and a SHA-256 manifest. The local report records native
 x86 provisioning checks and explicitly marks ARM64 as not observed. CI composes
 the native ARM64 result only after binding it to the checked-out source
 revision. Physical Pi 5 qualification remains a separate pending manual gate;
 the automated result never implies authentication, attestation, or permission
-to mutate a device. On `x86_64-linux`, `nix flake check -L` independently enforces the report
-schemas, required functional and security assertions, Go tests, report tests,
+to mutate a device. On `x86_64-linux`, `nix flake check -L` independently
+enforces the report schemas, required functional and security assertions, Go tests, report tests,
 and both flakes' NixOS module evaluation. The equivalent leaf command is
 `nix build ./nix/dns#dns-test-report -L`. The interactive driver is for
 topology debugging.
@@ -70,8 +85,8 @@ an explicit one-way input on the provisioning leaf. The root `flake.nix`
 composes both leaves and preserves the original package, check, app, module,
 development-shell, and formatter attribute paths.
 
-The same-repository nested input graph requires Nix 2.30 or newer. Each leaf carries
-its own lock file for direct use, while the root lock makes both leaves follow
+The same-repository nested input graph requires Nix 2.30 or newer. Each leaf
+carries its own lock file for direct use, while the root lock makes both leaves follow
 the root `nixpkgs` pin when they are composed.
 
 New consumers that need only one boundary can address its repository

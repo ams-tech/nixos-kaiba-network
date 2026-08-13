@@ -130,7 +130,7 @@ no subprocess or USB access:
 
 ```console
 kaiba-provision probe \
-  --profile ./profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json \
+  --profile ./provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json \
   --metadata ./device-metadata.json
 ```
 

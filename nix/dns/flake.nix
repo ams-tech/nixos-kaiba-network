@@ -17,7 +17,8 @@
     }:
     let
       lib = nixpkgs.lib;
-      sourceRoot = self.sourceInfo.outPath;
+      repositoryRoot = self.sourceInfo.outPath;
+      moduleRoot = "${repositoryRoot}/dns";
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -30,7 +31,7 @@
           pkgs = import nixpkgs { inherit system; };
         in
         import ./packages.nix {
-          inherit pkgs lib sourceRoot;
+          inherit pkgs lib moduleRoot;
         };
 
       modules = {

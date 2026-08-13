@@ -265,7 +265,7 @@ jobs:
           cp --recursive --no-dereference ci-report/. pages-site/reports/latest/
           cp --recursive --no-dereference station-pages/. pages-site/provisioning-demo/
           for asset in index.html styles.css transport.js app.js; do
-            cmp "internal/provisioning/stationui/web/$asset" "pages-site/provisioning-demo/$asset"
+            cmp "provisioning/internal/provisioning/stationui/web/$asset" "pages-site/provisioning-demo/$asset"
           done
           nix develop ./nix/dns --command python3 tests/site/validate.py pages-site
 

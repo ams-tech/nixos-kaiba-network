@@ -6,7 +6,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const transportPath = path.join(repository, "internal/provisioning/stationui/web/transport.js");
+const transportPath = path.join(repository, "provisioning/internal/provisioning/stationui/web/transport.js");
 const transportSource = fs.readFileSync(transportPath, "utf8");
 const pagesRoot = process.env.KAIBA_STATION_PAGES;
 if (!pagesRoot) throw new Error("KAIBA_STATION_PAGES must identify the generated Pages bundle");

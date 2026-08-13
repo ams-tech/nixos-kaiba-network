@@ -7,7 +7,8 @@
     { self, nixpkgs }:
     let
       lib = nixpkgs.lib;
-      sourceRoot = self.sourceInfo.outPath;
+      repositoryRoot = self.sourceInfo.outPath;
+      moduleRoot = "${repositoryRoot}/provisioning";
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -20,7 +21,7 @@
           pkgs = import nixpkgs { inherit system; };
         in
         import ./packages.nix {
-          inherit pkgs lib sourceRoot;
+          inherit pkgs lib moduleRoot;
         };
 
       modules = {
@@ -84,14 +85,14 @@
               ''
                 set -eu
                 export PYTHONDONTWRITEBYTECODE=1
-                cd ${sourceRoot}
-                node --check internal/provisioning/stationui/web/app.js
-                node --check internal/provisioning/stationui/web/transport.js
+                cd ${repositoryRoot}
+                node --check provisioning/internal/provisioning/stationui/web/app.js
+                node --check provisioning/internal/provisioning/stationui/web/transport.js
                 export KAIBA_STATION_PAGES=${built.stationPages}
                 node --test tests/station-ui/transport.test.mjs
                 python3 -m unittest discover -s tests/station-ui -p 'test_*.py' -v
                 for asset in index.html styles.css transport.js app.js; do
-                  cmp "internal/provisioning/stationui/web/$asset" "${built.stationPages}/$asset"
+                  cmp "provisioning/internal/provisioning/stationui/web/$asset" "${built.stationPages}/$asset"
                 done
                 test "$(find ${built.stationPages} -maxdepth 1 -type f | wc -l)" -eq 6
                 mkdir -p "$out"

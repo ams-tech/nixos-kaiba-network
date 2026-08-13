@@ -1,40 +1,12 @@
 {
   pkgs,
   lib,
-  sourceRoot ? ../..,
+  moduleRoot ? ../../provisioning,
 }:
 
 let
   version = "0.1.0";
-  root = toString sourceRoot;
-
-  includedDirectories = [
-    "cmd/kaiba-provision"
-    "cmd/kaiba-provision-station-demo"
-    "cmd/kaiba-provision-station-graph"
-    "internal/provisioning"
-    "profiles"
-    "schemas"
-  ];
-
-  goSource = lib.cleanSourceWith {
-    src = sourceRoot;
-    filter =
-      path: _type:
-      let
-        absolute = toString path;
-        relative = lib.removePrefix "${root}/" absolute;
-        includedDirectory = builtins.any (
-          directory: relative == directory || lib.hasPrefix "${directory}/" relative
-        ) includedDirectories;
-      in
-      absolute == root
-      || relative == "go.mod"
-      || relative == "go.sum"
-      || relative == "cmd"
-      || relative == "internal"
-      || includedDirectory;
-  };
+  goSource = lib.cleanSource moduleRoot;
 
   rpi5ProbeBundle =
     pkgs.runCommand "kaiba-rpi5-probe-bundle"
@@ -101,7 +73,7 @@ let
       "-X=main.probeManifestPath=${rpi5ProbeBundle}/manifest.json"
     ];
 
-    vendorHash = "sha256-spk84idvxk7e2XE9/9wDYrben+qGMguODQElHvIYprw=";
+    vendorHash = null;
 
     doCheck = true;
     checkPhase = ''
@@ -116,7 +88,7 @@ let
     inherit version;
     src = goSource;
     subPackages = [ "cmd/kaiba-provision-station-graph" ];
-    vendorHash = "sha256-spk84idvxk7e2XE9/9wDYrben+qGMguODQElHvIYprw=";
+    vendorHash = null;
     doCheck = false;
   };
 
