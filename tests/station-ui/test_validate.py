@@ -8,7 +8,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-WEB_ROOT = ROOT / "internal" / "provisioning" / "stationui" / "web"
+WEB_ROOT = ROOT / "provisioning" / "internal" / "provisioning" / "stationui" / "web"
 sys.path.insert(0, str(HERE))
 
 import validate  # noqa: E402

@@ -56,16 +56,38 @@ separate, fleet-signed probe bundle and is outside this version. See the
 
 ## Station configuration
 
-The NixOS module is disabled by default. A minimal station configuration is:
+The NixOS module is disabled by default. A new station can consume the
+provisioning leaf without importing the DNS packages or modules:
 
 ```nix
+inputs.kaiba-provisioning = {
+  url = "github:ams-tech/nixos-kaiba-network?dir=nix/provisioning";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+A minimal station configuration can use the module form below when the
+surrounding `nixosSystem` passes `specialArgs = { inherit inputs; };`:
+
+```nix
+{ inputs, pkgs, ... }:
+
 {
+  imports = [ inputs.kaiba-provisioning.nixosModules.provisioning-probe ];
+
   services.kaiba-provisioning-probe = {
     enable = true;
+    package = inputs.kaiba-provisioning.packages.${pkgs.stdenv.hostPlatform.system}.kaiba-provision;
     operators = [ "provisioner" ];
   };
 }
 ```
+
+Keep the package assignment explicit so its provenance does not depend on a
+module-specific default. The repository-root flake is a compatibility facade,
+so an existing `inputs.kaiba` configuration can keep using
+`inputs.kaiba.nixosModules.provisioning-probe` and
+`inputs.kaiba.packages.${pkgs.stdenv.hostPlatform.system}.kaiba-provision`.
 
 The module installs `kaiba-provision`, creates the `kaiba-provision` group,
 adds only the named operators to it, and grants that group mode `0660` access
@@ -76,6 +98,14 @@ BCM2712 target, not merely permission to run this probe.
 Keep one target on one physically labelled USB lane. Determine its stable
 sysfs USB path, such as `1-2.3`, before starting the transaction. Do not use a
 changing `/dev/bus/usb` device number as the lane identity.
+
+From a checkout, the provisioning boundary can be checked and its probe
+package built independently:
+
+```console
+nix flake check ./nix/provisioning -L
+nix build ./nix/provisioning#kaiba-provision -L
+```
 
 ## Running the probe
 
@@ -100,7 +130,7 @@ no subprocess or USB access:
 
 ```console
 kaiba-provision probe \
-  --profile ./profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json \
+  --profile ./provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json \
   --metadata ./device-metadata.json
 ```
 

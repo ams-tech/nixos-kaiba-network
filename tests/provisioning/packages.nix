@@ -11,8 +11,8 @@ let
       { nativeBuildInputs = [ pkgs.check-jsonschema ]; }
       ''
         check-jsonschema \
-          --schemafile ${../../schemas/device-profile-v1alpha1.schema.json} \
-          ${../../profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json}
+          --schemafile ${built.goSource}/schemas/device-profile-v1alpha1.schema.json \
+          ${built.goSource}/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json
         mkdir -p "$out"
         touch "$out/passed"
       '';
@@ -47,10 +47,10 @@ let
         touch "$out/passed"
       '';
 
-  moduleEval = import ../module-eval.nix {
+  moduleEval = import ./module-eval.nix {
     inherit pkgs lib kaibaModules;
-    kaibaPackage = built.suite;
     kaibaProvisionPackage = built.provision;
+    kaibaStationDemoPackage = built.stationDemo;
   };
 
   checks = [

@@ -20,6 +20,8 @@ depends on Internet access while running.
 
 ## Commands
 
+The root flake remains the compatibility facade for the complete pilot:
+
 ```console
 nix flake check -L
 nix build .#dns-test-report -L
@@ -27,17 +29,91 @@ nix run .#dns-test-driver
 nix develop
 ```
 
-`nix build .#dns-test-report` produces a report even if a functional DNS
-assertion fails. Its `result` output contains HTML, Markdown, JUnit XML,
+The DNS integration report and interactive driver are `x86_64-linux` outputs.
+
+The provisioning and DNS functionality can also be evaluated independently:
+
+```console
+nix flake check ./nix/provisioning -L
+nix build ./nix/provisioning#kaiba-provision -L
+
+nix flake check ./nix/dns -L
+nix build ./nix/dns#dns-test-report -L
+nix run ./nix/dns#dns-test-driver
+```
+
+The Go implementation follows the same boundary. `dns` and `provisioning`
+are independent modules, coordinated for local development by the root
+`go.work` file:
+
+```console
+go test ./dns/...
+go test ./provisioning/...
+```
+
+See the [DNS module guide](dns/README.md) and
+[provisioning module guide](provisioning/README.md) for their commands,
+packages, dependencies, and corresponding Nix flakes. Neither Go module
+depends on the other; cross-domain report and site composition remains at the
+repository integration layer.
+
+On `x86_64-linux`, `nix build .#dns-test-report` produces a report even if a
+functional DNS assertion fails. Its `result` output contains HTML, Markdown, JUnit XML,
 canonical DNS and provisioning JSON, topology diagrams, normalized evidence
 and zone snapshots, and a SHA-256 manifest. The local report records native
 x86 provisioning checks and explicitly marks ARM64 as not observed. CI composes
 the native ARM64 result only after binding it to the checked-out source
 revision. Physical Pi 5 qualification remains a separate pending manual gate;
 the automated result never implies authentication, attestation, or permission
-to mutate a device. `nix flake check -L` independently enforces the report
-schemas, required functional and security assertions, Go tests, report tests,
-and NixOS module evaluation. The interactive driver is for topology debugging.
+to mutate a device. On `x86_64-linux`, `nix flake check -L` independently
+enforces the report schemas, required functional and security assertions, Go tests, report tests,
+and both flakes' NixOS module evaluation. The equivalent leaf command is
+`nix build ./nix/dns#dns-test-report -L`. The interactive driver is for
+topology debugging.
+
+## Flake layout and consumption
+
+The repository has two independently consumable leaf flakes:
+
+- `nix/provisioning` owns the Raspberry Pi probe, provisioning-station demo,
+  device profile, provisioning result, and their NixOS modules and checks.
+- `nix/dns` owns the device agent, controller, publisher, authoritative DNS
+  roles, VM topology, validation report, and their NixOS modules and checks.
+
+The DNS report deliberately includes the provisioning result, so that leaf has
+an explicit one-way input on the provisioning leaf. The root `flake.nix`
+composes both leaves and preserves the original package, check, app, module,
+development-shell, and formatter attribute paths.
+
+The same-repository nested input graph requires Nix 2.30 or newer. Each leaf
+carries its own lock file for direct use, while the root lock makes both leaves follow
+the root `nixpkgs` pin when they are composed.
+
+New consumers that need only one boundary can address its repository
+subdirectory directly. A consumer that uses both can share its `nixpkgs` and
+provisioning inputs as follows:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs";
+
+    kaiba-provisioning = {
+      url = "github:ams-tech/nixos-kaiba-network?dir=nix/provisioning";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    kaiba-dns = {
+      url = "github:ams-tech/nixos-kaiba-network?dir=nix/dns";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.provisioning.follows = "kaiba-provisioning";
+    };
+  };
+}
+```
+
+Consumers that want the complete compatibility surface can continue to use
+`github:ams-tech/nixos-kaiba-network` without a `dir` query.
 
 ## Continuous integration
 
@@ -110,11 +186,15 @@ complete address set and its precondition. An exact retry returns the original
 result even after later generations exist; reuse for another request returns
 `409 Conflict`. The pilot retains accepted idempotency results indefinitely.
 
-Packaged binaries are built for both `x86_64-linux` and `aarch64-linux`:
+Packaged binaries are built for both `x86_64-linux` and `aarch64-linux`. The
+DNS leaf provides:
 
 - `kaiba-agent`
 - `kaiba-controller`
 - `kaiba-publisher`
+
+The provisioning leaf provides:
+
 - `kaiba-provision`
 - `kaiba-provision-station-demo`
 
@@ -135,9 +215,11 @@ secret-handling, or mutation authority. See the
 the NixOS module, systemd sandbox, operator-session Chromium example, shared
 Pages build, and parity guarantees.
 
-Reusable NixOS modules cover the device agent, update services, hidden P0,
-hidden P1, public-secondary role, provisioning probe, and local station-interface
-demo. The seven-VM QEMU topology and interactive lab are `x86_64-linux` outputs.
+Reusable NixOS modules in the DNS leaf cover the device agent, update services,
+hidden P0, hidden P1, and public-secondary role. The provisioning leaf provides
+the probe and local station-interface demo modules. The root facade re-exports
+all of them and retains a combined default module. The seven-VM QEMU topology
+and interactive lab are `x86_64-linux` DNS outputs.
 
 See [the architecture notes](docs/architecture.md), the
 [device identity lifecycle](docs/device-identity.md), and the

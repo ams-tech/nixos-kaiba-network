@@ -1,10 +1,26 @@
 {
   description = "Kaiba secure-device dynamic DNS pilot";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/70ce234312134a463ba7728e94da2486a1d237ac";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/70ce234312134a463ba7728e94da2486a1d237ac";
+    provisioning = {
+      url = "path:./nix/provisioning";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    dns = {
+      url = "path:./nix/dns";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.provisioning.follows = "provisioning";
+    };
+  };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      provisioning,
+      dns,
+    }:
     let
       lib = nixpkgs.lib;
       systems = [
@@ -12,101 +28,90 @@
         "aarch64-linux"
       ];
       forAllSystems = lib.genAttrs systems;
-      packagesFor =
+
+      compatibilitySuiteFor =
         system:
         let
           pkgs = import nixpkgs { inherit system; };
         in
-        import ./nix/packages.nix { inherit pkgs lib; };
-      provisioningFor =
-        system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-        in
-        import ./tests/provisioning/packages.nix {
-          inherit pkgs lib;
-          built = packagesFor system;
-          kaibaModules = self.nixosModules;
+        pkgs.symlinkJoin {
+          name = "kaiba-dns-pilot-0.1.0";
+          paths = [
+            dns.packages.${system}.dns-suite
+            provisioning.packages.${system}.provisioning-suite
+          ];
         };
     in
     {
       nixosModules = {
-        default = import ./nix/modules;
-        device-agent = import ./nix/modules/device-agent.nix;
-        update-services = import ./nix/modules/update-services.nix;
-        hidden-primary = import ./nix/modules/hidden-primary.nix;
-        hidden-standby = import ./nix/modules/hidden-standby.nix;
-        public-secondary = import ./nix/modules/public-secondary.nix;
-        provisioning-probe = import ./nix/modules/provisioning-probe.nix;
-        provisioning-station-demo = import ./nix/modules/provisioning-station-demo.nix;
+        default = {
+          imports = [
+            dns.nixosModules.default
+            provisioning.nixosModules.default
+          ];
+        };
+        inherit (dns.nixosModules)
+          device-agent
+          hidden-primary
+          hidden-standby
+          public-secondary
+          update-controller
+          update-services
+          ;
+        inherit (provisioning.nixosModules)
+          provisioning-probe
+          provisioning-station-demo
+          ;
       };
 
       packages = forAllSystems (
         system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-          built = packagesFor system;
-          provisioning = provisioningFor system;
-          integration = lib.optionalAttrs (system == "x86_64-linux") (
-            import ./tests/integration/packages.nix {
-              inherit pkgs lib;
-              kaibaPackage = built.suite;
-              kaibaModules = self.nixosModules;
-              provisioningTestResult = provisioning.provisioningTestResult;
-              stationPages = built.stationPages;
-            }
-          );
-        in
         {
-          default = built.suite;
-          kaiba-agent = built.agent;
-          kaiba-controller = built.controller;
-          kaiba-provision = built.provision;
-          kaiba-provision-station-demo = built.stationDemo;
-          kaiba-provision-station-pages = built.stationPages;
-          kaiba-publisher = built.publisher;
-          provisioning-test-result = provisioning.provisioningTestResult;
+          default = compatibilitySuiteFor system;
+          inherit (dns.packages.${system})
+            kaiba-agent
+            kaiba-controller
+            kaiba-publisher
+            ;
+          inherit (provisioning.packages.${system})
+            kaiba-provision
+            kaiba-provision-station-demo
+            kaiba-provision-station-pages
+            provisioning-test-result
+            ;
         }
-        // integration
+        // lib.optionalAttrs (system == "x86_64-linux") {
+          inherit (dns.packages.${system})
+            dns-schema-gate
+            dns-security-gate
+            dns-test-driver
+            dns-test-gate
+            dns-test-raw
+            dns-test-report
+            report-unit
+            ;
+        }
       );
 
       checks = forAllSystems (
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          built = packagesFor system;
-          provisioning = provisioningFor system;
+          moduleEval = import ./tests/module-eval.nix {
+            inherit pkgs lib;
+            kaibaPackage = dns.packages.${system}.dns-suite;
+            kaibaProvisionPackage = provisioning.packages.${system}.kaiba-provision;
+            kaibaStationDemoPackage = provisioning.packages.${system}.kaiba-provision-station-demo;
+            kaibaModules = self.nixosModules;
+          };
         in
         {
-          unit = built.suite;
-          device-profile-schema = provisioning.deviceProfileSchema;
-          rpi5-probe-bundle = provisioning.probeBundleIntegrity;
-          module-eval = provisioning.moduleEval;
-          provisioning-test-result = provisioning.provisioningTestResult;
-          station-ui =
-            pkgs.runCommand "kaiba-provisioning-station-ui-check"
-              {
-                nativeBuildInputs = [
-                  pkgs.nodejs
-                  pkgs.python3
-                ];
-              }
-              ''
-                set -eu
-                export PYTHONDONTWRITEBYTECODE=1
-                cd ${./.}
-                node --check internal/provisioning/stationui/web/app.js
-                node --check internal/provisioning/stationui/web/transport.js
-                export KAIBA_STATION_PAGES=${built.stationPages}
-                node --test tests/station-ui/transport.test.mjs
-                python3 -m unittest discover -s tests/station-ui -p 'test_*.py' -v
-                for asset in index.html styles.css transport.js app.js; do
-                  cmp "internal/provisioning/stationui/web/$asset" "${built.stationPages}/$asset"
-                done
-                test "$(find ${built.stationPages} -maxdepth 1 -type f | wc -l)" -eq 6
-                mkdir -p "$out"
-                printf '%s\n' 'provisioning station UI: pass' > "$out/results.txt"
-              '';
+          unit = self.packages.${system}.default;
+          device-profile-schema = provisioning.checks.${system}.device-profile-schema;
+          rpi5-probe-bundle = provisioning.checks.${system}.rpi5-probe-bundle;
+          module-eval = moduleEval;
+          provisioning-test-result = provisioning.checks.${system}.provisioning-test-result;
+          station-ui = provisioning.checks.${system}.station-ui;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
               {
@@ -122,19 +127,14 @@
               '';
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
-          report-unit = self.packages.${system}.report-unit;
-          dns-schema = self.packages.${system}.dns-schema-gate;
-          dns-topology = self.packages.${system}.dns-test-gate;
-          dns-security = self.packages.${system}.dns-security-gate;
+          report-unit = dns.checks.${system}.report-unit;
+          dns-schema = dns.checks.${system}.dns-schema;
+          dns-topology = dns.checks.${system}.dns-topology;
+          dns-security = dns.checks.${system}.dns-security;
         }
       );
 
-      apps.x86_64-linux = {
-        dns-test-driver = {
-          type = "app";
-          program = "${self.packages.x86_64-linux.dns-test-driver}/bin/nixos-test-driver";
-        };
-      };
+      apps.x86_64-linux.dns-test-driver = dns.apps.x86_64-linux.dns-test-driver;
 
       devShells = forAllSystems (
         system:
