@@ -6,25 +6,25 @@
     <meta name="theme-color" content="#07111d">
     <meta
       name="description"
-      content="Kaiba is an executable DNS control-plane pilot for giving secure edge devices stable names without exposing provider credentials or hidden origin topology."
+      content="Kaiba connects controlled device qualification and identity with stable, identity-bound DNS for secure edge systems."
     >
     <meta property="og:type" content="website">
-    <meta property="og:title" content="Kaiba — Stable device names, explicit trust boundaries">
+    <meta property="og:title" content="Kaiba — Trust the device. Then give it a name.">
     <meta
       property="og:description"
-      content="An executable DNS control-plane pilot with identity-bound updates, durable desired state, and inspectable seven-VM test evidence."
+      content="An inspectable edge identity platform with a non-persistent provisioning preflight, a shared station simulation, and an executable DNS control-plane pilot."
     >
     <meta property="og:url" content="https://ams-tech.github.io/nixos-kaiba-network/">
     <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="Kaiba DNS pilot">
+    <meta name="twitter:title" content="Kaiba secure device identity">
     <meta
       name="twitter:description"
-      content="Stable device names without putting DNS provider logic or credentials on devices."
+      content="Controlled device qualification and identity-bound DNS with explicit trust boundaries."
     >
     <link rel="canonical" href="https://ams-tech.github.io/nixos-kaiba-network/">
     <link rel="stylesheet" href="./styles.css">
     <script src="./site.js" defer></script>
-    <title>Kaiba — Stable device names, explicit trust boundaries</title>
+    <title>Kaiba — Secure device identity and stable DNS</title>
   </head>
   <body>
     <a class="skip-link" href="#content">Skip to content</a>
@@ -33,14 +33,13 @@
       <a class="brand" href="./" aria-label="Kaiba homepage">
         <span class="brand-mark" aria-hidden="true">K</span>
         <span class="brand-name">KAIBA</span>
-        <span class="brand-edition">DNS PILOT</span>
+        <span class="brand-edition">DEVICE PLATFORM</span>
       </a>
 
       <nav class="site-nav" aria-label="Primary navigation">
-        <a href="#architecture">Architecture</a>
-        <a href="#guarantees">Guarantees</a>
-        <a href="#validation">Validation</a>
-        <a href="./provisioning-demo/">Station demo</a>
+        <a class="nav-product" href="./provisioning/">Provisioning</a>
+        <a class="nav-product" href="./dns/">DNS</a>
+        <a class="nav-secondary" href="#validation">Evidence</a>
         <a
           class="nav-source"
           href="https://github.com/ams-tech/nixos-kaiba-network"
@@ -53,220 +52,212 @@
       <section class="hero section-shell" aria-labelledby="hero-title">
         <div class="hero-copy">
           <div class="eyebrow-row">
-            <p class="eyebrow">Executable DNS control-plane pilot</p>
+            <p class="eyebrow">Secure device identity + DNS</p>
             <a class="report-signal" id="report-link" href="./reports/latest/">
               <span class="signal-light" id="report-signal" aria-hidden="true"></span>
-              <span id="report-signal-text">Latest DNS report available</span>
+              <span id="report-signal-text">Latest test report available</span>
             </a>
           </div>
 
           <h1 id="hero-title">
-            Stable device names.
-            <span>Explicit trust boundaries.</span>
+            Trust the device.
+            <span>Then give it a name.</span>
           </h1>
 
           <p class="hero-lede">
-            Kaiba turns a device's mTLS identity and current addresses into controlled DNS updates.
-            Desired state is committed durably, projected by a credential-isolated publisher, and
-            observed at redundant public authorities.
+            Kaiba connects controlled device qualification and identity with stable name
+            publication. Today, the repository contains a non-persistent provisioning preflight,
+            a shared station-workflow simulation, and an end-to-end DNS control-plane pilot.
           </p>
 
           <div class="hero-actions">
-            <a class="button button-primary" href="./reports/latest/">
-              View latest test report
-              <span aria-hidden="true">↗</span>
+            <a class="button button-primary" href="./provisioning/">
+              Explore provisioning
+              <span aria-hidden="true">→</span>
             </a>
-            <a class="button button-secondary" href="#architecture">See how it works</a>
+            <a class="button button-secondary" href="./dns/">Explore DNS</a>
           </div>
 
-          <ul class="hero-facts" aria-label="Pilot highlights">
-            <li><span aria-hidden="true">01</span> mTLS identity</li>
-            <li><span aria-hidden="true">02</span> Complete A + AAAA sets</li>
-            <li><span aria-hidden="true">03</span> RFC 2136 + TSIG</li>
-            <li><span aria-hidden="true">04</span> Seven isolated VMs</li>
+          <ul class="hero-facts" aria-label="Product highlights">
+            <li><span aria-hidden="true">01</span> One lane-bound target</li>
+            <li><span aria-hidden="true">02</span> Protected-key lifecycle design</li>
+            <li><span aria-hidden="true">03</span> Identity-derived DNS owner</li>
+            <li><span aria-hidden="true">04</span> Inspectable evidence</li>
           </ul>
         </div>
 
-        <aside class="control-card" aria-label="Kaiba control-plane overview">
+        <aside class="control-card" aria-label="Kaiba device lifecycle overview">
           <div class="control-card-header">
-            <span>CONTROL PATH / 001</span>
-            <span class="control-online"><i aria-hidden="true"></i> ISOLATED</span>
+            <span>DEVICE LIFECYCLE / 001</span>
+            <span class="control-online"><i aria-hidden="true"></i> BOUNDARIES VISIBLE</span>
           </div>
 
           <div class="mini-flow">
             <div class="mini-node mini-device">
-              <span class="mini-kicker">DEVICE</span>
-              <strong>pi-001</strong>
-              <small>SPIFFE identity</small>
+              <span class="mini-kicker">PREFLIGHT</span>
+              <strong>Observe target</strong>
+              <small>executable probe</small>
             </div>
             <div class="mini-link" aria-hidden="true">
-              <span>mTLS</span>
+              <span>bind</span>
               <i></i>
             </div>
             <div class="mini-node mini-controller">
-              <span class="mini-kicker">CONTROL</span>
-              <strong>Controller</strong>
-              <small>desired state</small>
+              <span class="mini-kicker">IDENTITY</span>
+              <strong>Enroll + activate</strong>
+              <small>target design</small>
             </div>
             <div class="mini-link" aria-hidden="true">
-              <span>reconcile</span>
+              <span>authorize</span>
               <i></i>
             </div>
             <div class="mini-node mini-origin">
-              <span class="mini-kicker">DNS</span>
-              <strong>Hidden origin</strong>
-              <small>public replicas</small>
+              <span class="mini-kicker">NETWORK</span>
+              <strong>Publish name</strong>
+              <small>executable DNS pilot</small>
             </div>
           </div>
 
           <dl class="control-readout">
             <div>
-              <dt>Owner</dt>
-              <dd>pi-001.kaiba.network</dd>
+              <dt>Probe</dt>
+              <dd>partial preflight</dd>
             </div>
             <div>
-              <dt>Write policy</dt>
-              <dd>identity-derived</dd>
+              <dt>Station UI</dt>
+              <dd>shared simulation</dd>
             </div>
             <div>
-              <dt>Projection</dt>
-              <dd>publicly-observed</dd>
+              <dt>DNS</dt>
+              <dd>exercised end to end</dd>
             </div>
           </dl>
 
           <p class="control-note">
-            DNS resolves the device. Application traffic travels directly to it—the control plane
-            is not a relay.
+            A passing probe can support reversible qualification. It does not authenticate or
+            attest a device, establish its full baseline, or authorize a persistent change.
           </p>
         </aside>
       </section>
 
-      <section class="signal-strip" aria-label="System properties">
-        <div><span>AUTH</span> URI SAN controls the DNS owner</div>
-        <div><span>STATE</span> Accepted intent precedes projection</div>
-        <div><span>DNS</span> Public authorities must agree</div>
+      <section class="signal-strip" aria-label="Current implementation scope">
+        <div><span>PROBE</span> Correlation + partial preflight</div>
+        <div><span>IDENTITY</span> Protected lifecycle design</div>
+        <div><span>DNS</span> Executable control plane</div>
       </section>
 
-      <section class="architecture section-shell" id="architecture" aria-labelledby="architecture-title">
+      <section class="product-pillars section-shell section-block" id="products" aria-labelledby="products-title">
         <div class="section-heading">
-          <p class="section-index">01 / Architecture</p>
+          <p class="section-index">01 / Product</p>
           <div>
-            <h2 id="architecture-title">A small control plane with visible boundaries.</h2>
+            <h2 id="products-title">One device trust story. Two focused systems.</h2>
             <p>
-              Devices publish intent. They never receive provider credentials or hidden-origin
-              topology.
+              Provisioning establishes what the device is allowed to become. DNS uses its
+              operational identity to control the name it is allowed to publish.
             </p>
           </div>
         </div>
 
-        <div class="architecture-flow" role="img" aria-label="Device agent sends an mTLS update to the controller, which commits desired state. A separate publisher uses authenticated DNS UPDATE with a writable hidden origin that transfers to read-only and public replicas used by recursive clients.">
-          <article class="flow-node">
-            <span class="node-number">01</span>
-            <p>EDGE</p>
-            <h3>Device agent</h3>
-            <span>mTLS identity</span>
-            <span>complete address set</span>
+        <div class="product-grid">
+          <article class="product-card product-card-provisioning">
+            <div class="product-card-topline">
+              <span>SECURE PROVISIONING</span>
+              <span class="status-pill status-experimental">EXPERIMENTAL PREFLIGHT</span>
+            </div>
+            <p class="product-number" aria-hidden="true">01</p>
+            <h3>Observe before you mutate.</h3>
+            <p>
+              Bind an operator lane to exactly one target, acquire tightly constrained metadata,
+              normalize it under a strict profile, and preserve the result as partial
+              qualification evidence.
+            </p>
+            <ul class="feature-list">
+              <li>Non-persistent live probe and offline evidence evaluation</li>
+              <li>Digest-pinned tool, firmware, profile, and bundle inputs</li>
+              <li>One interface codebase for the local station and Pages simulation</li>
+              <li>Explicit mutation, attestation, and hardware-qualification boundaries</li>
+            </ul>
+            <a class="text-link" href="./provisioning/">Provisioning details <span aria-hidden="true">→</span></a>
           </article>
-          <div class="flow-connector" aria-hidden="true"><span>HTTPS</span><i></i></div>
-          <article class="flow-node">
-            <span class="node-number">02</span>
-            <p>CONTROL</p>
-            <h3>Controller</h3>
-            <span>generation precondition</span>
-            <span>SQLite desired state</span>
-          </article>
-          <div class="flow-connector" aria-hidden="true"><span>reconcile</span><i></i></div>
-          <article class="flow-node">
-            <span class="node-number">03</span>
-            <p>WRITER</p>
-            <h3>Publisher</h3>
-            <span>separate service identity</span>
-            <span>TSIG credential owner</span>
-          </article>
-          <div class="flow-connector" aria-hidden="true"><span>RFC 2136</span><i></i></div>
-          <article class="flow-node flow-node-dns">
-            <span class="node-number">04</span>
-            <p>AUTHORITY</p>
-            <h3>Hidden origins</h3>
-            <span>P0 writable</span>
-            <span>P1 read-only standby</span>
-          </article>
-          <div class="flow-connector" aria-hidden="true"><span>IXFR / AXFR</span><i></i></div>
-          <article class="flow-node flow-node-public">
-            <span class="node-number">05</span>
-            <p>PUBLIC</p>
-            <h3>DNS authorities</h3>
-            <span>authoritative-only</span>
-            <span>recursive clients resolve</span>
-          </article>
-        </div>
 
-        <div class="architecture-notes">
-          <p>
-            <strong>Control path:</strong> certificate identity constrains the name; idempotency and
-            generation conditions constrain the write.
-          </p>
-          <p>
-            <strong>Data path:</strong> after resolution, HTTPS goes directly from the client to the
-            device—not through the controller or DNS origins.
-          </p>
+          <article class="product-card product-card-dns">
+            <div class="product-card-topline">
+              <span>IDENTITY-BOUND DNS</span>
+              <span class="status-pill status-executable">EXECUTABLE PILOT</span>
+            </div>
+            <p class="product-number" aria-hidden="true">02</p>
+            <h3>A stable name with a constrained writer.</h3>
+            <p>
+              Turn a device's mTLS identity and complete address set into durable desired state,
+              then project it through a credential-isolated publisher and observe convergence at
+              redundant public authorities.
+            </p>
+            <ul class="feature-list">
+              <li>Certificate identity determines the only writable DNS owner</li>
+              <li>Generation conditions and idempotency make retries explicit</li>
+              <li>RFC 2136 credentials stay in a separate publisher service</li>
+              <li>Seven-VM tests record publication and failure evidence</li>
+            </ul>
+            <a class="text-link" href="./dns/">DNS details <span aria-hidden="true">→</span></a>
+          </article>
         </div>
       </section>
 
-      <section class="guarantees section-shell" id="guarantees" aria-labelledby="guarantees-title">
+      <section class="lifecycle section-shell section-block" id="lifecycle" aria-labelledby="lifecycle-title">
         <div class="section-heading section-heading-compact">
-          <p class="section-index">02 / Guarantees</p>
+          <p class="section-index">02 / Lifecycle</p>
           <div>
-            <h2 id="guarantees-title">Specific controls, not security theater.</h2>
+            <h2 id="lifecycle-title">The boundary stays visible at every stage.</h2>
+            <p>
+              Implemented slices and target architecture are deliberately labeled instead of
+              being presented as one finished production path.
+            </p>
           </div>
         </div>
 
-        <div class="guarantee-grid">
-          <article class="guarantee-card">
-            <span class="card-index">A</span>
-            <h3>Identity-bound updates</h3>
-            <p>
-              The client certificate determines the device and DNS owner. Request bodies cannot
-              choose a hostname, zone, TTL, or record type.
-            </p>
+        <div class="lifecycle-flow">
+          <article class="lifecycle-step">
+            <span class="step-number">01</span>
+            <span class="step-status step-live">EXECUTABLE</span>
+            <h3>Inspect target</h3>
+            <p>Collect and normalize bounded evidence from exactly one claimed device.</p>
           </article>
-          <article class="guarantee-card">
-            <span class="card-index">B</span>
-            <h3>Durable intent, observable convergence</h3>
-            <p>
-              Accepted, origin-applied, and publicly-observed remain distinct states. A 202 means
-              intent is durable—not that DNS has already converged.
-            </p>
+          <article class="lifecycle-step">
+            <span class="step-number">02</span>
+            <span class="step-status step-design">TARGET DESIGN</span>
+            <h3>Authorize change</h3>
+            <p>Bind approval to the exact device, policy, artifacts, and ordered commit plan.</p>
           </article>
-          <article class="guarantee-card">
-            <span class="card-index">C</span>
-            <h3>A constrained DNS writer</h3>
-            <p>
-              Only the publisher owns the TSIG update credential. P0 is writable; P1 and public
-              secondaries remain authoritative-only and non-recursive.
-            </p>
+          <article class="lifecycle-step">
+            <span class="step-number">03</span>
+            <span class="step-status step-design">TARGET DESIGN</span>
+            <h3>Establish identity</h3>
+            <p>Create protected device-unique material, prove possession, and stage credentials.</p>
           </article>
-          <article class="guarantee-card">
-            <span class="card-index">D</span>
-            <h3>Evidence you can inspect</h3>
-            <p>
-              The reproducible topology records assertions, answers, serials, snapshots, and
-              normalized evidence—even when a functional assertion fails.
-            </p>
+          <article class="lifecycle-step">
+            <span class="step-number">04</span>
+            <span class="step-status step-design">TARGET DESIGN</span>
+            <h3>Verify + activate</h3>
+            <p>Observe postconditions independently before inventory authorizes the credential.</p>
+          </article>
+          <article class="lifecycle-step">
+            <span class="step-number">05</span>
+            <span class="step-status step-live">EXECUTABLE</span>
+            <h3>Publish name</h3>
+            <p>Use active mTLS identity to constrain and reconcile the device's stable DNS owner.</p>
           </article>
         </div>
       </section>
 
       <section class="validation section-shell" id="validation" aria-labelledby="validation-title">
         <div class="validation-copy">
-          <p class="section-index">03 / Validation</p>
-          <h2 id="validation-title">Every exercised claim has evidence.</h2>
+          <p class="section-index">03 / Evidence</p>
+          <h2 id="validation-title">Every exercised claim should leave evidence.</h2>
           <p>
-            The latest main-branch run exercises seven isolated, dual-stack NixOS VMs under
-            <code>kaiba.test</code> and reports automated provisioning-probe checks built from
-            deterministic fixtures and injected fakes. The report includes assertion results,
-            normalized evidence, DNS answers, provisioning check results, zone snapshots,
-            topology diagrams, JUnit XML, canonical JSON, and a SHA-256 manifest.
+            The latest main-branch run combines an isolated seven-VM DNS topology with automated
+            provisioning-probe checks built from deterministic fixtures and injected fakes.
+            Physical Pi 5 qualification remains a separate manual gate and is never inferred from
+            CI.
           </p>
 
           <div class="validation-groups">
@@ -291,7 +282,7 @@
 
         <aside class="report-card" aria-labelledby="report-card-title">
           <div class="report-card-topline">
-            <span>DNS / MAIN / LATEST</span>
+            <span>MAIN / LATEST</span>
             <span
               class="report-card-state is-unavailable"
               id="report-status"
@@ -308,7 +299,7 @@
 
           <dl class="report-metrics">
             <div>
-              <dt>Assertions</dt>
+              <dt>DNS assertions</dt>
               <dd id="report-assertions">—</dd>
             </div>
             <div>
@@ -361,14 +352,14 @@
           <div class="report-formats" aria-label="Report formats">
             <a href="./reports/latest/index.md">Markdown</a>
             <a href="./reports/latest/junit.xml">JUnit XML</a>
-            <a href="./reports/latest/result.json">Canonical JSON</a>
+            <a href="./reports/latest/result.json">DNS JSON</a>
             <a href="./reports/latest/provisioning.json">Provisioning JSON</a>
             <a href="./reports/latest/manifest.sha256">Manifest</a>
           </div>
 
           <p class="report-footnote">
-            A well-formed diagnostic report is published even when assertions fail. Per-run history
-            remains in GitHub Actions artifacts.
+            A well-formed diagnostic report is published even when assertions fail. Per-run
+            history remains in GitHub Actions artifacts.
           </p>
         </aside>
       </section>
@@ -376,33 +367,34 @@
       <section class="boundary section-shell" id="boundary" aria-labelledby="boundary-title">
         <div class="boundary-label">
           <span aria-hidden="true">!</span>
-          PILOT BOUNDARY
+          PRODUCT BOUNDARY
         </div>
         <div class="boundary-copy">
-          <h2 id="boundary-title">Built to make the production boundary visible.</h2>
+          <h2 id="boundary-title">A working pilot with an explicit road to production.</h2>
           <p>
-            This is an executable pilot, not a production deployment. It uses
-            <code>kaiba.test</code>, a simulated parent authority, test-only credentials, and public
-            secondary emulators. It does not contact Namecheap or change
-            <code>kaiba.network</code>.
+            The DNS control plane is exercised end to end in an isolated test domain. The
+            provisioning implementation stops at correlation and partial preflight: it executes
+            signed recovery code in volatile RAM but does not change persistent target state,
+            install keys, enroll credentials, or authorize a device.
           </p>
           <p class="boundary-deferred">
-            Real provider integration and SLAs, Internet and NAT behavior, ACME, DNSSEC, automatic
-            origin promotion and fencing, redundant controllers, fleet-scale operation, production
-            secrets, deployment, and monitoring remain outside the exercised scope.
+            Production RA and CA integration, inventory activation, transaction coordination,
+            irreversible device security changes, protected signing, complete attestation,
+            Internet provider integration, fleet deployment, and monitoring remain outside the
+            current executable scope.
           </p>
           <a href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/architecture.md">
-            Read the full architecture and deferred-work notes <span aria-hidden="true">→</span>
+            Read the architecture and deferred-work notes <span aria-hidden="true">→</span>
           </a>
         </div>
       </section>
 
       <section class="closing section-shell" aria-labelledby="closing-title">
         <p class="section-index">04 / Inspect it yourself</p>
-        <h2 id="closing-title">The implementation and its evidence are both open.</h2>
+        <h2 id="closing-title">The implementation, simulation, and evidence are open.</h2>
         <div class="closing-actions">
-          <a class="button button-primary" href="./reports/latest/">Read the test report <span aria-hidden="true">↗</span></a>
-          <a class="button button-secondary" href="./provisioning-demo/">Try the station simulation</a>
+          <a class="button button-primary" href="./provisioning-demo/">Try the station simulation</a>
+          <a class="button button-secondary" href="./reports/latest/">Read the test report</a>
           <a class="button button-secondary" href="https://github.com/ams-tech/nixos-kaiba-network">Browse the repository</a>
         </div>
       </section>
@@ -412,13 +404,13 @@
       <div class="brand footer-brand">
         <span class="brand-mark" aria-hidden="true">K</span>
         <span class="brand-name">KAIBA</span>
-        <span class="brand-edition">DNS PILOT</span>
+        <span class="brand-edition">DEVICE PLATFORM</span>
       </div>
-      <p>Stable DNS identity for secure edge devices.</p>
+      <p>Controlled identity and stable names for secure edge devices.</p>
       <div class="footer-links">
-        <a href="./reports/latest/">Latest report</a>
-        <a href="./provisioning-demo/">Station simulation</a>
-        <a href="https://github.com/ams-tech/nixos-kaiba-network">GitHub</a>
+        <a href="./provisioning/">Provisioning</a>
+        <a href="./dns/">DNS</a>
+        <a href="./reports/latest/">Evidence</a>
         <a href="#content">Back to top ↑</a>
       </div>
     </footer>

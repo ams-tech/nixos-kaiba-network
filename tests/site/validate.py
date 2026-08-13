@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the assembled GitHub Pages homepage and canonical report tree."""
+"""Validate the assembled GitHub Pages product site and canonical report tree."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ REQUIRED_PATHS = (
     "index.html",
     "styles.css",
     "site.js",
+    "dns/index.html",
+    "provisioning/index.html",
     "provisioning-demo/index.html",
     "provisioning-demo/styles.css",
     "provisioning-demo/transport.js",
@@ -233,29 +235,32 @@ def validate_references(root: Path, pages: dict[Path, PageParser], errors: list[
                 )
 
 
-def validate_homepage(root: Path, parser: PageParser, errors: list[str]) -> None:
+def validate_product_page(relative: str, parser: PageParser, errors: list[str]) -> None:
     if not parser.has_doctype:
-        errors.append("index.html: missing HTML5 doctype")
+        errors.append(f"{relative}: missing HTML5 doctype")
     if not parser.html_lang.strip():
-        errors.append("index.html: html element must declare a language")
+        errors.append(f"{relative}: html element must declare a language")
     if not "".join(parser.title_parts).strip():
-        errors.append("index.html: title must not be empty")
+        errors.append(f"{relative}: title must not be empty")
     if not parser.has_viewport:
-        errors.append("index.html: viewport metadata is required")
+        errors.append(f"{relative}: viewport metadata is required")
     if not parser.has_main:
-        errors.append("index.html: main landmark is required")
+        errors.append(f"{relative}: main landmark is required")
     if parser.heading_levels.count(1) != 1:
-        errors.append("index.html: exactly one h1 is required")
+        errors.append(f"{relative}: exactly one h1 is required")
     for previous, current in zip(parser.heading_levels, parser.heading_levels[1:]):
         if current > previous + 1:
-            errors.append(f"index.html: heading level jumps from h{previous} to h{current}")
+            errors.append(f"{relative}: heading level jumps from h{previous} to h{current}")
     duplicates = sorted({identifier for identifier in parser.ids if parser.ids.count(identifier) > 1})
     if duplicates:
-        errors.append(f"index.html: duplicate ids: {', '.join(duplicates)}")
+        errors.append(f"{relative}: duplicate ids: {', '.join(duplicates)}")
     if parser.images_without_alt:
-        errors.append("index.html: every image must have an alt attribute")
+        errors.append(f"{relative}: every image must have an alt attribute")
     if parser.unnamed_links:
-        errors.append("index.html: every link must have accessible text or an aria-label")
+        errors.append(f"{relative}: every link must have accessible text or an aria-label")
+
+
+def validate_homepage(parser: PageParser, errors: list[str]) -> None:
     required_status_ids = {
         "report-status",
         "provisioning-automated-status",
@@ -279,6 +284,16 @@ def validate_homepage(root: Path, parser: PageParser, errors: list[str]) -> None
         for reference in parser.references
     ):
         errors.append("index.html: direct provisioning-demo/ link is required")
+    if not any(
+        urlsplit(reference).path in {"provisioning/", "./provisioning/"}
+        for reference in parser.references
+    ):
+        errors.append("index.html: direct provisioning/ product link is required")
+    if not any(
+        urlsplit(reference).path in {"dns/", "./dns/"}
+        for reference in parser.references
+    ):
+        errors.append("index.html: direct dns/ product link is required")
 
 
 def validate_station_demo(root: Path, errors: list[str]) -> None:
@@ -536,9 +551,14 @@ def main(argv: list[str] | None = None) -> int:
     ensure_safe_tree(root, errors)
     validate_manifest(root, errors)
     pages = {path.resolve(): parse_page(path) for path in root.rglob("*.html")}
+    product_pages = ("index.html", "provisioning/index.html", "dns/index.html")
+    for relative in product_pages:
+        product_page = pages.get((root / relative).resolve())
+        if product_page is not None:
+            validate_product_page(relative, product_page, errors)
     homepage = pages.get((root / "index.html").resolve())
     if homepage is not None:
-        validate_homepage(root, homepage, errors)
+        validate_homepage(homepage, errors)
     validate_references(root, pages, errors)
     validate_result(root, errors)
     validate_provisioning(root, errors)
