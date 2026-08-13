@@ -15,20 +15,48 @@ separate privilege boundaries.
 ## NixOS service
 
 The disabled-by-default module runs the HTTP server as a dynamically allocated,
-unprivileged systemd identity:
+unprivileged systemd identity. New configurations can consume only the
+provisioning leaf:
 
 ```nix
+inputs.kaiba-provisioning = {
+  url = "github:ams-tech/nixos-kaiba-network?dir=nix/provisioning";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+Import its module and package in the station configuration. The module form
+below assumes the surrounding `nixosSystem` passes
+`specialArgs = { inherit inputs; };`:
+
+```nix
+{ inputs, pkgs, ... }:
+
 {
-  imports = [ inputs.kaiba.nixosModules.provisioning-station-demo ];
+  imports = [ inputs.kaiba-provisioning.nixosModules.provisioning-station-demo ];
 
   services.kaiba-provisioning-station-demo = {
     enable = true;
-    package = inputs.kaiba.packages.${pkgs.system}.kaiba-provision-station-demo;
+    package =
+      inputs.kaiba-provisioning.packages.${pkgs.stdenv.hostPlatform.system}.kaiba-provision-station-demo;
     listenAddress = "127.0.0.1";
     port = 8080;
     scenario = "happy-path";
   };
 }
+```
+
+Keep the package assignment explicit so the source of the service binary is
+visible. Existing configurations using the repository-root compatibility
+input may keep `inputs.kaiba.nixosModules.provisioning-station-demo` and
+`inputs.kaiba.packages.${pkgs.stdenv.hostPlatform.system}.kaiba-provision-station-demo`.
+
+From a checkout, evaluate the leaf or build either interface package directly:
+
+```console
+nix flake check ./nix/provisioning -L
+nix build ./nix/provisioning#kaiba-provision-station-demo -L
+nix build ./nix/provisioning#kaiba-provision-station-pages -L
 ```
 
 `listenAddress` accepts only `127.0.0.1` or `::1`. The service has no

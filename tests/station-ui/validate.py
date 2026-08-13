@@ -125,7 +125,14 @@ def main(argv: list[str]) -> int:
     if len(argv) > 2:
         print(f"usage: {argv[0]} [WEB_ROOT]", file=sys.stderr)
         return 2
-    default_root = Path(__file__).resolve().parents[2] / "internal" / "provisioning" / "stationui" / "web"
+    default_root = (
+        Path(__file__).resolve().parents[2]
+        / "provisioning"
+        / "internal"
+        / "provisioning"
+        / "stationui"
+        / "web"
+    )
     try:
         validate(Path(argv[1]) if len(argv) == 2 else default_root)
     except (OSError, ValueError) as error:
