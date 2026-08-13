@@ -47,10 +47,10 @@ let
         touch "$out/passed"
       '';
 
-  moduleEval = import ../module-eval.nix {
+  moduleEval = import ./module-eval.nix {
     inherit pkgs lib kaibaModules;
-    kaibaPackage = built.suite;
     kaibaProvisionPackage = built.provision;
+    kaibaStationDemoPackage = built.stationDemo;
   };
 
   checks = [

@@ -16,7 +16,7 @@ let
     ;
 
   cfg = config.services.kaiba-provisioning-station-demo;
-  defaultPackage = (import ../packages.nix { inherit pkgs lib; }).stationDemo;
+  defaultPackage = (import ../provisioning/packages.nix { inherit pkgs lib; }).stationDemo;
   loopbackAddresses = [
     "127.0.0.1"
     "::1"
@@ -41,8 +41,8 @@ in
     package = mkOption {
       type = types.package;
       default = defaultPackage;
-      defaultText = lib.literalExpression "the kaiba-provision-station-demo package from this source tree";
-      example = lib.literalExpression "inputs.kaiba.packages.${pkgs.system}.kaiba-provision-station-demo";
+      defaultText = lib.literalExpression "the kaiba-provision-station-demo package from the provisioning source tree";
+      example = lib.literalExpression "inputs.kaiba-provisioning.packages.\${pkgs.system}.kaiba-provision-station-demo";
       description = "Package containing bin/kaiba-provision-station-demo.";
     };
 

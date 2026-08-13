@@ -1,13 +1,14 @@
-{ ... }:
+{ lib, pkgs, ... }:
 
+let
+  built = import ../provisioning/packages.nix { inherit pkgs lib; };
+in
 {
   imports = [
-    ./device-agent.nix
-    ./update-controller.nix
-    ./hidden-primary.nix
-    ./hidden-standby.nix
-    ./public-secondary.nix
-    ./provisioning-probe.nix
-    ./provisioning-station-demo.nix
+    ../dns/modules
+    ../provisioning/modules
   ];
+
+  services.kaiba-provisioning-probe.package = lib.mkDefault built.provision;
+  services.kaiba-provisioning-station-demo.package = lib.mkDefault built.stationDemo;
 }

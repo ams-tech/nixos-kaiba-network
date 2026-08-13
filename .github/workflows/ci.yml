@@ -35,20 +35,29 @@ jobs:
         run: nix fmt -- --ci
 
       - name: Evaluate every flake system
-        run: nix flake check --all-systems --no-build -L
+        run: |
+          nix flake check --all-systems --no-build -L
+          nix flake check ./nix/provisioning --all-systems --no-build -L
+          nix flake check ./nix/dns --all-systems --no-build -L
+          git diff --exit-code -- \
+            flake.lock \
+            nix/provisioning/flake.lock \
+            nix/dns/flake.lock
 
       - name: Run fast checks
         run: |
           nix build --no-link -L \
             .#checks.x86_64-linux.ci-workflow \
-            .#checks.x86_64-linux.device-profile-schema \
             .#checks.x86_64-linux.module-eval \
-            .#checks.x86_64-linux.provisioning-test-result \
-            .#checks.x86_64-linux.rpi5-probe-bundle \
-            .#checks.x86_64-linux.report-unit \
-            .#checks.x86_64-linux.station-ui \
             .#checks.x86_64-linux.unit \
-            .#packages.x86_64-linux.kaiba-provision
+            ./nix/provisioning#checks.x86_64-linux.device-profile-schema \
+            ./nix/provisioning#checks.x86_64-linux.module-eval \
+            ./nix/provisioning#checks.x86_64-linux.provisioning-test-result \
+            ./nix/provisioning#checks.x86_64-linux.rpi5-probe-bundle \
+            ./nix/provisioning#checks.x86_64-linux.station-ui \
+            ./nix/provisioning#packages.x86_64-linux.kaiba-provision \
+            ./nix/dns#checks.x86_64-linux.module-eval \
+            ./nix/dns#checks.x86_64-linux.report-unit
 
   aarch64-packages:
     name: ARM64 production packages
@@ -72,17 +81,18 @@ jobs:
       - name: Build and test all production binaries
         run: |
           nix build --no-link -L \
-            .#checks.aarch64-linux.unit \
-            .#checks.aarch64-linux.rpi5-probe-bundle \
-            .#packages.aarch64-linux.kaiba-agent \
-            .#packages.aarch64-linux.kaiba-controller \
-            .#packages.aarch64-linux.kaiba-provision \
-            .#packages.aarch64-linux.kaiba-provision-station-demo \
-            .#packages.aarch64-linux.kaiba-provision-station-pages \
-            .#packages.aarch64-linux.kaiba-publisher
+            ./nix/dns#checks.aarch64-linux.unit \
+            ./nix/dns#packages.aarch64-linux.kaiba-agent \
+            ./nix/dns#packages.aarch64-linux.kaiba-controller \
+            ./nix/dns#packages.aarch64-linux.kaiba-publisher \
+            ./nix/provisioning#checks.aarch64-linux.unit \
+            ./nix/provisioning#checks.aarch64-linux.rpi5-probe-bundle \
+            ./nix/provisioning#packages.aarch64-linux.kaiba-provision \
+            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
+            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-pages
 
       - name: Build the native provisioning test result
-        run: nix build .#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L
+        run: nix build ./nix/provisioning#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L
 
       - name: Bind the provisioning result to this source revision
         id: provisioning_receipt
@@ -90,7 +100,7 @@ jobs:
           SOURCE_REVISION: ${{ github.sha }}
         run: |
           mkdir -p ci-receipt
-          nix develop --command python3 tests/report/platform_receipt.py \
+          nix develop ./nix/provisioning --command python3 tests/report/platform_receipt.py \
             --input provisioning-result/platform.json \
             --source-revision "$SOURCE_REVISION" \
             --output ci-receipt/provisioning-aarch64.json
@@ -141,7 +151,7 @@ jobs:
           fi
 
       - name: Build the deterministic base report
-        run: nix build .#dns-test-report --out-link base-result -L
+        run: nix build ./nix/dns#dns-test-report --out-link base-result -L
 
       - name: Download the native ARM64 provisioning result
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -173,7 +183,7 @@ jobs:
         env:
           SOURCE_REVISION: ${{ github.sha }}
         run: |
-          nix develop --command python3 tests/report/render.py \
+          nix develop ./nix/dns --command python3 tests/report/render.py \
             --result base-result/result.json \
             --events base-result/events.jsonl \
             --evidence base-result/evidence \
@@ -194,22 +204,22 @@ jobs:
       - name: Enforce schema, security, and functional gates
         run: |
           nix build --no-link -L \
-            .#dns-schema-gate \
-            .#dns-security-gate \
-            .#dns-test-gate
+            ./nix/dns#dns-schema-gate \
+            ./nix/dns#dns-security-gate \
+            ./nix/dns#dns-test-gate
           cmp base-result/result.schema.json ci-report/result.schema.json
           cmp base-result/provisioning.schema.json ci-report/provisioning.schema.json
-          nix develop --command python3 tests/report/schema_gate.py \
+          nix develop ./nix/dns --command python3 tests/report/schema_gate.py \
             --schema ci-report/result.schema.json \
             --instance ci-report/result.json
-          nix develop --command python3 tests/report/schema_gate.py \
+          nix develop ./nix/dns --command python3 tests/report/schema_gate.py \
             --schema ci-report/provisioning.schema.json \
             --instance ci-report/provisioning.json
-          nix develop --command python3 tests/report/gate.py \
+          nix develop ./nix/dns --command python3 tests/report/gate.py \
             --manifest tests/report/required-assertions.json \
             --scope functional \
             ci-report/result.json
-          nix develop --command python3 tests/report/gate.py \
+          nix develop ./nix/dns --command python3 tests/report/gate.py \
             --manifest tests/report/required-assertions.json \
             --scope security \
             ci-report/result.json
@@ -249,7 +259,7 @@ jobs:
             echo "::error title=Reserved build path::pages-site must not exist before assembly."
             exit 1
           fi
-          nix build .#kaiba-provision-station-pages --out-link station-pages -L
+          nix build ./nix/provisioning#kaiba-provision-station-pages --out-link station-pages -L
           mkdir -p pages-site/reports/latest pages-site/provisioning-demo
           cp --recursive --no-dereference site/. pages-site/
           cp --recursive --no-dereference ci-report/. pages-site/reports/latest/
@@ -257,7 +267,7 @@ jobs:
           for asset in index.html styles.css transport.js app.js; do
             cmp "internal/provisioning/stationui/web/$asset" "pages-site/provisioning-demo/$asset"
           done
-          nix develop --command python3 tests/site/validate.py pages-site
+          nix develop ./nix/dns --command python3 tests/site/validate.py pages-site
 
       - name: Upload the project site for GitHub Pages
         id: pages_artifact

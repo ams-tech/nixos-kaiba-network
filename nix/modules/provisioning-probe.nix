@@ -15,7 +15,7 @@ let
     ;
 
   cfg = config.services.kaiba-provisioning-probe;
-  defaultPackage = (import ../packages.nix { inherit pkgs lib; }).provision;
+  defaultPackage = (import ../provisioning/packages.nix { inherit pkgs lib; }).provision;
 in
 {
   options.services.kaiba-provisioning-probe = {
@@ -24,8 +24,8 @@ in
     package = mkOption {
       type = types.package;
       default = defaultPackage;
-      defaultText = lib.literalExpression "the kaiba-provision package from this source tree";
-      example = lib.literalExpression "inputs.kaiba.packages.${pkgs.system}.kaiba-provision";
+      defaultText = lib.literalExpression "the kaiba-provision package from the provisioning source tree";
+      example = lib.literalExpression "inputs.kaiba-provisioning.packages.\${pkgs.system}.kaiba-provision";
       description = "Package containing bin/kaiba-provision.";
     };
 

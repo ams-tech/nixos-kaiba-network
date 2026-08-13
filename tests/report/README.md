@@ -113,9 +113,12 @@ unprovisioned state.
 
 ## Diagnostics and enforcement
 
-`nix build .#dns-test-report -L` accepts a consistent `overall: "failed"`
-result and exits successfully so a complete diagnostic artifact survives a
-functional failure. Enforcement is separate:
+The report and its gates belong to the DNS leaf. From a checkout,
+`nix build ./nix/dns#dns-test-report -L` accepts a consistent
+`overall: "failed"` result and exits successfully so a complete diagnostic
+artifact survives a functional failure. The repository-root compatibility
+facade preserves the original `nix build .#dns-test-report -L` command.
+Enforcement is separate:
 
 ```console
 python3 tests/report/schema_gate.py \
@@ -134,9 +137,12 @@ misclassified, or failed assertions. The security scope independently enforces
 the manifest's security subset. Gates exit zero for a passing suite, one for a
 validation or assertion failure, and two for malformed input or schema.
 
-The flake exposes these as `dns-schema-gate`, `dns-test-gate`, and
-`dns-security-gate`; `nix flake check -L` runs all three as separate checks
-after report rendering. It also runs `report-unit`.
+The DNS flake exposes these as `dns-schema-gate`, `dns-test-gate`, and
+`dns-security-gate`; on `x86_64-linux`, `nix flake check ./nix/dns -L` runs all
+three as separate checks after report rendering. It also runs `report-unit`.
+The root facade
+re-exports the same package and check names, so `nix flake check -L` continues
+to validate the combined project on that platform.
 
 ## Reproducibility and safety
 
@@ -151,8 +157,10 @@ topology.
 Run the focused tests in their pinned Nix environment with:
 
 ```console
-nix build .#report-unit -L
+nix build ./nix/dns#report-unit -L
 ```
+
+`nix build .#report-unit -L` remains available through the root facade.
 
 Or, with the `jsonschema` Python package available, run them directly:
 

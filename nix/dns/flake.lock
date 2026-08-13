@@ -1,24 +1,5 @@
 {
   "nodes": {
-    "dns": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "provisioning": [
-          "provisioning"
-        ]
-      },
-      "locked": {
-        "path": "./nix/dns",
-        "type": "path"
-      },
-      "original": {
-        "path": "./nix/dns",
-        "type": "path"
-      },
-      "parent": []
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1785975029,
@@ -42,18 +23,17 @@
         ]
       },
       "locked": {
-        "path": "./nix/provisioning",
+        "path": "../provisioning",
         "type": "path"
       },
       "original": {
-        "path": "./nix/provisioning",
+        "path": "../provisioning",
         "type": "path"
       },
       "parent": []
     },
     "root": {
       "inputs": {
-        "dns": "dns",
         "nixpkgs": "nixpkgs",
         "provisioning": "provisioning"
       }
