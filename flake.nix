@@ -38,6 +38,7 @@
         hidden-standby = import ./nix/modules/hidden-standby.nix;
         public-secondary = import ./nix/modules/public-secondary.nix;
         provisioning-probe = import ./nix/modules/provisioning-probe.nix;
+        provisioning-station-demo = import ./nix/modules/provisioning-station-demo.nix;
       };
 
       packages = forAllSystems (
@@ -52,6 +53,7 @@
               kaibaPackage = built.suite;
               kaibaModules = self.nixosModules;
               provisioningTestResult = provisioning.provisioningTestResult;
+              stationPages = built.stationPages;
             }
           );
         in
@@ -60,6 +62,8 @@
           kaiba-agent = built.agent;
           kaiba-controller = built.controller;
           kaiba-provision = built.provision;
+          kaiba-provision-station-demo = built.stationDemo;
+          kaiba-provision-station-pages = built.stationPages;
           kaiba-publisher = built.publisher;
           provisioning-test-result = provisioning.provisioningTestResult;
         }
@@ -79,6 +83,30 @@
           rpi5-probe-bundle = provisioning.probeBundleIntegrity;
           module-eval = provisioning.moduleEval;
           provisioning-test-result = provisioning.provisioningTestResult;
+          station-ui =
+            pkgs.runCommand "kaiba-provisioning-station-ui-check"
+              {
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.python3
+                ];
+              }
+              ''
+                set -eu
+                export PYTHONDONTWRITEBYTECODE=1
+                cd ${./.}
+                node --check internal/provisioning/stationui/web/app.js
+                node --check internal/provisioning/stationui/web/transport.js
+                export KAIBA_STATION_PAGES=${built.stationPages}
+                node --test tests/station-ui/transport.test.mjs
+                python3 -m unittest discover -s tests/station-ui -p 'test_*.py' -v
+                for asset in index.html styles.css transport.js app.js; do
+                  cmp "internal/provisioning/stationui/web/$asset" "${built.stationPages}/$asset"
+                done
+                test "$(find ${built.stationPages} -maxdepth 1 -type f | wc -l)" -eq 6
+                mkdir -p "$out"
+                printf '%s\n' 'provisioning station UI: pass' > "$out/results.txt"
+              '';
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
               {

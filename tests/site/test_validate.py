@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,7 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 SITE = REPOSITORY / "site"
 REPORT = REPOSITORY / "tests" / "report"
 FIXTURES = REPORT / "fixtures"
+STATION_PAGES = Path(os.environ["KAIBA_STATION_PAGES"])
 
 
 class SiteValidationTests(unittest.TestCase):
@@ -70,7 +72,11 @@ class SiteValidationTests(unittest.TestCase):
         report_root = root / "reports" / "latest"
         report_root.mkdir(parents=True)
         shutil.copytree(SITE, root, dirs_exist_ok=True)
+        root.chmod(0o700)
+        shutil.copytree(STATION_PAGES, root / "provisioning-demo", dirs_exist_ok=True)
         shutil.copytree(self.render_report(failed=failed), report_root, dirs_exist_ok=True)
+        for path in root.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
         return root
 
     def validation_result(self, root: Path) -> tuple[int, str]:
@@ -177,6 +183,25 @@ setTimeout(() => {
         self.assertEqual(1, status)
         self.assertIn("missing required file: reports/latest/provisioning.json", output)
         self.assertIn("report manifest names absent files: provisioning.json", output)
+
+    def test_missing_station_demo_is_rejected(self) -> None:
+        root = self.assemble_site()
+        shutil.rmtree(root / "provisioning-demo")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("missing required file: provisioning-demo/index.html", output)
+
+    def test_unsafe_station_demo_graph_is_rejected(self) -> None:
+        root = self.assemble_site()
+        graph_path = root / "provisioning-demo" / "workflow-graph.json"
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        graph["nodes"][graph["default_node"]]["state"]["safety"]["mutation_eligible"] = True
+        graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("violates the simulation safety contract", output)
 
     def test_inconsistent_provisioning_overall_is_rejected(self) -> None:
         root = self.assemble_site()

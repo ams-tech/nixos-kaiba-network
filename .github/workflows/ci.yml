@@ -46,6 +46,7 @@ jobs:
             .#checks.x86_64-linux.provisioning-test-result \
             .#checks.x86_64-linux.rpi5-probe-bundle \
             .#checks.x86_64-linux.report-unit \
+            .#checks.x86_64-linux.station-ui \
             .#checks.x86_64-linux.unit \
             .#packages.x86_64-linux.kaiba-provision
 
@@ -76,6 +77,8 @@ jobs:
             .#packages.aarch64-linux.kaiba-agent \
             .#packages.aarch64-linux.kaiba-controller \
             .#packages.aarch64-linux.kaiba-provision \
+            .#packages.aarch64-linux.kaiba-provision-station-demo \
+            .#packages.aarch64-linux.kaiba-provision-station-pages \
             .#packages.aarch64-linux.kaiba-publisher
 
       - name: Build the native provisioning test result
@@ -238,13 +241,22 @@ jobs:
             echo "::error title=Reserved site path::site/reports is reserved for generated reports."
             exit 1
           fi
+          if [[ -e site/provisioning-demo ]]; then
+            echo "::error title=Reserved site path::site/provisioning-demo is generated from the shared station UI."
+            exit 1
+          fi
           if [[ -e pages-site ]]; then
             echo "::error title=Reserved build path::pages-site must not exist before assembly."
             exit 1
           fi
-          mkdir -p pages-site/reports/latest
+          nix build .#kaiba-provision-station-pages --out-link station-pages -L
+          mkdir -p pages-site/reports/latest pages-site/provisioning-demo
           cp --recursive --no-dereference site/. pages-site/
           cp --recursive --no-dereference ci-report/. pages-site/reports/latest/
+          cp --recursive --no-dereference station-pages/. pages-site/provisioning-demo/
+          for asset in index.html styles.css transport.js app.js; do
+            cmp "internal/provisioning/stationui/web/$asset" "pages-site/provisioning-demo/$asset"
+          done
           nix develop --command python3 tests/site/validate.py pages-site
 
       - name: Upload the project site for GitHub Pages

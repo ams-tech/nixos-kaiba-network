@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#07111d" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta
+      name="description"
+      content="Touch-first simulation of the Kaiba Raspberry Pi provisioning-probe qualification workflow."
+    />
+    <title>Kaiba Provisioning Station — Simulation</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./transport.js" defer></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#station-workflow">Skip to station workflow</a>
+
+    <header class="station-header">
+      <div class="brand-lockup" aria-label="Kaiba provisioning station">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>
+          <strong>KAIBA</strong>
+          <small>Provisioning station</small>
+        </span>
+      </div>
+
+      <div class="simulation-flag" aria-label="Mock workflow simulation">
+        <span aria-hidden="true">SIM</span>
+        <strong>MOCK / SIMULATION</strong>
+      </div>
+
+      <dl class="header-status" aria-label="Current station identity">
+        <div>
+          <dt>Station</dt>
+          <dd id="station-id">Connecting…</dd>
+        </div>
+        <div>
+          <dt>Lane</dt>
+          <dd id="lane-id">—</dd>
+        </div>
+      </dl>
+    </header>
+
+    <main id="station-workflow" tabindex="-1">
+      <section class="phase-panel" aria-labelledby="phase-title">
+        <div class="phase-copy">
+          <p class="eyebrow"><span id="phase-code">STATION CHECK</span> · SIMULATED HARDWARE</p>
+          <h1 id="phase-title" tabindex="-1">Connecting to the mock station</h1>
+          <p id="phase-instruction" class="phase-instruction">
+            Waiting for the simulation runtime to report its authoritative workflow state.
+          </p>
+        </div>
+
+        <div class="readiness-strip" aria-label="Station and target status">
+          <div>
+            <span class="status-dot" id="station-dot" aria-hidden="true"></span>
+            <span>Station</span>
+            <strong id="station-status">Checking</strong>
+          </div>
+          <div>
+            <span class="status-dot" id="lane-dot" aria-hidden="true"></span>
+            <span>Lane</span>
+            <strong id="lane-status">Checking</strong>
+          </div>
+          <div>
+            <span class="status-dot" id="target-dot" aria-hidden="true"></span>
+            <span>Target</span>
+            <strong id="target-status">Not detected</strong>
+          </div>
+        </div>
+      </section>
+
+      <div id="connection-alert" class="alert alert-error" role="alert" hidden>
+        <strong>Station unavailable</strong>
+        <span id="connection-message">The simulation runtime could not be reached.</span>
+        <button id="retry-state" class="button button-secondary" type="button">Retry connection</button>
+      </div>
+
+      <div id="workflow-announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+      <section class="workflow-layout">
+        <aside class="ceremony-card" aria-labelledby="ceremony-title">
+          <div class="section-heading">
+            <p class="eyebrow">Qualification ceremony</p>
+            <h2 id="ceremony-title">One target · two probes</h2>
+          </div>
+          <ol id="ceremony-steps" class="ceremony-steps">
+            <li data-step="attach"><span>1</span><div><strong>Attach</strong><small>Detect one target</small></div></li>
+            <li data-step="probe-one"><span>2</span><div><strong>Probe 1</strong><small>Observe baseline</small></div></li>
+            <li data-step="power-cycle"><span>3</span><div><strong>Power cycle</strong><small>Remove all power</small></div></li>
+            <li data-step="probe-two"><span>4</span><div><strong>Probe 2</strong><small>Compare observations</small></div></li>
+            <li data-step="boot"><span>5</span><div><strong>Boot check</strong><small>Operator confirmation</small></div></li>
+          </ol>
+
+          <div class="lane-binding">
+            <span>Physical binding</span>
+            <strong id="lane-binding">No lane claimed</strong>
+            <small>USB topology is transport evidence, not device identity.</small>
+          </div>
+        </aside>
+
+        <section class="work-card" aria-labelledby="work-title">
+          <div class="work-card-heading">
+            <div>
+              <p class="eyebrow" id="work-kicker">Current evidence</p>
+              <h2 id="work-title">Awaiting target observation</h2>
+            </div>
+            <span id="profile-badge" class="profile-badge">Experimental profile</span>
+          </div>
+
+          <div id="target-empty" class="empty-state">
+            <span class="port-glyph" aria-hidden="true"><i></i></span>
+            <div>
+              <strong>One controlled USB lane</strong>
+              <p>Attach only the simulated target assigned to this station.</p>
+            </div>
+          </div>
+
+          <div id="target-summary" hidden>
+            <div class="target-identity">
+              <div>
+                <span class="target-kind">Detected target</span>
+                <h3 id="target-model">Raspberry Pi 5 Model B</h3>
+              </div>
+              <span id="target-class-status" class="result-chip result-neutral">Observed</span>
+            </div>
+            <dl id="target-facts" class="fact-grid"></dl>
+          </div>
+
+          <div id="assessment-panel" class="assessment-panel" hidden>
+            <h3>Latest observable assessment</h3>
+            <div class="assessment-grid">
+              <div>
+                <span>Device class</span>
+                <strong id="class-result">—</strong>
+              </div>
+              <div>
+                <span>Observable baseline</span>
+                <strong id="baseline-result">—</strong>
+              </div>
+              <div>
+                <span>Reversible qualification</span>
+                <strong id="reversible-result">—</strong>
+              </div>
+              <div class="mutation-result">
+                <span>Persistent mutation</span>
+                <strong>BLOCKED</strong>
+              </div>
+            </div>
+            <p id="assessment-note"></p>
+          </div>
+
+          <div id="comparison-panel" class="comparison-panel" hidden>
+            <div class="section-heading compact">
+              <p class="eyebrow">Power-cycle comparison</p>
+              <h3>Probe 1 ↔ Probe 2</h3>
+            </div>
+            <div class="comparison-table-wrap">
+              <table>
+                <caption class="sr-only">Stable target observations compared across both probes</caption>
+                <thead><tr><th scope="col">Observation</th><th scope="col">Result</th></tr></thead>
+                <tbody id="comparison-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="outcome-panel" class="outcome-panel" hidden role="status">
+            <span id="outcome-label">Qualification complete</span>
+            <strong id="outcome-title">—</strong>
+            <p id="outcome-description"></p>
+          </div>
+
+          <div class="actions-shell" aria-labelledby="actions-title">
+            <h3 id="actions-title">Available operator actions</h3>
+            <div id="action-buttons" class="action-buttons">
+              <button class="button button-primary" type="button" disabled>Waiting for station</button>
+            </div>
+            <p id="action-help">Actions are enabled only when the station authorizes the current phase.</p>
+          </div>
+        </section>
+      </section>
+
+      <section id="export-panel" class="export-panel" aria-labelledby="export-title" hidden>
+        <div>
+          <p class="eyebrow">Workflow-produced artifact</p>
+          <h2 id="export-title">Redacted qualification record</h2>
+          <p>Review this simulation record before saving it. The authoritative workflow selected the exported fields.</p>
+        </div>
+        <div class="export-actions">
+          <button id="download-export" class="button button-secondary" type="button">Download redacted JSON</button>
+        </div>
+        <pre id="export-record" tabindex="0" aria-label="Redacted qualification JSON"></pre>
+      </section>
+
+      <details id="developer-panel" class="developer-panel" hidden>
+        <summary>Simulation scenarios</summary>
+        <p>Developer controls alter synthetic evidence only. They are separate from operator actions.</p>
+        <div id="scenario-buttons" class="scenario-buttons"></div>
+      </details>
+    </main>
+
+    <footer class="safety-boundary" aria-label="Probe safety boundary">
+      <div class="boundary-mark" aria-hidden="true">!</div>
+      <div>
+        <strong>PROBE ONLY · PERSISTENT MUTATION BLOCKED</strong>
+        <p>
+          This observation is correlation and partial preflight evidence; it is not device authentication or attestation
+          and does not authorize irreversible provisioning. Live probing runs signed recovery code in volatile RAM.
+        </p>
+      </div>
+      <span id="revision-label">State —</span>
+    </footer>
+  </body>
+</html>

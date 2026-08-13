@@ -46,7 +46,7 @@ pushes to `main`, and manual dispatches. It separates the test workload into:
 
 - x86 formatting, flake evaluation, Go tests, report and Pages site tests,
   workflow linting, and NixOS module evaluation;
-- native ARM64 builds and tests for all four packaged binaries, producing a
+- native ARM64 builds and tests for all five packaged binaries, producing a
   commit-bound provisioning result; and
 - the complete seven-VM DNS topology with KVM acceleration when available,
   followed by deterministic composition of both architectures' provisioning
@@ -58,13 +58,20 @@ and AArch64, and the independent physical-hardware qualification state. On
 pushes or manual runs of `main`, it also assembles and publishes the project
 homepage and the latest verified report through the repository's
 `github-pages` environment.
-The homepage is at the Pages root; the canonical report is at
-`reports/latest/`. Report generation precedes the assertion gates and artifact
+The homepage is at the Pages root, the canonical report is at
+`reports/latest/`, and the browser-only provisioning-station simulation is at
+`provisioning-demo/`. Report generation precedes the assertion gates and artifact
 collection/upload runs unconditionally, so a functional or security failure
 still preserves and publishes the normalized HTML, Markdown, JUnit, JSON,
 topology, evidence, and zone data for diagnosis. Each Pages deployment replaces
-the homepage and canonical report together; the retained Actions artifacts
-provide per-run history.
+the homepage, canonical report, and station simulation together; the retained
+Actions artifacts provide per-run history.
+
+The Pages simulation and loopback station use the same HTML, CSS, controller,
+and transport code. Its finite transition graph is generated from the Go mock
+state machine during the build; no second JavaScript workflow is maintained.
+The only runtime difference is explicit configuration: loopback mode calls the
+local HTTP API, while Pages mode traverses the generated graph in memory.
 
 Enable the site once in **Settings → Pages → Build and deployment** by selecting
 **GitHub Actions** as the source. Pages can make the homepage, report, and its
@@ -103,12 +110,13 @@ complete address set and its precondition. An exact retry returns the original
 result even after later generations exist; reuse for another request returns
 `409 Conflict`. The pilot retains accepted idempotency results indefinitely.
 
-Production binaries are built for both `x86_64-linux` and `aarch64-linux`:
+Packaged binaries are built for both `x86_64-linux` and `aarch64-linux`:
 
 - `kaiba-agent`
 - `kaiba-controller`
 - `kaiba-publisher`
 - `kaiba-provision`
+- `kaiba-provision-station-demo`
 
 `kaiba-provision probe` is an experimental, non-persistent Raspberry Pi 5
 preflight slice. It can normalize imported OTP metadata or acquire it from one
@@ -119,9 +127,17 @@ attestation, or permission to mutate a target. See the
 for the safety boundary, station setup, command contract, and required hardware
 qualification.
 
+`kaiba-provision-station-demo` is an unprivileged, loopback-only interface
+prototype for an HDMI display and USB touchscreen. It renders deterministic
+mock scenarios and deliberately has no USB, probe, authentication, attestation,
+secret-handling, or mutation authority. See the
+[provisioning-station interface demo](docs/provisioning-station-kiosk.md) for
+the NixOS module, systemd sandbox, operator-session Chromium example, shared
+Pages build, and parity guarantees.
+
 Reusable NixOS modules cover the device agent, update services, hidden P0,
-hidden P1, and public-secondary role. The seven-VM QEMU topology and interactive
-lab are `x86_64-linux` outputs.
+hidden P1, public-secondary role, provisioning probe, and local station-interface
+demo. The seven-VM QEMU topology and interactive lab are `x86_64-linux` outputs.
 
 See [the architecture notes](docs/architecture.md), the
 [device identity lifecycle](docs/device-identity.md), and the

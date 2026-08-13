@@ -3,6 +3,31 @@
 let
   version = "0.1.0";
 
+  goSource =
+    let
+      root = toString ../.;
+    in
+    lib.cleanSourceWith {
+      src = ../.;
+      filter =
+        path: _type:
+        let
+          absolute = toString path;
+          relative = lib.removePrefix "${root}/" absolute;
+        in
+        absolute == root
+        || relative == "go.mod"
+        || relative == "go.sum"
+        || relative == "cmd"
+        || lib.hasPrefix "cmd/" relative
+        || relative == "internal"
+        || lib.hasPrefix "internal/" relative
+        || relative == "profiles"
+        || lib.hasPrefix "profiles/" relative
+        || relative == "schemas"
+        || lib.hasPrefix "schemas/" relative;
+    };
+
   rpi5ProbeBundle =
     pkgs.runCommand "kaiba-rpi5-probe-bundle"
       {
@@ -58,35 +83,13 @@ let
 
     # Keep integration fixtures and reports out of the Go source derivation so
     # iterating on the VM scenario does not rebuild every application package.
-    src =
-      let
-        root = toString ../.;
-      in
-      lib.cleanSourceWith {
-        src = ../.;
-        filter =
-          path: _type:
-          let
-            absolute = toString path;
-            relative = lib.removePrefix "${root}/" absolute;
-          in
-          absolute == root
-          || relative == "go.mod"
-          || relative == "go.sum"
-          || relative == "cmd"
-          || lib.hasPrefix "cmd/" relative
-          || relative == "internal"
-          || lib.hasPrefix "internal/" relative
-          || relative == "profiles"
-          || lib.hasPrefix "profiles/" relative
-          || relative == "schemas"
-          || lib.hasPrefix "schemas/" relative;
-      };
+    src = goSource;
 
     subPackages = [
       "cmd/kaiba-agent"
       "cmd/kaiba-controller"
       "cmd/kaiba-provision"
+      "cmd/kaiba-provision-station-demo"
       "cmd/kaiba-publisher"
     ];
 
@@ -100,6 +103,37 @@ let
 
     doCheck = true;
   };
+
+  stationGraphGenerator = pkgs.buildGoModule {
+    pname = "kaiba-provision-station-graph";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-station-graph" ];
+    vendorHash = "sha256-L0bg2g9ZX+lvggWbSRwAcJRq1m84Hyp03+LNA8zQ1ME=";
+    doCheck = false;
+  };
+
+  stationPages =
+    pkgs.runCommand "kaiba-provision-station-pages"
+      {
+        meta = {
+          description = "Static browser simulation of the Kaiba provisioning-station workflow";
+          platforms = lib.platforms.all;
+        };
+      }
+      ''
+        set -eu
+        mkdir -p "$out"
+        install -m 0444 ${../internal/provisioning/stationui/web/index.html} "$out/index.html"
+        install -m 0444 ${../internal/provisioning/stationui/web/styles.css} "$out/styles.css"
+        install -m 0444 ${../internal/provisioning/stationui/web/transport.js} "$out/transport.js"
+        install -m 0444 ${../internal/provisioning/stationui/web/app.js} "$out/app.js"
+        printf '%s\n' \
+          '{"schema_version":"provisioning.kaiba.network/station-demo-runtime/v1alpha1","mode":"transition-graph","graph_url":"./workflow-graph.json"}' \
+          > "$out/runtime-config.json"
+        ${stationGraphGenerator}/bin/kaiba-provision-station-graph > "$out/workflow-graph.json"
+        chmod 0444 "$out/runtime-config.json" "$out/workflow-graph.json"
+      '';
 
   singleBinary =
     name:
@@ -142,9 +176,10 @@ let
       '';
 in
 {
-  inherit suite rpi5ProbeBundle;
+  inherit suite rpi5ProbeBundle stationPages;
   agent = singleBinary "kaiba-agent";
   controller = singleBinary "kaiba-controller";
   inherit provision;
+  stationDemo = singleBinary "kaiba-provision-station-demo";
   publisher = singleBinary "kaiba-publisher";
 }
