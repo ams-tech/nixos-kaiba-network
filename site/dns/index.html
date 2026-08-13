@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#07111d">
+    <meta
+      name="description"
+      content="Kaiba's identity-bound DNS control plane gives secure edge devices stable names without exposing provider credentials or hidden-origin topology."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Kaiba DNS — Stable names, explicit trust boundaries">
+    <meta
+      property="og:description"
+      content="An executable DNS control-plane pilot with mTLS-bound updates, durable desired state, a constrained publisher, and inspectable evidence."
+    >
+    <meta property="og:url" content="https://ams-tech.github.io/nixos-kaiba-network/dns/">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Kaiba identity-bound DNS">
+    <meta
+      name="twitter:description"
+      content="Stable device names without putting DNS provider logic or credentials on devices."
+    >
+    <link rel="canonical" href="https://ams-tech.github.io/nixos-kaiba-network/dns/">
+    <link rel="stylesheet" href="../styles.css">
+    <title>Identity-bound DNS — Kaiba</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="../" aria-label="Kaiba homepage">
+        <span class="brand-mark" aria-hidden="true">K</span>
+        <span class="brand-name">KAIBA</span>
+        <span class="brand-edition">DEVICE PLATFORM</span>
+      </a>
+
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a class="nav-product" href="../provisioning/">Provisioning</a>
+        <a class="nav-product" href="../dns/" aria-current="page">DNS</a>
+        <a class="nav-secondary" href="#architecture">Architecture</a>
+        <a class="nav-source" href="https://github.com/ams-tech/nixos-kaiba-network">Source</a>
+        <a class="nav-report" href="../reports/latest/">Test report <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
+
+    <main id="content">
+      <section class="detail-hero section-shell" aria-labelledby="hero-title">
+        <div class="detail-hero-copy">
+          <p class="eyebrow">DNS / Executable pilot</p>
+          <h1 id="hero-title">
+            Stable device names.
+            <span>Explicit trust boundaries.</span>
+          </h1>
+          <p class="hero-lede">
+            Kaiba turns a device's mTLS identity and complete address set into controlled DNS
+            updates. Desired state is committed durably, projected by a credential-isolated
+            publisher, and observed at redundant public authorities.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="../reports/latest/">Inspect test evidence <span aria-hidden="true">↗</span></a>
+            <a class="button button-secondary" href="#architecture">Follow the control path</a>
+          </div>
+          <ul class="hero-facts" aria-label="DNS pilot highlights">
+            <li><span aria-hidden="true">01</span> mTLS identity</li>
+            <li><span aria-hidden="true">02</span> Complete A + AAAA sets</li>
+            <li><span aria-hidden="true">03</span> RFC 2136 + TSIG</li>
+            <li><span aria-hidden="true">04</span> Seven isolated VMs</li>
+          </ul>
+        </div>
+
+        <aside class="control-card" aria-label="Kaiba DNS control-plane overview">
+          <div class="control-card-header">
+            <span>CONTROL PATH / DNS-001</span>
+            <span class="control-online"><i aria-hidden="true"></i> ISOLATED</span>
+          </div>
+          <div class="mini-flow">
+            <div class="mini-node mini-device">
+              <span class="mini-kicker">DEVICE</span>
+              <strong>pi-001</strong>
+              <small>SPIFFE identity</small>
+            </div>
+            <div class="mini-link" aria-hidden="true"><span>mTLS</span><i></i></div>
+            <div class="mini-node mini-controller">
+              <span class="mini-kicker">CONTROL</span>
+              <strong>Controller</strong>
+              <small>desired state</small>
+            </div>
+            <div class="mini-link" aria-hidden="true"><span>reconcile</span><i></i></div>
+            <div class="mini-node mini-origin">
+              <span class="mini-kicker">DNS</span>
+              <strong>Hidden origin</strong>
+              <small>public replicas</small>
+            </div>
+          </div>
+          <dl class="control-readout">
+            <div>
+              <dt>Owner</dt>
+              <dd>pi-001.kaiba.network</dd>
+            </div>
+            <div>
+              <dt>Write policy</dt>
+              <dd>identity-derived</dd>
+            </div>
+            <div>
+              <dt>Projection</dt>
+              <dd>publicly-observed</dd>
+            </div>
+          </dl>
+          <p class="control-note">
+            DNS resolves the device. Application traffic travels directly to it—the control plane
+            is not a relay.
+          </p>
+        </aside>
+      </section>
+
+      <section class="signal-strip" aria-label="DNS system properties">
+        <div><span>AUTH</span> URI SAN controls the DNS owner</div>
+        <div><span>STATE</span> Accepted intent precedes projection</div>
+        <div><span>DNS</span> Public authorities must agree</div>
+      </section>
+
+      <section class="architecture section-shell" id="architecture" aria-labelledby="architecture-title">
+        <div class="section-heading">
+          <p class="section-index">01 / Architecture</p>
+          <div>
+            <h2 id="architecture-title">A small control plane with visible boundaries.</h2>
+            <p>
+              Devices publish intent. They never receive provider credentials or hidden-origin
+              topology.
+            </p>
+          </div>
+        </div>
+
+        <div class="architecture-flow" aria-label="DNS control path from device agent through controller and publisher to hidden origins and public authorities">
+          <article class="flow-node">
+            <span class="node-number">01</span>
+            <p>EDGE</p>
+            <h3>Device agent</h3>
+            <span>mTLS identity</span>
+            <span>complete address set</span>
+          </article>
+          <div class="flow-connector" aria-hidden="true"><span>HTTPS</span><i></i></div>
+          <article class="flow-node">
+            <span class="node-number">02</span>
+            <p>CONTROL</p>
+            <h3>Controller</h3>
+            <span>generation precondition</span>
+            <span>SQLite desired state</span>
+          </article>
+          <div class="flow-connector" aria-hidden="true"><span>reconcile</span><i></i></div>
+          <article class="flow-node">
+            <span class="node-number">03</span>
+            <p>WRITER</p>
+            <h3>Publisher</h3>
+            <span>separate service identity</span>
+            <span>TSIG credential owner</span>
+          </article>
+          <div class="flow-connector" aria-hidden="true"><span>RFC 2136</span><i></i></div>
+          <article class="flow-node flow-node-dns">
+            <span class="node-number">04</span>
+            <p>AUTHORITY</p>
+            <h3>Hidden origins</h3>
+            <span>P0 writable</span>
+            <span>P1 read-only standby</span>
+          </article>
+          <div class="flow-connector" aria-hidden="true"><span>IXFR / AXFR</span><i></i></div>
+          <article class="flow-node flow-node-public">
+            <span class="node-number">05</span>
+            <p>PUBLIC</p>
+            <h3>DNS authorities</h3>
+            <span>authoritative-only</span>
+            <span>recursive clients resolve</span>
+          </article>
+        </div>
+
+        <div class="architecture-notes">
+          <p>
+            <strong>Control path:</strong> certificate identity constrains the name; idempotency and
+            generation conditions constrain the write.
+          </p>
+          <p>
+            <strong>Data path:</strong> after resolution, HTTPS goes directly from the client to the
+            device—not through the controller or DNS origins.
+          </p>
+        </div>
+      </section>
+
+      <section class="guarantees section-shell" id="guarantees" aria-labelledby="guarantees-title">
+        <div class="section-heading section-heading-compact">
+          <p class="section-index">02 / Guarantees</p>
+          <div>
+            <h2 id="guarantees-title">Specific controls, not security theater.</h2>
+          </div>
+        </div>
+
+        <div class="guarantee-grid">
+          <article class="guarantee-card">
+            <span class="card-index">A</span>
+            <h3>Identity-bound updates</h3>
+            <p>
+              The client certificate determines the device and DNS owner. Request bodies cannot
+              choose a hostname, zone, TTL, or record type.
+            </p>
+          </article>
+          <article class="guarantee-card">
+            <span class="card-index">B</span>
+            <h3>Durable intent, observable convergence</h3>
+            <p>
+              Accepted, origin-applied, and publicly-observed remain distinct states. A 202 means
+              intent is durable—not that DNS has already converged.
+            </p>
+          </article>
+          <article class="guarantee-card">
+            <span class="card-index">C</span>
+            <h3>A constrained DNS writer</h3>
+            <p>
+              Only the publisher owns the TSIG update credential. P0 is writable; P1 and public
+              secondaries remain authoritative-only and non-recursive.
+            </p>
+          </article>
+          <article class="guarantee-card">
+            <span class="card-index">D</span>
+            <h3>Evidence you can inspect</h3>
+            <p>
+              The topology records assertions, answers, serials, snapshots, and normalized
+              evidence—even when a functional assertion fails.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="state-section section-shell section-block" id="states" aria-labelledby="states-title">
+        <div class="section-heading">
+          <p class="section-index">03 / Convergence</p>
+          <div>
+            <h2 id="states-title">Acceptance is not publication.</h2>
+            <p>
+              A generation advances only as each independently observable condition becomes true.
+            </p>
+          </div>
+        </div>
+
+        <div class="state-flow">
+          <article class="state-card">
+            <span>STATE 01</span>
+            <h3>accepted</h3>
+            <p>The controller has durably committed desired state and the idempotency result.</p>
+          </article>
+          <article class="state-card">
+            <span>STATE 02</span>
+            <h3>origin-applied</h3>
+            <p>The publisher's atomic authenticated update has succeeded at writable origin P0.</p>
+          </article>
+          <article class="state-card state-card-final">
+            <span>STATE 03</span>
+            <h3>publicly-observed</h3>
+            <p>Every configured public authority agrees with the generation's complete address set.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="api-section section-shell section-block" id="api" aria-labelledby="api-title">
+        <div class="api-copy">
+          <p class="section-index">04 / Device API</p>
+          <h2 id="api-title">The request cannot choose its own name.</h2>
+          <p>
+            A URI SAN such as <code>spiffe://kaiba.network/device/001</code> maps to
+            <code>pi-001.kaiba.network</code>. The body supplies only the device's canonical,
+            complete address set. A strong generation precondition prevents delayed writes from
+            replacing newer state.
+          </p>
+          <p>
+            Exact retries return the recorded result. Reusing an idempotency key for different
+            content or a different precondition fails instead of silently changing intent.
+          </p>
+        </div>
+        <div class="code-panel" aria-label="Example device endpoint update request">
+          <div class="code-panel-header"><span>HTTPS REQUEST</span><span>mTLS REQUIRED</span></div>
+          <pre><code>PUT /v1/devices/self/endpoints
+Idempotency-Key: &lt;unique-key&gt;
+If-None-Match: *
+Content-Type: application/json
+
+{"addresses":[
+  {"family":"ipv4","address":"203.0.113.42"},
+  {"family":"ipv6","address":"2001:db8::42"}
+]}</code></pre>
+        </div>
+      </section>
+
+      <section class="boundary section-shell" id="boundary" aria-labelledby="boundary-title">
+        <div class="boundary-label"><span aria-hidden="true">!</span> PILOT BOUNDARY</div>
+        <div class="boundary-copy">
+          <h2 id="boundary-title">The production boundary is part of the design.</h2>
+          <p>
+            The executable topology uses <code>kaiba.test</code>, a simulated parent authority,
+            test-only credentials, and public-secondary emulators. It never contacts Namecheap or
+            changes <code>kaiba.network</code>. The current device agent still uses a file-backed
+            private key.
+          </p>
+          <p class="boundary-deferred">
+            Real provider integration and SLAs, Internet and NAT behavior, ACME, DNSSEC, safe
+            automatic origin promotion, redundant controllers, fleet-scale operation, production
+            credentials, deployment, and monitoring remain deferred.
+          </p>
+          <a href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/architecture.md">
+            Read the DNS architecture notes <span aria-hidden="true">→</span>
+          </a>
+        </div>
+      </section>
+
+      <section class="closing section-shell" aria-labelledby="closing-title">
+        <p class="section-index">05 / Verify the pilot</p>
+        <h2 id="closing-title">Follow each claim back to recorded evidence.</h2>
+        <div class="closing-actions">
+          <a class="button button-primary" href="../reports/latest/">Open the latest test report <span aria-hidden="true">↗</span></a>
+          <a class="button button-secondary" href="../">Return to product overview</a>
+          <a class="button button-secondary" href="https://github.com/ams-tech/nixos-kaiba-network">Browse the repository</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="brand footer-brand">
+        <span class="brand-mark" aria-hidden="true">K</span>
+        <span class="brand-name">KAIBA</span>
+        <span class="brand-edition">DEVICE PLATFORM</span>
+      </div>
+      <p>Identity-bound DNS for secure edge devices.</p>
+      <div class="footer-links">
+        <a href="../">Overview</a>
+        <a href="../provisioning/">Provisioning</a>
+        <a href="../reports/latest/">Evidence</a>
+        <a href="#content">Back to top ↑</a>
+      </div>
+    </footer>
+  </body>
+</html>

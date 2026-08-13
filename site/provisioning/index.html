@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#07111d">
+    <meta
+      name="description"
+      content="Kaiba's secure provisioning design starts with a non-persistent device preflight, explicit mutation boundaries, and an evidence-backed path to protected identity enrollment."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Kaiba provisioning — Observe before you mutate">
+    <meta
+      property="og:description"
+      content="A controlled provisioning design with an executable preflight probe, a shared station simulation, and explicit production trust boundaries."
+    >
+    <meta property="og:url" content="https://ams-tech.github.io/nixos-kaiba-network/provisioning/">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Kaiba secure device provisioning">
+    <meta
+      name="twitter:description"
+      content="Inspect one claimed target, preserve partial qualification evidence, and keep irreversible work behind an explicit authorization boundary."
+    >
+    <link rel="canonical" href="https://ams-tech.github.io/nixos-kaiba-network/provisioning/">
+    <link rel="stylesheet" href="../styles.css">
+    <title>Secure device provisioning — Kaiba</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="../" aria-label="Kaiba homepage">
+        <span class="brand-mark" aria-hidden="true">K</span>
+        <span class="brand-name">KAIBA</span>
+        <span class="brand-edition">DEVICE PLATFORM</span>
+      </a>
+
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a class="nav-product" href="../provisioning/" aria-current="page">Provisioning</a>
+        <a class="nav-product" href="../dns/">DNS</a>
+        <a class="nav-secondary" href="#lifecycle">Lifecycle</a>
+        <a class="nav-source" href="https://github.com/ams-tech/nixos-kaiba-network">Source</a>
+        <a class="nav-report" href="../provisioning-demo/">Station demo <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
+
+    <main id="content">
+      <section class="detail-hero section-shell" aria-labelledby="hero-title">
+        <div class="detail-hero-copy">
+          <p class="eyebrow">Provisioning / Experimental preflight</p>
+          <h1 id="hero-title">
+            Observe the target.
+            <span>Before a one-way change.</span>
+          </h1>
+          <p class="hero-lede">
+            Kaiba's first executable provisioning slice identifies one lane-bound Raspberry Pi 5
+            and evaluates the observable part of its unprovisioned baseline. It is deliberately
+            non-persistent and stops before authentication, attestation, key installation,
+            enrollment, or mutation authorization.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="../provisioning-demo/">Try the station simulation <span aria-hidden="true">↗</span></a>
+            <a class="button button-secondary" href="../reports/latest/provisioning.json">Inspect probe evidence</a>
+          </div>
+          <ul class="hero-facts" aria-label="Provisioning preflight highlights">
+            <li><span aria-hidden="true">01</span> Exact lane + USB path</li>
+            <li><span aria-hidden="true">02</span> Digest-pinned inputs</li>
+            <li><span aria-hidden="true">03</span> Strict profile policy</li>
+            <li><span aria-hidden="true">04</span> No persistent mutation</li>
+          </ul>
+        </div>
+
+        <aside class="control-card" aria-label="Current provisioning probe boundary">
+          <div class="control-card-header">
+            <span>PREFLIGHT / PROBE-001</span>
+            <span class="control-online control-caution"><i aria-hidden="true"></i> PARTIAL EVIDENCE</span>
+          </div>
+          <div class="mini-flow">
+            <div class="mini-node mini-device">
+              <span class="mini-kicker">ACQUIRE</span>
+              <strong>Raw metadata</strong>
+              <small>one claimed target</small>
+            </div>
+            <div class="mini-link" aria-hidden="true"><span>parse</span><i></i></div>
+            <div class="mini-node mini-controller">
+              <span class="mini-kicker">NORMALIZE</span>
+              <strong>Observation</strong>
+              <small>typed identifiers</small>
+            </div>
+            <div class="mini-link" aria-hidden="true"><span>evaluate</span><i></i></div>
+            <div class="mini-node mini-origin">
+              <span class="mini-kicker">ASSESS</span>
+              <strong>Profile findings</strong>
+              <small>reversible gate only</small>
+            </div>
+          </div>
+          <dl class="control-readout">
+            <div>
+              <dt>Mutation</dt>
+              <dd>false</dd>
+            </div>
+            <div>
+              <dt>Full baseline</dt>
+              <dd>not established</dd>
+            </div>
+            <div>
+              <dt>Qualification</dt>
+              <dd>manual hardware gate</dd>
+            </div>
+          </dl>
+          <p class="control-note">
+            “Non-persistent” describes target state, not passive inspection: Raspberry Pi–signed
+            recovery firmware executes in volatile RAM during a live probe.
+          </p>
+        </aside>
+      </section>
+
+      <section class="signal-strip" aria-label="Provisioning safety properties">
+        <div><span>TARGET</span> One explicit lane and USB path</div>
+        <div><span>RESULT</span> Correlation, never authentication</div>
+        <div><span>CHANGE</span> Mutation eligibility always false</div>
+      </section>
+
+      <section class="feature-section section-shell section-block" id="current-slice" aria-labelledby="current-title">
+        <div class="section-heading">
+          <p class="section-index">01 / What runs today</p>
+          <div>
+            <h2 id="current-title">A narrow executable slice with hard edges.</h2>
+            <p>
+              Acquisition, normalization, and policy evaluation remain separate so future hardware
+              adapters can change without weakening the transaction semantics.
+            </p>
+          </div>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card">
+            <span class="card-index">A</span>
+            <h3>Offline evaluation</h3>
+            <p>
+              Import bounded metadata from a file or standard input and receive the same normalized
+              assessment without touching USB or starting a subprocess.
+            </p>
+          </article>
+          <article class="feature-card">
+            <span class="card-index">B</span>
+            <h3>Lane-bound live probe</h3>
+            <p>
+              Require a stable lane ID and exact USB path. Reject missing, multiple, replaced, or
+              unexpected targets instead of auto-selecting hardware.
+            </p>
+          </article>
+          <article class="feature-card">
+            <span class="card-index">C</span>
+            <h3>Immutable probe inputs</h3>
+            <p>
+              Revalidate the pinned tool and the exact two-file metadata-only recovery bundle before
+              each run. Reject extra files, symlinks, and mutation directives.
+            </p>
+          </article>
+          <article class="feature-card">
+            <span class="card-index">D</span>
+            <h3>Strict evidence policy</h3>
+            <p>
+              Normalize revision, identity, key-hash, JTAG, boot ROM, and EEPROM observations under
+              a digest-bound profile. Unknown upstream fields make the baseline indeterminate.
+            </p>
+          </article>
+          <article class="feature-card">
+            <span class="card-index">E</span>
+            <h3>Deterministic result</h3>
+            <p>
+              Emit one JSON observation with evidence and profile digests, a domain-separated target
+              fingerprint, typed findings, and unconditional safety fields.
+            </p>
+          </article>
+          <article class="feature-card">
+            <span class="card-index">F</span>
+            <h3>Shared station interface</h3>
+            <p>
+              Run the same HTML, CSS, controller, and transport in the loopback kiosk and GitHub
+              Pages. Pages traverses a generated mock graph and has no target privilege.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="safety-section section-shell section-block" id="safety" aria-labelledby="safety-title">
+        <div class="section-heading section-heading-compact">
+          <p class="section-index">02 / Safety contract</p>
+          <div>
+            <h2 id="safety-title">A passing preflight is permission to learn more—not to mutate.</h2>
+          </div>
+        </div>
+
+        <div class="scope-grid">
+          <article class="scope-card scope-card-implemented">
+            <div class="scope-card-topline">
+              <span>ALWAYS ASSERTED</span>
+              <span class="status-pill status-executable">IMPLEMENTED</span>
+            </div>
+            <h3>What the result can establish</h3>
+            <ul class="feature-list">
+              <li>Evidence correlates to one explicitly selected physical path</li>
+              <li>Observed class fields match or reject the experimental Pi 5 profile</li>
+              <li>Observable baseline facts pass, fail, or remain indeterminate</li>
+              <li>The target may become eligible for further reversible qualification</li>
+              <li>Tool, bundle, profile, and evidence inputs are digest-bound</li>
+            </ul>
+          </article>
+
+          <article class="scope-card scope-card-deferred">
+            <div class="scope-card-topline">
+              <span>NEVER IMPLIED</span>
+              <span class="status-pill status-deferred">OUT OF SCOPE</span>
+            </div>
+            <h3>What the result cannot establish</h3>
+            <ul class="feature-list">
+              <li>Device authentication, remote attestation, or inventory ownership</li>
+              <li>The full unprovisioned state or absence of every device secret</li>
+              <li>Storage contents, protected key rows, or every debug path</li>
+              <li>Firmware authenticity beyond the pinned acquisition inputs</li>
+              <li>Authorization for OTP, EEPROM, key, boot, or any other persistent change</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="lifecycle section-shell section-block" id="lifecycle" aria-labelledby="lifecycle-title">
+        <div class="section-heading">
+          <p class="section-index">03 / Target transaction</p>
+          <div>
+            <h2 id="lifecycle-title">The production ceremony is a durable transaction.</h2>
+            <p>
+              These stages are the platform-neutral design contract. Except for the preflight
+              observations above, they are not yet implemented by the station.
+            </p>
+          </div>
+        </div>
+
+        <div class="lifecycle-flow lifecycle-six">
+          <article class="lifecycle-step">
+            <span class="step-number">01</span>
+            <span class="step-status step-design">TARGET DESIGN</span>
+            <h3>Create transaction</h3>
+            <p>Reserve the logical ID and asset; bind the operator, policy, nonce, tools, and claim lease.</p>
+          </article>
+          <article class="lifecycle-step">
+            <span class="step-number">02</span>
+            <span class="step-status step-partial">PARTIAL SLICE</span>
+            <h3>Claim + validate</h3>
+            <p>Identify one candidate and establish every observable baseline fact before any write.</p>
+          </article>
+          <article class="lifecycle-step">
+            <span class="step-number">03</span>
+            <span class="step-status step-design">TARGET DESIGN</span>
+            <h3>Approve commit plan</h3>
+            <p>Bind independent approval to the target, profile, artifacts, ordered operations, and postconditions.</p>
+          </article>
+          <article class="lifecycle-step">
+            <span class="step-number">04</span>
+            <span class="step-status step-design">TARGET DESIGN</span>
+            <h3>Secure + create keys</h3>
+            <p>Establish boot, update, storage, debug, and protected signer posture; keep private material on target.</p>
+          </article>
+          <article class="lifecycle-step">
+            <span class="step-number">05</span>
+            <span class="step-status step-design">TARGET DESIGN</span>
+            <h3>Enroll + stage</h3>
+            <p>Bind bootstrap authentication and proof of possession; let the RA assign identity and the CA issue.</p>
+          </article>
+          <article class="lifecycle-step">
+            <span class="step-number">06</span>
+            <span class="step-status step-design">TARGET DESIGN</span>
+            <h3>Verify + activate</h3>
+            <p>Prove the installed key and certificate work, record independent evidence, activate, audit, and release.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="station-section section-shell section-block" id="station" aria-labelledby="station-title">
+        <div class="section-heading">
+          <p class="section-index">04 / Provisioning station</p>
+          <div>
+            <h2 id="station-title">The station executes policy. It does not own fleet authority.</h2>
+            <p>
+              A dedicated station isolates physical target access and short-lived bootstrap
+              capability from everyday operator and development machines.
+            </p>
+          </div>
+        </div>
+
+        <div class="station-layout">
+          <div class="station-core">
+            <span class="station-label">CONTROLLED STATION</span>
+            <h3>One operator. One lane. One claimed target.</h3>
+            <p>
+              A generic orchestrator should enforce ordering, journaling, retry, approval, and
+              postconditions while a pinned platform adapter performs hardware-specific work. A
+              privileged lane guard exposes only the current target-facing interface.
+            </p>
+            <a class="text-link" href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/provisioning-station.md">
+              Read the station design <span aria-hidden="true">→</span>
+            </a>
+          </div>
+          <dl class="authority-list">
+            <div>
+              <dt>Coordinator + inventory</dt>
+              <dd>Own transaction, asset binding, claim, credential generations, and activation.</dd>
+            </div>
+            <div>
+              <dt>Registration + certification authorities</dt>
+              <dd>Assign canonical identity, enforce issuance policy, and record certificate serials.</dd>
+            </div>
+            <div>
+              <dt>Bundle + policy authority</dt>
+              <dd>Approve immutable software, firmware, profiles, adapters, and ordered operations.</dd>
+            </div>
+            <div>
+              <dt>Verifier + audit service</dt>
+              <dd>Appraise postconditions and retain provenance independently of the station.</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="boundary section-shell" id="boundary" aria-labelledby="boundary-title">
+        <div class="boundary-label"><span aria-hidden="true">!</span> IMPLEMENTATION BOUNDARY</div>
+        <div class="boundary-copy">
+          <h2 id="boundary-title">The interface is shared. The production backend is not here yet.</h2>
+          <p>
+            The loopback kiosk and Pages demo render deterministic mock station states. They do not
+            access USB, run the probe, handle secrets, authenticate operators or devices, call an
+            RA or CA, or perform a mutation. Interface parity does not imply production workflow
+            authority.
+          </p>
+          <p class="boundary-deferred">
+            Still required: coordinator and inventory services, signed production bundles,
+            mutating adapters and lane guards, protected key integration, RA and CA enrollment,
+            independent verification, credential activation, durable audit, and sacrificial-board
+            hardware qualification.
+          </p>
+          <a href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/device-identity.md">
+            Read the device identity lifecycle <span aria-hidden="true">→</span>
+          </a>
+        </div>
+      </section>
+
+      <section class="closing section-shell" aria-labelledby="closing-title">
+        <p class="section-index">05 / Explore the current slice</p>
+        <h2 id="closing-title">Walk the workflow, then inspect the safety evidence.</h2>
+        <div class="closing-actions">
+          <a class="button button-primary" href="../provisioning-demo/">Open the station simulation <span aria-hidden="true">↗</span></a>
+          <a class="button button-secondary" href="../reports/latest/provisioning.json">Read provisioning JSON</a>
+          <a class="button button-secondary" href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/raspberry-pi-5-provisioning-probe.md">Read probe documentation</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="brand footer-brand">
+        <span class="brand-mark" aria-hidden="true">K</span>
+        <span class="brand-name">KAIBA</span>
+        <span class="brand-edition">DEVICE PLATFORM</span>
+      </div>
+      <p>Controlled qualification and identity for secure edge devices.</p>
+      <div class="footer-links">
+        <a href="../">Overview</a>
+        <a href="../dns/">DNS</a>
+        <a href="../reports/latest/">Evidence</a>
+        <a href="#content">Back to top ↑</a>
+      </div>
+    </footer>
+  </body>
+</html>

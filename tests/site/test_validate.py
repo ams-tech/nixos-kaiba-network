@@ -155,6 +155,81 @@ setTimeout(() => {
         status, output = self.validation_result(self.assemble_site())
         self.assertEqual(0, status, output)
 
+    def test_missing_dns_product_page_is_rejected(self) -> None:
+        root = self.assemble_site()
+        (root / "dns" / "index.html").unlink()
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("missing required file: dns/index.html", output)
+
+    def test_missing_provisioning_product_page_is_rejected(self) -> None:
+        root = self.assemble_site()
+        (root / "provisioning" / "index.html").unlink()
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("missing required file: provisioning/index.html", output)
+
+    def test_homepage_must_link_to_dns_product_page(self) -> None:
+        root = self.assemble_site()
+        index = root / "index.html"
+        index.write_text(
+            index.read_text(encoding="utf-8").replace(
+                'href="./dns/"',
+                'href="https://example.invalid/dns/"',
+            ),
+            encoding="utf-8",
+        )
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("direct dns/ product link is required", output)
+
+    def test_homepage_must_link_to_provisioning_product_page(self) -> None:
+        root = self.assemble_site()
+        index = root / "index.html"
+        index.write_text(
+            index.read_text(encoding="utf-8").replace(
+                'href="./provisioning/"',
+                'href="https://example.invalid/provisioning/"',
+            ),
+            encoding="utf-8",
+        )
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("direct provisioning/ product link is required", output)
+
+    def test_broken_product_page_reference_is_rejected(self) -> None:
+        root = self.assemble_site()
+        dns_page = root / "dns" / "index.html"
+        dns_page.write_text(
+            dns_page.read_text(encoding="utf-8").replace(
+                'href="../styles.css"',
+                'href="../missing-styles.css"',
+            ),
+            encoding="utf-8",
+        )
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("dns/index.html: missing local target", output)
+
+    def test_product_detail_page_requires_one_h1(self) -> None:
+        root = self.assemble_site()
+        page = root / "provisioning" / "index.html"
+        page.write_text(
+            page.read_text(encoding="utf-8")
+            .replace('<h2 id="current-title">', '<h1 id="current-title">')
+            .replace('</h2>\n            <p>\n              Acquisition', '</h1>\n            <p>\n              Acquisition', 1),
+            encoding="utf-8",
+        )
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("provisioning/index.html: exactly one h1 is required", output)
+
     def test_homepage_keeps_dns_and_provisioning_status_separate(self) -> None:
         result = self.execute_homepage_script(dns_available=False)
         self.assertEqual("DNS report status unavailable", result["dnsSignal"])
