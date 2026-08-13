@@ -94,14 +94,6 @@ let
   stationDemoConfig = evaluateConfig provisioningStationDemo;
   defaultStationDemoConfig = evaluateConfig provisioningStationDemoDefaultPackage;
   stationDemoIPv6Config = evaluateConfig provisioningStationDemoIPv6;
-  legacyProbeConfig = evaluateModules [
-    ../../nix/modules/provisioning-probe.nix
-    provisioningProbeDefaultPackage
-  ];
-  legacyStationDemoConfig = evaluateModules [
-    ../../nix/modules/provisioning-station-demo.nix
-    provisioningStationDemoDefaultPackage
-  ];
   stationDemoService =
     stationDemoConfig.systemd.services.kaiba-provisioning-station-demo.serviceConfig;
   stationDemoIPv6Service =
@@ -157,12 +149,6 @@ let
     && !disabledProbeConfig.services.kaiba-provisioning-station-demo.enable
     && !(disabledProbeConfig.systemd.services ? kaiba-provisioning-station-demo);
 
-  legacyDirectModuleDefaults =
-    legacyProbeConfig.services.kaiba-provisioning-probe.package == kaibaProvisionPackage
-    && builtins.elem kaibaProvisionPackage legacyProbeConfig.environment.systemPackages
-    &&
-      legacyStationDemoConfig.services.kaiba-provisioning-station-demo.package == kaibaStationDemoPackage
-    && builtins.elem kaibaStationDemoPackage legacyStationDemoConfig.environment.systemPackages;
 in
 assert lib.assertMsg (assertionsPass provisioningProbe) (
   builtins.toJSON (failedMessages provisioningProbe)
@@ -189,8 +175,6 @@ assert lib.assertMsg probeBoundary
   "provisioning probe package, group, or narrow udev boundary is not enforced";
 assert lib.assertMsg stationDemoBoundary
   "provisioning-station demo loopback, sandbox, or no-USB boundary is not enforced";
-assert lib.assertMsg legacyDirectModuleDefaults
-  "legacy direct module imports lost their provisioning package defaults";
 pkgs.runCommand "kaiba-provisioning-module-evaluation" { } ''
   mkdir -p "$out"
   printf '%s\n' \
@@ -199,6 +183,5 @@ pkgs.runCommand "kaiba-provisioning-module-evaluation" { } ''
     'provisioning-station-demo-module: pass' \
     'provisioning-station-demo-loopback-only: pass' \
     'provisioning-station-demo-sandbox-and-no-usb: pass' \
-    'legacy-direct-module-package-defaults: pass' \
     > "$out/results.txt"
 ''

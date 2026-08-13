@@ -15,7 +15,7 @@ let
     ;
 
   cfg = config.services.kaiba-provisioning-probe;
-  defaultPackage = (import ../provisioning/packages.nix { inherit pkgs lib; }).provision;
+  defaultPackage = (import ../packages.nix { inherit pkgs lib; }).provision;
 in
 {
   options.services.kaiba-provisioning-probe = {

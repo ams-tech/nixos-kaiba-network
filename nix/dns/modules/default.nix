@@ -2,10 +2,10 @@
 
 {
   imports = [
-    ../../modules/device-agent.nix
-    ../../modules/update-controller.nix
-    ../../modules/hidden-primary.nix
-    ../../modules/hidden-standby.nix
-    ../../modules/public-secondary.nix
+    ./device-agent.nix
+    ./update-controller.nix
+    ./hidden-primary.nix
+    ./hidden-standby.nix
+    ./public-secondary.nix
   ];
 }

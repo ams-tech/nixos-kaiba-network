@@ -16,7 +16,7 @@ let
     ;
 
   cfg = config.services.kaiba-provisioning-station-demo;
-  defaultPackage = (import ../provisioning/packages.nix { inherit pkgs lib; }).stationDemo;
+  defaultPackage = (import ../packages.nix { inherit pkgs lib; }).stationDemo;
   loopbackAddresses = [
     "127.0.0.1"
     "::1"

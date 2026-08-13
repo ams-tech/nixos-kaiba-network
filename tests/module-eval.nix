@@ -41,7 +41,6 @@ pkgs.runCommand "kaiba-module-evaluation" { } ''
     'provisioning-station-demo-module: pass' \
     'provisioning-station-demo-loopback-only: pass' \
     'provisioning-station-demo-sandbox-and-no-usb: pass' \
-    'legacy-direct-module-package-defaults: pass' \
     'controller-publisher-uid-and-state-boundary: pass' \
     'sqlite-main-wal-shm-permissions-prepared: pass' \
     'two-distinct-nonempty-observers-required: pass' \

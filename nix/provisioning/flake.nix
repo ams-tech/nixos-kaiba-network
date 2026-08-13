@@ -23,40 +23,10 @@
           inherit pkgs lib sourceRoot;
         };
 
-      moduleWithPackage =
-        module: optionPath: packageName:
-        {
-          lib,
-          pkgs,
-          ...
-        }:
-        let
-          built = import ./packages.nix {
-            inherit pkgs lib sourceRoot;
-          };
-        in
-        {
-          imports = [ module ];
-          config = lib.setAttrByPath optionPath (lib.mkDefault built.${packageName});
-        };
-
-      modules = rec {
-        default = {
-          imports = [
-            provisioning-probe
-            provisioning-station-demo
-          ];
-        };
-        provisioning-probe = moduleWithPackage ../modules/provisioning-probe.nix [
-          "services"
-          "kaiba-provisioning-probe"
-          "package"
-        ] "provision";
-        provisioning-station-demo = moduleWithPackage ../modules/provisioning-station-demo.nix [
-          "services"
-          "kaiba-provisioning-station-demo"
-          "package"
-        ] "stationDemo";
+      modules = {
+        default = import ./modules;
+        provisioning-probe = import ./modules/provisioning-probe.nix;
+        provisioning-station-demo = import ./modules/provisioning-station-demo.nix;
       };
 
       provisioningFor =

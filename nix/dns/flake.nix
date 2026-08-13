@@ -35,12 +35,12 @@
 
       modules = {
         default = import ./modules;
-        device-agent = import ../modules/device-agent.nix;
-        update-controller = import ../modules/update-controller.nix;
-        update-services = import ../modules/update-services.nix;
-        hidden-primary = import ../modules/hidden-primary.nix;
-        hidden-standby = import ../modules/hidden-standby.nix;
-        public-secondary = import ../modules/public-secondary.nix;
+        device-agent = import ./modules/device-agent.nix;
+        update-controller = import ./modules/update-controller.nix;
+        update-services = import ./modules/update-services.nix;
+        hidden-primary = import ./modules/hidden-primary.nix;
+        hidden-standby = import ./modules/hidden-standby.nix;
+        public-secondary = import ./modules/public-secondary.nix;
       };
 
       moduleEvalFor =

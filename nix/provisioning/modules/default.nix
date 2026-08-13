@@ -2,7 +2,7 @@
 
 {
   imports = [
-    ../../modules/provisioning-probe.nix
-    ../../modules/provisioning-station-demo.nix
+    ./provisioning-probe.nix
+    ./provisioning-station-demo.nix
   ];
 }
