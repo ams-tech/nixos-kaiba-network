@@ -18,6 +18,16 @@
           pkgs = import nixpkgs { inherit system; };
         in
         import ./nix/packages.nix { inherit pkgs lib; };
+      provisioningFor =
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        import ./tests/provisioning/packages.nix {
+          inherit pkgs lib;
+          built = packagesFor system;
+          kaibaModules = self.nixosModules;
+        };
     in
     {
       nixosModules = {
@@ -27,6 +37,7 @@
         hidden-primary = import ./nix/modules/hidden-primary.nix;
         hidden-standby = import ./nix/modules/hidden-standby.nix;
         public-secondary = import ./nix/modules/public-secondary.nix;
+        provisioning-probe = import ./nix/modules/provisioning-probe.nix;
       };
 
       packages = forAllSystems (
@@ -34,11 +45,13 @@
         let
           pkgs = import nixpkgs { inherit system; };
           built = packagesFor system;
+          provisioning = provisioningFor system;
           integration = lib.optionalAttrs (system == "x86_64-linux") (
             import ./tests/integration/packages.nix {
               inherit pkgs lib;
               kaibaPackage = built.suite;
               kaibaModules = self.nixosModules;
+              provisioningTestResult = provisioning.provisioningTestResult;
             }
           );
         in
@@ -46,7 +59,9 @@
           default = built.suite;
           kaiba-agent = built.agent;
           kaiba-controller = built.controller;
+          kaiba-provision = built.provision;
           kaiba-publisher = built.publisher;
+          provisioning-test-result = provisioning.provisioningTestResult;
         }
         // integration
       );
@@ -56,9 +71,14 @@
         let
           pkgs = import nixpkgs { inherit system; };
           built = packagesFor system;
+          provisioning = provisioningFor system;
         in
         {
           unit = built.suite;
+          device-profile-schema = provisioning.deviceProfileSchema;
+          rpi5-probe-bundle = provisioning.probeBundleIntegrity;
+          module-eval = provisioning.moduleEval;
+          provisioning-test-result = provisioning.provisioningTestResult;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
               {
@@ -74,11 +94,6 @@
               '';
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
-          module-eval = import ./tests/module-eval.nix {
-            inherit pkgs lib;
-            kaibaPackage = built.suite;
-            kaibaModules = self.nixosModules;
-          };
           report-unit = self.packages.${system}.report-unit;
           dns-schema = self.packages.${system}.dns-schema-gate;
           dns-topology = self.packages.${system}.dns-test-gate;
@@ -97,6 +112,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
+          reportPython = pkgs.python3.withPackages (pythonPackages: [ pythonPackages.jsonschema ]);
         in
         {
           default = pkgs.mkShell {
@@ -109,7 +125,7 @@
               unbound
               bind.dnsutils
               jq
-              python3
+              reportPython
               openssl
               nixfmt-tree
               actionlint

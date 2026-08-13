@@ -23,6 +23,9 @@ from typing import Any, Iterable, NoReturn
 
 SCHEMA_VERSION = 1
 SUITE = "kaiba-dns-pilot"
+PROVISIONING_SUITE = "kaiba-rpi5-provisioning-probe"
+PLATFORM_RESULT_SUITE = "kaiba-rpi5-provisioning-platform-result"
+PROVISIONING_SYSTEMS = {"x86_64-linux", "aarch64-linux"}
 EXPECTED_NODES = {
     "parent",
     "p0",
@@ -33,6 +36,7 @@ EXPECTED_NODES = {
     "pi-001",
 }
 IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
+SOURCE_REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 RECORD_TYPE = re.compile(r"^[A-Z][A-Z0-9]*$")
 EVIDENCE_PATH = re.compile(r"^evidence/[A-Za-z0-9._/-]+$")
 FORBIDDEN_KEY_PARTS = (
@@ -298,6 +302,202 @@ def validate_result(value: Any, node_ids: set[str], evidence_paths: set[str]) ->
     return result
 
 
+def validate_evidence_references(
+    value: Any,
+    context: str,
+    evidence_paths: set[str] | None,
+) -> list[str]:
+    refs = [
+        checked_evidence_path(item, f"{context}[{index}]")
+        for index, item in enumerate(expect_list(value, context))
+    ]
+    require_unique(refs, context)
+    if evidence_paths is not None:
+        missing = sorted(set(refs) - evidence_paths)
+        if missing:
+            fail(context, f"missing evidence files: {', '.join(missing)}")
+    return refs
+
+
+def expected_automated_status(checks: list[dict[str, Any]]) -> str:
+    if any(item["status"] == "failed" for item in checks):
+        return "failed"
+    if any(item["status"] == "not-observed" for item in checks):
+        return "partial"
+    return "passed"
+
+
+def validate_provisioning(value: Any, evidence_paths: set[str]) -> dict[str, Any]:
+    provisioning = expect_object(value, "provisioning")
+    exact_keys(
+        provisioning,
+        ("schema_version", "suite", "automated", "hardware_qualification", "mutation_eligible"),
+        (),
+        "provisioning",
+    )
+    if type(provisioning["schema_version"]) is not int or provisioning["schema_version"] != SCHEMA_VERSION:
+        fail("provisioning.schema_version", f"must equal {SCHEMA_VERSION}")
+    if provisioning["suite"] != PROVISIONING_SUITE:
+        fail("provisioning.suite", f"must equal {PROVISIONING_SUITE!r}")
+    if provisioning["mutation_eligible"] is not False:
+        fail("provisioning.mutation_eligible", "must be false for this probe-only slice")
+
+    automated = expect_object(provisioning["automated"], "provisioning.automated")
+    exact_keys(automated, ("overall", "checks"), (), "provisioning.automated")
+    automated_status = expect_string(automated["overall"], "provisioning.automated.overall")
+    if automated_status not in {"passed", "failed", "partial"}:
+        fail("provisioning.automated.overall", "must be passed, failed, or partial")
+    checks = expect_list(automated["checks"], "provisioning.automated.checks")
+    if not checks:
+        fail("provisioning.automated.checks", "must contain at least one check")
+    check_keys: list[tuple[str, str]] = []
+    for index, raw in enumerate(checks):
+        context = f"provisioning.automated.checks[{index}]"
+        check = expect_object(raw, context)
+        exact_keys(
+            check,
+            ("id", "system", "status", "description", "evidence"),
+            ("source_revision",),
+            context,
+        )
+        check_id = expect_string(check["id"], f"{context}.id", identifier=True)
+        system = expect_string(check["system"], f"{context}.system")
+        if system not in PROVISIONING_SYSTEMS:
+            fail(f"{context}.system", "must be x86_64-linux or aarch64-linux")
+        check_status = expect_string(check["status"], f"{context}.status")
+        if check_status not in {"passed", "failed", "not-observed"}:
+            fail(f"{context}.status", "must be passed, failed, or not-observed")
+        expect_string(check["description"], f"{context}.description")
+        refs = validate_evidence_references(check["evidence"], f"{context}.evidence", evidence_paths)
+        revision = check.get("source_revision")
+        if revision is not None and (not isinstance(revision, str) or not SOURCE_REVISION.fullmatch(revision)):
+            fail(f"{context}.source_revision", "must be a lowercase 40- or 64-hex source revision")
+        if check_status == "not-observed" and (refs or revision is not None):
+            fail(context, "a not-observed check cannot claim evidence or a source revision")
+        check_keys.append((system, check_id))
+    require_unique(check_keys, "provisioning automated system/check pairs")
+    expected = expected_automated_status(checks)
+    if automated["overall"] != expected:
+        fail("provisioning.automated.overall", f"must be {expected!r} for the recorded checks")
+
+    hardware = expect_object(provisioning["hardware_qualification"], "provisioning.hardware_qualification")
+    exact_keys(hardware, ("status", "description", "evidence"), (), "provisioning.hardware_qualification")
+    hardware_status = expect_string(hardware["status"], "provisioning.hardware_qualification.status")
+    if hardware_status not in {"pending", "passed", "failed"}:
+        fail("provisioning.hardware_qualification.status", "must be pending, passed, or failed")
+    expect_string(hardware["description"], "provisioning.hardware_qualification.description")
+    hardware_evidence = validate_evidence_references(
+        hardware["evidence"],
+        "provisioning.hardware_qualification.evidence",
+        evidence_paths,
+    )
+    if hardware_status == "pending" and hardware_evidence:
+        fail("provisioning.hardware_qualification.evidence", "must be empty while qualification is pending")
+    if hardware_status in {"passed", "failed"} and not hardware_evidence:
+        fail("provisioning.hardware_qualification.evidence", "must cite evidence for a completed qualification")
+    return provisioning
+
+
+def validate_platform_result(
+    value: Any,
+    evidence_paths: set[str] | None,
+    *,
+    require_source_revision: bool,
+) -> dict[str, Any]:
+    receipt = expect_object(value, "provisioning platform result")
+    exact_keys(
+        receipt,
+        ("schema_version", "suite", "system", "checks"),
+        ("source_revision",),
+        "provisioning platform result",
+    )
+    if type(receipt["schema_version"]) is not int or receipt["schema_version"] != SCHEMA_VERSION:
+        fail("provisioning platform result.schema_version", f"must equal {SCHEMA_VERSION}")
+    if receipt["suite"] != PLATFORM_RESULT_SUITE:
+        fail("provisioning platform result.suite", f"must equal {PLATFORM_RESULT_SUITE!r}")
+    system = expect_string(receipt["system"], "provisioning platform result.system")
+    if system not in PROVISIONING_SYSTEMS:
+        fail("provisioning platform result.system", "must be x86_64-linux or aarch64-linux")
+    revision = receipt.get("source_revision")
+    if require_source_revision and revision is None:
+        fail("provisioning platform result.source_revision", "is required for a published platform receipt")
+    if revision is not None and (not isinstance(revision, str) or not SOURCE_REVISION.fullmatch(revision)):
+        fail("provisioning platform result.source_revision", "must be null or a lowercase 40- or 64-hex source revision")
+
+    checks = expect_list(receipt["checks"], "provisioning platform result.checks")
+    if not checks:
+        fail("provisioning platform result.checks", "must contain at least one check")
+    check_ids: list[str] = []
+    for index, raw in enumerate(checks):
+        context = f"provisioning platform result.checks[{index}]"
+        check = expect_object(raw, context)
+        exact_keys(check, ("id", "status", "description", "evidence"), (), context)
+        check_ids.append(expect_string(check["id"], f"{context}.id", identifier=True))
+        status = expect_string(check["status"], f"{context}.status")
+        if status not in {"passed", "failed"}:
+            fail(f"{context}.status", "must be passed or failed")
+        expect_string(check["description"], f"{context}.description")
+        validate_evidence_references(check["evidence"], f"{context}.evidence", evidence_paths)
+    require_unique(check_ids, "provisioning platform result check ids")
+    return receipt
+
+
+def merge_platform_results(
+    provisioning: dict[str, Any],
+    receipts: list[dict[str, Any]],
+    expected_source_revision: str | None = None,
+) -> dict[str, Any]:
+    if expected_source_revision is not None and (
+        not isinstance(expected_source_revision, str) or not SOURCE_REVISION.fullmatch(expected_source_revision)
+    ):
+        fail("expected source revision", "must be a lowercase 40- or 64-hex source revision")
+    if expected_source_revision is not None and not receipts:
+        fail("expected source revision", "requires at least one provisioning platform result")
+    merged = copy.deepcopy(provisioning)
+    checks = merged["automated"]["checks"]
+    revisions = {item["source_revision"] for item in checks if "source_revision" in item}
+    for receipt_index, receipt in enumerate(receipts):
+        if expected_source_revision is not None and receipt.get("source_revision") != expected_source_revision:
+            fail(
+                f"provisioning platform result[{receipt_index}].source_revision",
+                "does not match the expected checked-out source revision",
+            )
+        system = receipt["system"]
+        placeholders = {
+            item["id"]: item
+            for item in checks
+            if item["system"] == system and item["status"] == "not-observed"
+        }
+        supplied = {item["id"]: item for item in receipt["checks"]}
+        if set(placeholders) != set(supplied):
+            missing = sorted(set(placeholders) - set(supplied))
+            extra = sorted(set(supplied) - set(placeholders))
+            details: list[str] = []
+            if missing:
+                details.append(f"missing checks: {', '.join(missing)}")
+            if extra:
+                details.append(f"unexpected or already-observed checks: {', '.join(extra)}")
+            fail(f"provisioning platform result[{receipt_index}]", "; ".join(details))
+        revision = receipt.get("source_revision")
+        if revision is not None:
+            revisions.add(revision)
+        for check_id, observed in supplied.items():
+            target = placeholders[check_id]
+            if observed["description"] != target["description"]:
+                fail(
+                    f"provisioning platform result[{receipt_index}].checks.{check_id}.description",
+                    "must match the source-controlled placeholder description",
+                )
+            target["status"] = observed["status"]
+            target["evidence"] = list(observed["evidence"])
+            if revision is not None:
+                target["source_revision"] = revision
+    if len(revisions) > 1:
+        fail("provisioning platform results", "source revisions do not match")
+    merged["automated"]["overall"] = expected_automated_status(checks)
+    return merged
+
+
 def validate_topology(value: Any) -> dict[str, Any]:
     topology = expect_object(value, "topology")
     exact_keys(
@@ -489,6 +689,17 @@ def canonicalize_result(value: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def canonicalize_provisioning(value: dict[str, Any]) -> dict[str, Any]:
+    provisioning = copy.deepcopy(value)
+    for check in provisioning["automated"]["checks"]:
+        check["evidence"] = sorted(check["evidence"])
+    provisioning["automated"]["checks"].sort(key=lambda item: (item["id"], item["system"]))
+    provisioning["hardware_qualification"]["evidence"] = sorted(
+        provisioning["hardware_qualification"]["evidence"]
+    )
+    return provisioning
+
+
 def canonicalize_topology(value: dict[str, Any]) -> dict[str, Any]:
     topology = copy.deepcopy(value)
     topology["networks"].sort(key=lambda item: item["id"])
@@ -526,13 +737,29 @@ def evidence_links(paths: list[str], *, markdown: bool) -> str:
     return ", ".join(f'<a href="{html.escape(path, quote=True)}">{html.escape(PurePosixPath(path).name)}</a>' for path in paths)
 
 
-def render_markdown(result: dict[str, Any], events: list[dict[str, Any]], topology: dict[str, Any], evidence: dict[str, str], zones: dict[str, str]) -> str:
+def render_markdown(
+    result: dict[str, Any],
+    provisioning: dict[str, Any],
+    events: list[dict[str, Any]],
+    topology: dict[str, Any],
+    evidence: dict[str, str],
+    zones: dict[str, str],
+) -> str:
     passed = sum(item["status"] == "passed" for item in result["assertions"])
     failed = len(result["assertions"]) - passed
+    provisioning_checks = provisioning["automated"]["checks"]
+    provisioning_passed = sum(item["status"] == "passed" for item in provisioning_checks)
+    provisioning_failed = sum(item["status"] == "failed" for item in provisioning_checks)
+    provisioning_unobserved = sum(item["status"] == "not-observed" for item in provisioning_checks)
+    hardware = provisioning["hardware_qualification"]
     lines = [
-        "# Kaiba DNS pilot test report",
+        "# Kaiba pilot validation report",
         "",
-        f"**Overall:** {result['overall'].upper()} — {passed} passed, {failed} failed.",
+        f"**DNS topology:** {result['overall'].upper()} — {passed} passed, {failed} failed.",
+        "",
+        f"**Provisioning automation:** {provisioning['automated']['overall'].upper()} — {provisioning_passed} passed, {provisioning_failed} failed, {provisioning_unobserved} not observed.",
+        "",
+        f"**Hardware qualification:** {hardware['status'].upper()}.",
         "",
         f"The test zone `{topology['zone']}` simulates the production zone `{topology['production_analogue']}`. No external DNS service was contacted or modified.",
         "",
@@ -545,6 +772,35 @@ def render_markdown(result: dict[str, Any], events: list[dict[str, Any]], topolo
     ]
     for item in result["assertions"]:
         lines.append(f"| {item['status'].upper()} | {md_cell(item['phase'])} | {md_cell(item['description'])} | {md_cell(item['expected'])} | {md_cell(item['observed'])} | {evidence_links(item['evidence'], markdown=True)} |")
+
+    lines.extend([
+        "",
+        "## Provisioning probe validation",
+        "",
+        "Automated provisioning checks are reported independently from the DNS topology suite.",
+        "",
+        "| Status | System | Check | Description | Source revision | Evidence |",
+        "|---|---|---|---|---|---|",
+    ])
+    for item in provisioning_checks:
+        revision = f"`{item['source_revision']}`" if "source_revision" in item else "—"
+        lines.append(
+            f"| {item['status'].replace('-', ' ').upper()} | `{item['system']}` | `{item['id']}` | "
+            f"{md_cell(item['description'])} | {revision} | {evidence_links(item['evidence'], markdown=True)} |"
+        )
+    lines.extend([
+        "",
+        "### Hardware qualification",
+        "",
+        f"**Status: {hardware['status'].upper()}.** {hardware['description']}",
+        "",
+        f"Evidence: {evidence_links(hardware['evidence'], markdown=True)}",
+        "",
+        "Hardware qualification is a separate manual gate. It is not included in the DNS overall status, automated provisioning status, or JUnit output.",
+        "",
+        "`mutation_eligible` remains `false`; these results do not authorize irreversible provisioning.",
+        "The automated checks do not execute physical recovery firmware and do not establish device authentication, attestation, or the full unprovisioned state.",
+    ])
 
     lines.extend(["", "## Claims", ""])
     for category in ("exercised", "simulated", "deferred"):
@@ -639,10 +895,30 @@ def h(value: Any) -> str:
     return html.escape(compact(value))
 
 
-def render_html(result: dict[str, Any], events: list[dict[str, Any]], topology: dict[str, Any], evidence: dict[str, str], zones: dict[str, str]) -> str:
+def status_class(status: str) -> str:
+    if status == "passed":
+        return "pass"
+    if status == "failed":
+        return "fail"
+    return "partial"
+
+
+def render_html(
+    result: dict[str, Any],
+    provisioning: dict[str, Any],
+    events: list[dict[str, Any]],
+    topology: dict[str, Any],
+    evidence: dict[str, str],
+    zones: dict[str, str],
+) -> str:
     passed = sum(item["status"] == "passed" for item in result["assertions"])
     failed = len(result["assertions"]) - passed
-    status_class = "pass" if result["overall"] == "passed" else "fail"
+    dns_status_class = "pass" if result["overall"] == "passed" else "fail"
+    provisioning_checks = provisioning["automated"]["checks"]
+    provisioning_passed = sum(item["status"] == "passed" for item in provisioning_checks)
+    provisioning_failed = sum(item["status"] == "failed" for item in provisioning_checks)
+    provisioning_unobserved = sum(item["status"] == "not-observed" for item in provisioning_checks)
+    hardware = provisioning["hardware_qualification"]
     assertion_rows = [
         [f'<strong class="{item["status"][:-2] if item["status"] == "passed" else "fail"}">{html.escape(item["status"].upper())}</strong>', h(item["phase"]), h(item["description"]), f"<code>{h(item['expected'])}</code>", f"<code>{h(item['observed'])}</code>", evidence_links(item["evidence"], markdown=False)]
         for item in result["assertions"]
@@ -652,6 +928,17 @@ def render_html(result: dict[str, Any], events: list[dict[str, Any]], topology: 
     answer_rows = [[h(item["phase"]), h(item["server"]), h(item.get("transport", "—")), h(item["name"]), h(item["type"]), f"<code>{h(item['values'])}</code>", "yes" if item["authoritative"] else "no"] for item in result["answers"]]
     node_rows = [[f"<code>{h(item['id'])}</code>", h(item["role"]), f"<code>{h(item['trust_boundary'])}</code>", ", ".join(f"<code>{h(network)}</code>" for network in item["networks"])] for item in topology["nodes"]]
     edge_rows = [[f"<code>{h(item['from'])}</code> → <code>{h(item['to'])}</code>", f"<code>{h(item['network'])}</code>", f"{h(item['protocol'])} / {', '.join(str(port) for port in item['ports'])}", h(item["authentication"]), h(item["purpose"])] for item in topology["edges"]]
+    provisioning_rows = [
+        [
+            f'<strong class="{status_class(item["status"])}">{html.escape(item["status"].replace("-", " ").upper())}</strong>',
+            f"<code>{h(item['system'])}</code>",
+            f"<code>{h(item['id'])}</code>",
+            h(item["description"]),
+            f"<code>{h(item['source_revision'])}</code>" if "source_revision" in item else "—",
+            evidence_links(item["evidence"], markdown=False),
+        ]
+        for item in provisioning_checks
+    ]
 
     claim_sections: list[str] = []
     for category in ("exercised", "simulated", "deferred"):
@@ -666,14 +953,14 @@ def render_html(result: dict[str, Any], events: list[dict[str, Any]], topology: 
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kaiba DNS pilot test report</title>
+<title>Kaiba pilot validation report</title>
 <style>
 :root {{ color-scheme: light; font-family: system-ui, sans-serif; }}
 body {{ max-width: 1180px; margin: 2rem auto; padding: 0 1rem 4rem; color: #172033; }}
 h1, h2, h3 {{ color: #102a43; }}
 .summary {{ border-left: .45rem solid #64748b; background: #f8fafc; padding: 1rem 1.25rem; }}
-.summary.pass {{ border-color: #15803d; }} .summary.fail {{ border-color: #b91c1c; }}
-.pass {{ color: #15803d; }} .fail {{ color: #b91c1c; }}
+.summary.pass {{ border-color: #15803d; }} .summary.fail {{ border-color: #b91c1c; }} .summary.partial {{ border-color: #a16207; }}
+.pass {{ color: #15803d; }} .fail {{ color: #b91c1c; }} .partial {{ color: #a16207; }}
 table {{ width: 100%; border-collapse: collapse; margin: .75rem 0 1.5rem; font-size: .92rem; }}
 th, td {{ border: 1px solid #cbd5e1; padding: .45rem .55rem; text-align: left; vertical-align: top; }}
 th {{ background: #e2e8f0; }} tr:nth-child(even) {{ background: #f8fafc; }}
@@ -681,12 +968,23 @@ code {{ overflow-wrap: anywhere; }} img {{ max-width: 100%; height: auto; border
 </style>
 </head>
 <body>
-<h1>Kaiba DNS pilot test report</h1>
-<p class="summary {status_class}"><strong>Overall: {html.escape(result['overall'].upper())}</strong> — {passed} passed, {failed} failed.</p>
+<h1>Kaiba pilot validation report</h1>
+<p class="summary {dns_status_class}"><strong>DNS topology: {html.escape(result['overall'].upper())}</strong> — {passed} passed, {failed} failed.</p>
+<p class="summary {status_class(provisioning['automated']['overall'])}"><strong>Provisioning automation: {html.escape(provisioning['automated']['overall'].upper())}</strong> — {provisioning_passed} passed, {provisioning_failed} failed, {provisioning_unobserved} not observed.</p>
+<p class="summary {status_class(hardware['status'])}"><strong>Hardware qualification: {html.escape(hardware['status'].upper())}</strong></p>
 <p>The test zone <code>{h(topology['zone'])}</code> simulates <code>{h(topology['production_analogue'])}</code>. No external DNS service was contacted or modified.</p>
 <img src="topology.svg" alt="Seven-node DNS pilot topology">
 <h2>Assertions</h2>
 {html_table(['Status', 'Phase', 'Assertion', 'Expected', 'Observed', 'Evidence'], assertion_rows)}
+<h2>Provisioning probe validation</h2>
+<p>Automated provisioning checks are reported independently from the DNS topology suite.</p>
+{html_table(['Status', 'System', 'Check', 'Description', 'Source revision', 'Evidence'], provisioning_rows)}
+<h3>Hardware qualification</h3>
+<p><strong class="{status_class(hardware['status'])}">Status: {html.escape(hardware['status'].upper())}.</strong> {h(hardware['description'])}</p>
+<p>Evidence: {evidence_links(hardware['evidence'], markdown=False)}</p>
+<p>Hardware qualification is a separate manual gate. It is not included in the DNS overall status, automated provisioning status, or JUnit output.</p>
+<p><code>mutation_eligible</code> remains <code>false</code>; these results do not authorize irreversible provisioning.</p>
+<p>The automated checks do not execute physical recovery firmware and do not establish device authentication, attestation, or the full unprovisioned state.</p>
 <h2>Claims</h2>
 {''.join(claim_sections)}
 <h2>Ordered events</h2>
@@ -785,10 +1083,33 @@ def render_svg(topology: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def render_junit(result: dict[str, Any]) -> bytes:
-    failures = sum(item["status"] == "failed" for item in result["assertions"])
-    root = ET.Element("testsuites", {"name": SUITE, "tests": str(len(result["assertions"])), "failures": str(failures), "errors": "0"})
-    suite = ET.SubElement(root, "testsuite", {"name": SUITE, "tests": str(len(result["assertions"])), "failures": str(failures), "errors": "0"})
+def render_junit(result: dict[str, Any], provisioning: dict[str, Any]) -> bytes:
+    dns_failures = sum(item["status"] == "failed" for item in result["assertions"])
+    provisioning_checks = provisioning["automated"]["checks"]
+    provisioning_failures = sum(item["status"] == "failed" for item in provisioning_checks)
+    provisioning_skipped = sum(item["status"] == "not-observed" for item in provisioning_checks)
+    total = len(result["assertions"]) + len(provisioning_checks)
+    root = ET.Element(
+        "testsuites",
+        {
+            "name": "kaiba-pilot-validation",
+            "tests": str(total),
+            "failures": str(dns_failures + provisioning_failures),
+            "errors": "0",
+            "skipped": str(provisioning_skipped),
+        },
+    )
+    suite = ET.SubElement(
+        root,
+        "testsuite",
+        {
+            "name": SUITE,
+            "tests": str(len(result["assertions"])),
+            "failures": str(dns_failures),
+            "errors": "0",
+            "skipped": "0",
+        },
+    )
     for item in result["assertions"]:
         case = ET.SubElement(suite, "testcase", {"classname": item["phase"], "name": item["id"]})
         if item["status"] == "failed":
@@ -796,6 +1117,33 @@ def render_junit(result: dict[str, Any]) -> bytes:
             failure.text = f"Expected: {compact(item['expected'])}\nObserved: {compact(item['observed'])}"
         output = ET.SubElement(case, "system-out")
         output.text = "Evidence: " + (", ".join(item["evidence"]) if item["evidence"] else "none")
+
+    provisioning_suite = ET.SubElement(
+        root,
+        "testsuite",
+        {
+            "name": PROVISIONING_SUITE,
+            "tests": str(len(provisioning_checks)),
+            "failures": str(provisioning_failures),
+            "errors": "0",
+            "skipped": str(provisioning_skipped),
+        },
+    )
+    for item in provisioning_checks:
+        case = ET.SubElement(
+            provisioning_suite,
+            "testcase",
+            {"classname": f"provisioning.{item['system']}", "name": item["id"]},
+        )
+        if item["status"] == "failed":
+            failure = ET.SubElement(case, "failure", {"message": item["description"], "type": "automated-check"})
+            failure.text = f"Automated provisioning check failed on {item['system']}"
+        elif item["status"] == "not-observed":
+            ET.SubElement(case, "skipped", {"message": "not observed on this platform"})
+        output = ET.SubElement(case, "system-out")
+        revision = item.get("source_revision", "not recorded")
+        evidence_text = ", ".join(item["evidence"]) if item["evidence"] else "none"
+        output.text = f"Source revision: {revision}\nEvidence: {evidence_text}"
     ET.indent(root, space="  ")
     return ET.tostring(root, encoding="utf-8", xml_declaration=True, short_empty_elements=True) + b"\n"
 
@@ -834,6 +1182,10 @@ def render(
     output: Path,
     schema_path: Path | None = None,
     zones_root: Path | None = None,
+    provisioning_path: Path | None = None,
+    provisioning_schema_path: Path | None = None,
+    platform_result_paths: Iterable[Path] = (),
+    expected_source_revision: str | None = None,
 ) -> None:
     output_resolved = output.resolve()
     evidence_resolved = evidence_root.resolve()
@@ -854,9 +1206,38 @@ def render(
     events = read_events(events_path, node_ids, set(evidence))
     schema_source = schema_path or Path(__file__).with_name("result.schema.json")
     schema = normalize_and_scan(load_json(schema_source, "result schema"), "result_schema")
+    if provisioning_path is None:
+        fail("provisioning", "a provisioning result is required")
+    if provisioning_schema_path is None:
+        fail("provisioning schema", "a provisioning schema is required")
+    raw_provisioning = normalize_and_scan(
+        load_json(provisioning_path, "provisioning"),
+        "provisioning",
+    )
+    provisioning = validate_provisioning(raw_provisioning, set(evidence))
+    receipts = [
+        validate_platform_result(
+            normalize_and_scan(load_json(path, f"provisioning platform result {index}"), "provisioning_platform_result"),
+            set(evidence),
+            require_source_revision=True,
+        )
+        for index, path in enumerate(platform_result_paths)
+    ]
+    provisioning = canonicalize_provisioning(
+        validate_provisioning(
+            merge_platform_results(provisioning, receipts, expected_source_revision),
+            set(evidence),
+        )
+    )
+    provisioning_schema = normalize_and_scan(
+        load_json(provisioning_schema_path, "provisioning schema"),
+        "provisioning_schema",
+    )
 
     write_text(output / "result.json", json_text(result))
     write_text(output / "result.schema.json", json_text(schema))
+    write_text(output / "provisioning.json", json_text(provisioning))
+    write_text(output / "provisioning.schema.json", json_text(provisioning_schema))
     write_text(output / "topology.json", json_text(topology))
     write_text(output / "events.jsonl", "".join(json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False) + "\n" for item in events))
     for relative, content in sorted(evidence.items()):
@@ -865,9 +1246,9 @@ def render(
         write_text(output / relative, content)
     write_text(output / "topology.dot", render_dot(topology))
     write_text(output / "topology.svg", render_svg(topology))
-    write_text(output / "index.md", render_markdown(result, events, topology, evidence, zones))
-    write_text(output / "index.html", render_html(result, events, topology, evidence, zones))
-    (output / "junit.xml").write_bytes(render_junit(result))
+    write_text(output / "index.md", render_markdown(result, provisioning, events, topology, evidence, zones))
+    write_text(output / "index.html", render_html(result, provisioning, events, topology, evidence, zones))
+    (output / "junit.xml").write_bytes(render_junit(result, provisioning))
     write_manifest(output)
 
 
@@ -878,6 +1259,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--evidence", type=Path, required=True, help="directory of normalized UTF-8 evidence")
     parser.add_argument("--topology", type=Path, required=True, help="seven-node topology manifest")
     parser.add_argument("--schema", type=Path, help="result schema (defaults to the file beside this script)")
+    parser.add_argument("--provisioning", type=Path, required=True, help="canonical provisioning validation JSON")
+    parser.add_argument("--provisioning-schema", type=Path, required=True, help="provisioning result schema")
+    parser.add_argument(
+        "--provisioning-platform-result",
+        type=Path,
+        action="append",
+        default=[],
+        help="strict per-platform result receipt; may be repeated",
+    )
+    parser.add_argument(
+        "--expected-source-revision",
+        help="require every platform receipt to match this lowercase 40- or 64-hex revision",
+    )
     parser.add_argument("--zones", type=Path, help="optional directory of normalized authoritative zone snapshots")
     parser.add_argument("--output", type=Path, required=True, help="new or empty report directory")
     return parser.parse_args(argv)
@@ -886,7 +1280,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        render(args.result, args.events, args.evidence, args.topology, args.output, args.schema, args.zones)
+        render(
+            args.result,
+            args.events,
+            args.evidence,
+            args.topology,
+            args.output,
+            args.schema,
+            args.zones,
+            args.provisioning,
+            args.provisioning_schema,
+            args.provisioning_platform_result,
+            args.expected_source_revision,
+        )
     except ReportError as exc:
         print(f"report error: {exc}", file=sys.stderr)
         return 2

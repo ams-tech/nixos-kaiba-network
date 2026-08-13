@@ -1,0 +1,104 @@
+{
+  "apiVersion": "provisioning.kaiba.network/v1alpha1",
+  "kind": "DeviceClassProfile",
+  "metadata": {
+    "id": "raspberry-pi-5-model-b-v1alpha1",
+    "status": "experimental"
+  },
+  "spec": {
+    "adapter": {
+      "id": "raspberrypi.rpi5.otp-metadata",
+      "version": "v1alpha1"
+    },
+    "requiredFacts": [
+      "hardware.user_serial",
+      "hardware.factory_uuid",
+      "hardware.board_attributes",
+      "hardware.board_revision.model",
+      "hardware.board_revision.new_style",
+      "hardware.board_revision.processor",
+      "hardware.soc",
+      "hardware.ethernet_mac",
+      "firmware.boot_rom",
+      "firmware.eeprom_hash",
+      "security.customer_key_hash",
+      "security.customer_key_state",
+      "security.videocore_jtag_locked"
+    ],
+    "classConditions": [
+      {
+        "id": "bcm2712-soc",
+        "fact": "hardware.soc",
+        "operator": "equals",
+        "value": "bcm2712"
+      },
+      {
+        "id": "new-style-revision",
+        "fact": "hardware.board_revision.new_style",
+        "operator": "equals",
+        "value": "true"
+      },
+      {
+        "id": "bcm2712-processor",
+        "fact": "hardware.board_revision.processor",
+        "operator": "equals",
+        "value": "4"
+      },
+      {
+        "id": "pi-5-model-b",
+        "fact": "hardware.board_revision.model",
+        "operator": "equals",
+        "value": "23"
+      }
+    ],
+    "baselineConditions": [
+      {
+        "id": "customer-secure-boot-key-unset",
+        "fact": "security.customer_key_state",
+        "operator": "equals",
+        "value": "unset"
+      },
+      {
+        "id": "videocore-jtag-unlocked",
+        "fact": "security.videocore_jtag_locked",
+        "operator": "equals",
+        "value": "false"
+      },
+      {
+        "id": "eeprom-hash-observed",
+        "fact": "firmware.eeprom_hash",
+        "operator": "present"
+      }
+    ],
+    "deferredChecks": [
+      {
+        "id": "attached-storage-contents",
+        "description": "The OTP metadata probe does not mount or inspect attached storage."
+      },
+      {
+        "id": "customer-otp-rows",
+        "description": "The probe does not expose customer OTP rows other than the secure-boot key hash."
+      },
+      {
+        "id": "device-private-key-state",
+        "description": "The probe cannot establish whether device-private-key rows have been programmed."
+      },
+      {
+        "id": "eeprom-write-protection",
+        "description": "The probe does not establish the effective EEPROM write-protection state."
+      },
+      {
+        "id": "firmware-authenticity",
+        "description": "An observed EEPROM hash is not an appraisal against an approved firmware artifact."
+      },
+      {
+        "id": "inventory-ownership",
+        "description": "Hardware metadata does not establish absence of an existing inventory owner or transaction."
+      },
+      {
+        "id": "non-videocore-debug-paths",
+        "description": "JTAG_LOCKED reports VideoCore JTAG only, not every processor or physical debug path."
+      }
+    ]
+  }
+}

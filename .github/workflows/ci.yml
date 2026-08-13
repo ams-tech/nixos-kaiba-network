@@ -41,15 +41,21 @@ jobs:
         run: |
           nix build --no-link -L \
             .#checks.x86_64-linux.ci-workflow \
+            .#checks.x86_64-linux.device-profile-schema \
             .#checks.x86_64-linux.module-eval \
+            .#checks.x86_64-linux.provisioning-test-result \
+            .#checks.x86_64-linux.rpi5-probe-bundle \
             .#checks.x86_64-linux.report-unit \
-            .#checks.x86_64-linux.unit
+            .#checks.x86_64-linux.unit \
+            .#packages.x86_64-linux.kaiba-provision
 
   aarch64-packages:
     name: ARM64 production packages
     needs: quality
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
+    outputs:
+      provisioning_receipt_sha256: ${{ steps.provisioning_receipt.outputs.sha256 }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,13 +72,46 @@ jobs:
         run: |
           nix build --no-link -L \
             .#checks.aarch64-linux.unit \
+            .#checks.aarch64-linux.rpi5-probe-bundle \
             .#packages.aarch64-linux.kaiba-agent \
             .#packages.aarch64-linux.kaiba-controller \
+            .#packages.aarch64-linux.kaiba-provision \
             .#packages.aarch64-linux.kaiba-publisher
 
+      - name: Build the native provisioning test result
+        run: nix build .#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L
+
+      - name: Bind the provisioning result to this source revision
+        id: provisioning_receipt
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p ci-receipt
+          nix develop --command python3 tests/report/platform_receipt.py \
+            --input provisioning-result/platform.json \
+            --source-revision "$SOURCE_REVISION" \
+            --output ci-receipt/provisioning-aarch64.json
+          receipt_sha256="$(sha256sum ci-receipt/provisioning-aarch64.json | cut -d ' ' -f 1)"
+          if [[ ! "$receipt_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error title=Invalid receipt digest::The provisioning receipt digest is malformed."
+            exit 1
+          fi
+          echo "sha256=$receipt_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the native provisioning result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kaiba-provisioning-aarch64-${{ github.sha }}
+          path: ci-receipt/provisioning-aarch64.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
+
   dns-integration:
-    name: Seven-VM DNS topology
-    needs: quality
+    name: Seven-VM DNS topology and canonical report
+    needs:
+      - quality
+      - aarch64-packages
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:
@@ -98,12 +137,55 @@ jobs:
             echo "::warning title=KVM unavailable::The topology will use its slower QEMU TCG fallback."
           fi
 
-      - name: Build the canonical DNS test report
-        run: nix build .#dns-test-report --out-link result -L
+      - name: Build the deterministic base report
+        run: nix build .#dns-test-report --out-link base-result -L
+
+      - name: Download the native ARM64 provisioning result
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: kaiba-provisioning-aarch64-${{ github.sha }}
+          path: ci-input/aarch64
+
+      - name: Verify the native ARM64 provisioning result
+        env:
+          EXPECTED_SHA256: ${{ needs.aarch64-packages.outputs.provisioning_receipt_sha256 }}
+        run: |
+          mapfile -d '' receipt_entries < <(find ci-input/aarch64 -mindepth 1 -print0)
+          if (( ${#receipt_entries[@]} != 1 )); then
+            echo "::error title=Unexpected receipt contents::The ARM64 result artifact must contain exactly one entry."
+            exit 1
+          fi
+          receipt=ci-input/aarch64/provisioning-aarch64.json
+          if [[ -L "$receipt" || ! -f "$receipt" ]]; then
+            echo "::error title=Unsafe receipt::The ARM64 result must be one regular, non-symbolic-link file."
+            exit 1
+          fi
+          actual_sha256="$(sha256sum "$receipt" | cut -d ' ' -f 1)"
+          if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ || "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
+            echo "::error title=Receipt digest mismatch::The downloaded ARM64 result does not match its producing job."
+            exit 1
+          fi
+
+      - name: Compose the canonical test report
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          nix develop --command python3 tests/report/render.py \
+            --result base-result/result.json \
+            --events base-result/events.jsonl \
+            --evidence base-result/evidence \
+            --zones base-result/zones \
+            --topology base-result/topology.json \
+            --schema base-result/result.schema.json \
+            --provisioning base-result/provisioning.json \
+            --provisioning-schema base-result/provisioning.schema.json \
+            --provisioning-platform-result ci-input/aarch64/provisioning-aarch64.json \
+            --expected-source-revision "$SOURCE_REVISION" \
+            --output ci-report
 
       - name: Verify the report manifest
         id: verify_report
-        working-directory: result
+        working-directory: ci-report
         run: sha256sum --check manifest.sha256
 
       - name: Enforce schema, security, and functional gates
@@ -112,17 +194,31 @@ jobs:
             .#dns-schema-gate \
             .#dns-security-gate \
             .#dns-test-gate
+          cmp base-result/result.schema.json ci-report/result.schema.json
+          cmp base-result/provisioning.schema.json ci-report/provisioning.schema.json
+          nix develop --command python3 tests/report/schema_gate.py \
+            --schema ci-report/result.schema.json \
+            --instance ci-report/result.json
+          nix develop --command python3 tests/report/schema_gate.py \
+            --schema ci-report/provisioning.schema.json \
+            --instance ci-report/provisioning.json
+          nix develop --command python3 tests/report/gate.py \
+            --manifest tests/report/required-assertions.json \
+            --scope functional \
+            ci-report/result.json
+          nix develop --command python3 tests/report/gate.py \
+            --manifest tests/report/required-assertions.json \
+            --scope security \
+            ci-report/result.json
 
       - name: Collect the DNS test report
         id: collect_report
         if: ${{ always() }}
         run: |
-          if [[ ! -e result ]]; then
-            echo "::error title=Report unavailable::The report derivation did not produce an output."
+          if [[ ! -f ci-report/manifest.sha256 ]]; then
+            echo "::error title=Report unavailable::Canonical report composition did not complete."
             exit 1
           fi
-          mkdir -p ci-report
-          cp --recursive --dereference result/. ci-report/
 
       - name: Upload the DNS test report
         if: ${{ always() }}
@@ -149,7 +245,7 @@ jobs:
           mkdir -p pages-site/reports/latest
           cp --recursive --no-dereference site/. pages-site/
           cp --recursive --no-dereference ci-report/. pages-site/reports/latest/
-          python3 tests/site/validate.py pages-site
+          nix develop --command python3 tests/site/validate.py pages-site
 
       - name: Upload the project site for GitHub Pages
         id: pages_artifact

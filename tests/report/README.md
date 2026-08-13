@@ -1,4 +1,4 @@
-# Deterministic DNS test reports
+# Deterministic pilot validation reports
 
 The integration test records structured observations; this directory turns
 them into a stable, reviewable report without contacting the network. The
@@ -13,6 +13,8 @@ Run:
 ```console
 python3 tests/report/render.py \
   --result /path/to/result.json \
+  --provisioning /path/to/provisioning.json \
+  --provisioning-schema tests/report/provisioning.schema.json \
   --events /path/to/events.jsonl \
   --evidence /path/to/evidence \
   --zones /path/to/zone-snapshots \
@@ -24,6 +26,48 @@ The schema defaults to `result.schema.json` beside the renderer. Packagers that
 copy the script separately can pass `--schema /path/to/result.schema.json`
 explicitly. `--zones` is optional, but the integration topology supplies it so
 canonical snapshots appear under `zones/`.
+
+The provisioning input follows
+[`provisioning.schema.json`](provisioning.schema.json). It records automated
+checks per target system and a separate manual hardware-qualification state.
+Automated checks may be `passed`, `failed`, or `not-observed`; their derived
+overall state is respectively `passed`, `failed` if any check failed, or
+`partial` if at least one check was not observed. Hardware qualification is
+`pending`, `passed`, or `failed` and never changes the DNS or automated result.
+Pending qualification has no evidence; a passed or failed qualification must
+cite evidence. `mutation_eligible` is always false in this probe-only report.
+
+CI can replace a platform's complete set of `not-observed` placeholders with a
+strict, source-revision-bound receipt by repeating:
+
+```console
+--provisioning-platform-result /path/to/platform-result.json
+```
+
+Each receipt names exactly one supported system, a lowercase 40- or 64-hex
+source revision, and every placeholder check for that system. Receipts cannot
+add checks, replace already-observed checks, alter source-controlled check
+descriptions, or combine different source revisions.
+
+CI should bind all supplied receipts to its checked-out commit with
+`--expected-source-revision <revision>`. Supplying this option without a receipt,
+or supplying any receipt from another revision, is an error.
+
+The native result intentionally has no source revision because Nix builds it
+without ambient VCS metadata. Bind it at the CI boundary with the strict,
+new-file-only receipt writer:
+
+```console
+python3 tests/report/platform_receipt.py \
+  --input /path/to/platform.json \
+  --source-revision <revision> \
+  --output /new/path/to/platform-receipt.json
+```
+
+The writer rejects duplicate or unknown fields, malformed or oversized input,
+unsupported result values, and non-canonical revision identifiers. The report
+renderer still verifies the exact platform/check placeholder set and revision
+before incorporating the receipt.
 
 `result.json` follows [`result.schema.json`](result.schema.json). Each exercised
 claim cites one or more assertion IDs. Every evidence reference begins with
@@ -51,6 +95,7 @@ The renderer writes:
 ```text
 result.json                 index.html
 result.schema.json          index.md
+provisioning.json           provisioning.schema.json
 events.jsonl                junit.xml
 topology.json               topology.dot
 topology.svg                evidence/
@@ -59,6 +104,12 @@ zones/                      manifest.sha256
 
 Input ordering and line endings are canonicalized. The manifest covers every
 output except itself.
+
+JUnit contains the DNS assertions and automated provisioning checks;
+`not-observed` checks are skipped. Manual hardware qualification is deliberately
+excluded from JUnit. Automated checks do not execute physical recovery firmware
+and do not establish device authentication, attestation, or a complete
+unprovisioned state.
 
 ## Diagnostics and enforcement
 

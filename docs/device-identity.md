@@ -217,8 +217,8 @@ merely because the key is stored outside a normal file.
 The logical roles are:
 
 - **Device**: generates or contains the key and proves possession.
-- **Provisioning station**: controls physical or bootstrap access and runs the
-  approved provisioning artifact.
+- **[Provisioning station](provisioning-station.md)**: controls physical or
+  bootstrap access and runs the approved provisioning bundle.
 - **Device registration authority (device RA)**: authenticates the device and
   operator, assigns the logical ID, and applies issuance policy. This role is
   distinct from the domain-name registrar discussed in [the architecture
@@ -268,12 +268,123 @@ attribute, a separate challenge-response, or an equivalent protocol binding.
 The CSR neither authenticates a bootstrap identity nor authorizes its requested
 names. Other key types require an appropriate PoP mechanism.
 
-### 1. Prepare
+### Per-device software transaction
+
+Provisioning software must implement the ceremony as a durable transaction,
+not as a script that infers progress from whichever certificate or device state
+it happens to observe. The generic orchestrator enforces transaction ordering,
+authorization gates, retry, audit, and activation workflow semantics;
+authoritative policy decisions and records remain with the applicable control
+services. A signed device-class profile declares the required behavior, and a
+platform adapter supplies hardware-specific capabilities and operations
+without changing those semantics. The
+[provisioning station design](provisioning-station.md) defines the execution
+environment and separates its authority from the coordinator, inventory, RA,
+CA, artifact authority, verifier, and audit service.
+
+Each device-class profile must:
+
+- define the allowed unprovisioned baseline as observable state;
+- expose stable public observations for target binding and state
+  reconciliation;
+- declare ordered operations and classify each as read-only, reversible,
+  irreversible, or authorization-affecting;
+- define independently observable postconditions for every mutation; and
+- state which secrets can be generated, derived, injected, used, erased, or
+  locked without exposing them to the generic orchestrator.
+
+The generic workflow must not assume a particular secure-boot mechanism,
+keystore, debug interface, storage technology, or attestation format. It runs
+the following stages once for every device:
+
+1. **Create the transaction.** Reserve the intended logical ID and physical
+   asset in inventory, acquire an exclusive provisioning claim lease and its
+   monotonically increasing fence epoch, and bind a unique idempotency key to
+   the device class, credential slots, operator and approver identities, nonce,
+   expiry, policy version, tool version, approved artifacts, and intended RA or
+   audience. No device write occurs in this stage.
+2. **Claim and identify the target.** Open an exclusive session to exactly one
+   candidate, collect its target-binding fingerprint, capabilities, lifecycle
+   observations, and existing public identities, and require them to match the
+   transaction. Before creation of a protected identity, this fingerprint may
+   not be cryptographic. Physical identifiers correlate an asset; they do not
+   prove possession of a private key.
+3. **Validate the unprovisioned baseline.** Use read-only or reversible checks
+   to establish that the candidate has no conflicting owner, logical-ID
+   binding, active credential, transaction, residual owner data, or
+   fleet-default secret, and that its lifecycle, boot, update, rollback,
+   debug, recovery, key-slot, storage, entropy, and restart capabilities match
+   the device profile. *Unprovisioned* is a policy-defined baseline, not merely
+   the absence of a certificate. Unknown or unverifiable state fails this
+   stage.
+4. **Resolve and authorize the commit plan.** Calculate the exact ordered
+   operations and postconditions, distinguish reversible work from every
+   one-way or authorization-affecting change, and persist the pre-change
+   observations. Bind explicit approval to the transaction digest, target
+   fingerprint, policy and artifact hashes, and operation list. Any change to
+   those inputs invalidates approval.
+5. **Establish initial trust.** Authenticate and authorize both directions:
+   the RA or operator domain must accept the candidate's permitted bootstrap
+   evidence, and the device must authenticate and authorize the intended
+   provisioning or enrollment domain. Physical custody alone supplies neither
+   direction automatically.
+6. **Apply the security foundation.** Install or stage the approved software
+   and configuration, then establish the profile's required boot and update
+   authorization, rollback, storage, debug, recovery, lifecycle, and protected
+   signer posture in its declared order. Durably record intent immediately
+   before each irreversible operation and read back its effective state; a
+   successful command return is not a sufficient postcondition. Controls that
+   must remain open until identity installation are finalized in stage 9.
+7. **Establish device-unique material.** Prefer generating or deriving each
+   root and private key inside its final protection boundary. Use distinct keys
+   or explicitly domain-separated derivations for bootstrap, operational
+   authentication, application, attestation, storage, and other roles. Export
+   only public keys, identifiers, endorsements, and fingerprints; check public
+   key uniqueness and obtain fresh PoP for every enrolled asymmetric key.
+   Never retrieve a symmetric device root. If injection is unavoidable, the
+   profile must use a target-bound authenticated confidential channel, account
+   for uniqueness, avoid persistent station copies, and verify erasure of
+   transient copies.
+8. **Enroll and stage credentials.** Bind bootstrap authentication and
+   operational-key PoP to the same transaction digest and fresh nonce. The RA
+   assigns the canonical identity, inventory records the key generation as
+   pending, and the CA returns a constrained certificate recorded as staged.
+   Before installation, verify its issuer, chain, SPKI, SAN, algorithms, basic
+   constraints, key usage, EKU, validity, profile, and transaction binding.
+   Repeating an issuance call with the same idempotency key returns the recorded
+   result rather than creating another certificate.
+9. **Install and finalize.** Atomically install the certificate, validation
+   bundle, public policy metadata, and non-secret inventory identifiers. Only
+   after authenticated enrollment may the workflow deliver separately scoped
+   per-device network or application credentials. Erase one-time bootstrap
+   tokens and transient secret copies, apply final key-access, lifecycle,
+   debug, boot, update, recovery, and storage controls, restart when required,
+   and read back the resulting state. The operational credential remains
+   production-denied.
+10. **Verify and activate.** Prove the installed private key to a controlled
+    endpoint that accepts pending credentials and confirm the expected
+    transaction, logical identity, SPKI, issuer, serial, and key generation.
+    Confirm that production still rejects the pending credential and that an
+    untrusted issuer, substituted key, replayed transcript, or alternate
+    device-supplied identity fails. After every positive and negative check
+    passes, atomically activate the exact device, key generation, and
+    certificate tuple in inventory, then prove production authentication.
+11. **Commit and release.** Export the complete secret-free audit record to its
+    independent destination, reconcile the authoritative inventory and RA
+    result, clear station-local transient data, release the provisioning claim
+    lease, and release the physical device. Successful certificate issuance
+    alone is not completion; the terminal success state is an active credential
+    plus confirmed audit export.
+
+The following sections expand the security requirements that apply across
+those execution stages.
+
+### Preparation requirements
 
 - Create a unique, expiring provisioning transaction containing the expected
   physical asset, intended device class, intended logical ID, approved software
   or configuration, operator identity, and policy version.
-- Pin the provisioning artifact, firmware or software hashes, issuer,
+- Pin the provisioning bundle, firmware or software hashes, issuer,
   validation-bundle version, and tool version.
 - Perform all reversible preflight checks before any one-way key, lifecycle,
   debug, ownership, or boot-policy change.
@@ -281,7 +392,7 @@ names. Other key types require an appropriate PoP mechanism.
   and observed device fingerprint. A broad "provision whichever device is
   attached" operation is not acceptable for irreversible changes.
 
-### 2. Establish initial trust
+### Initial-trust requirements
 
 Provisioning must answer two separate questions even when one protocol supplies
 both answers:
@@ -307,7 +418,7 @@ be explicit. [RFC 8995] describes a standardized voucher-based bootstrap model
 and separates pledge authentication from authorization and pinning of the
 registrar or domain.
 
-### 3. Inspect and generate
+### Inspection and key-generation requirements
 
 - Confirm lifecycle, ownership, debug, boot-policy, rollback, entropy, clock,
   key-slot, and storage state against the device-class policy.
@@ -321,7 +432,7 @@ registrar or domain.
   required, bind its nonce, Evidence, and Attestation Result to that public key
   and the provisioning transaction.
 
-### 4. Authorize and issue
+### Authorization and issuance requirements
 
 - The RA derives the canonical logical identity from the approved transaction
   and inventory policy. It ignores or replaces identity-bearing CSR fields.
@@ -346,7 +457,7 @@ proof of possession, transcript binding, CSR processing, response validation,
 TLS policy, and safe retry behavior. [RFC 7030 updates] lists later
 clarifications and the deprecation of obsolete TLS versions.
 
-### 5. Install, lock, and accept
+### Installation, locking, and acceptance requirements
 
 - Install the operational certificate, controller validation bundle, policy
   metadata, and non-secret inventory identifiers atomically.
@@ -363,7 +474,7 @@ clarifications and the deprecation of obsolete TLS versions.
   every required test succeeds. Until activation, a technically valid
   certificate remains unauthorized.
 
-### 6. Commit an audit record
+### Audit-record requirements
 
 The provisioning record must contain no secret values, but it is not public.
 Stable identifiers, operator identities, versions, and security-state details
@@ -375,8 +486,8 @@ should contain:
   the operational SPKI fingerprint;
 - credential slot, operational key generation, and certificate issuer, serial,
   profile, and validity;
-- exact provisioning artifact, software, firmware, configuration, and tool
-  hashes or versions;
+- exact provisioning bundle, software, firmware, configuration, and tool hashes
+  or versions;
 - observed lifecycle, boot, rollback, debug, signer, and storage-protection
   state;
 - validation-bundle and policy versions;
@@ -392,8 +503,35 @@ does not erase fleet provenance.
 
 ### Retry and abort behavior
 
-Provisioning tracks device lifecycle separately from each credential
-slot's key generations and certificate instances:
+Provisioning records transaction progress separately from device lifecycle and
+from each credential slot's key generations and certificate instances:
+
+```text
+transaction: created -> target_bound -> preflight_passed -> commit_approved
+             -> trust_established -> security_applied -> identity_ready
+             -> credentials_staged -> installed -> verified -> activated
+             -> complete
+
+terminal exceptions: aborted | quarantined
+```
+
+Every stage has a durable `not_started`, `in_progress`, `succeeded`, or `failed`
+record containing its input and output hashes and observed postconditions, but
+no secrets. Every mutation follows the same pattern:
+
+```text
+check exact preconditions -> record intent -> execute once
+-> observe authoritative state -> record evidence and result
+```
+
+The profile identifies the first irreversible effect. Before that boundary, a
+transaction may become `aborted` only after the software proves that the device
+has returned to an allowed reusable baseline and that no pending credential or
+unique secret remains. At or after that boundary, an uncertain, mismatched, or
+partially committed result becomes `quarantined`; it must never be reported as
+unprovisioned again.
+
+The related lifecycle states are:
 
 ```text
 device:      unregistered -> staged -> active <-> quarantined -> retired
@@ -411,13 +549,33 @@ certificate instance:      staged | active | superseded | revoked | expired
   accepted serial. The previous instance becomes superseded, revoked, or
   expired according to policy.
 - A retry with the same transaction and public-key fingerprint returns the
-  recorded result or resumes the next safe step.
-- A retry that observes a different device, key, policy, or irreversible state
-  stops for review.
+  recorded result or resumes the next safe step only after reconciling observed
+  state. A timeout or lost response never authorizes blind repetition.
+- A retry that observes a different device fingerprint, logical-ID binding,
+  public key, policy, artifact, tool version, approval, or irreversible state
+  stops for review and normally quarantines the device.
+- Losing the provisioning claim lease or presenting a stale fence epoch
+  prevents further mutation. If authority is lost during an operation with an
+  uncertain outcome, the station must reconcile state and quarantine when it
+  cannot establish the postcondition.
+- An issued but unverified certificate remains staged and production-denied. If
+  the transaction is abandoned, revoke it or allow it to expire under the
+  documented abandoned-transaction policy.
+- If activation succeeded but the station missed the response, inventory is
+  authoritative. Query it and finish the audit record; do not issue a second
+  certificate or attempt an automatic rollback.
 - A partially provisioned device is quarantined and denied production access;
   it never falls back to a default identity.
 - Reprovisioning cannot silently replace an existing logical device binding.
   It requires an authorized re-enrollment or ownership-transfer operation.
+- Unexpected prior ownership or security state, a public-key collision, failed
+  PoP, a certificate identity or profile mismatch, an unverifiable irreversible
+  operation, a failed post-restart or post-activation check, suspected secret
+  exposure, or missing required audit evidence triggers quarantine.
+- A public-key collision, invalid approved artifact, out-of-policy CA issuance,
+  suspected station compromise, or evidence that secrets entered logs fences
+  the affected lane and, for a fleet-significant failure, the station pending
+  review, rather than failing only the current device.
 
 ## Steady-state authentication
 

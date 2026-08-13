@@ -27,12 +27,17 @@ nix run .#dns-test-driver
 nix develop
 ```
 
-`nix build .#dns-test-report` produces a report even if a functional assertion
-fails. Its `result` output contains HTML, Markdown, JUnit XML, canonical JSON,
-topology diagrams, normalized evidence and zone snapshots, and a SHA-256
-manifest. `nix flake check -L` independently enforces the report schema,
-required functional and security assertions, Go tests, report tests, and NixOS
-module evaluation. The interactive driver is for topology debugging.
+`nix build .#dns-test-report` produces a report even if a functional DNS
+assertion fails. Its `result` output contains HTML, Markdown, JUnit XML,
+canonical DNS and provisioning JSON, topology diagrams, normalized evidence
+and zone snapshots, and a SHA-256 manifest. The local report records native
+x86 provisioning checks and explicitly marks ARM64 as not observed. CI composes
+the native ARM64 result only after binding it to the checked-out source
+revision. Physical Pi 5 qualification remains a separate pending manual gate;
+the automated result never implies authentication, attestation, or permission
+to mutate a device. `nix flake check -L` independently enforces the report
+schemas, required functional and security assertions, Go tests, report tests,
+and NixOS module evaluation. The interactive driver is for topology debugging.
 
 ## Continuous integration
 
@@ -41,12 +46,18 @@ pushes to `main`, and manual dispatches. It separates the test workload into:
 
 - x86 formatting, flake evaluation, Go tests, report and Pages site tests,
   workflow linting, and NixOS module evaluation;
-- native ARM64 builds and tests for all three production binaries; and
-- the complete seven-VM DNS topology with KVM acceleration when available.
+- native ARM64 builds and tests for all four packaged binaries, producing a
+  commit-bound provisioning result; and
+- the complete seven-VM DNS topology with KVM acceleration when available,
+  followed by deterministic composition of both architectures' provisioning
+  results.
 
-The topology job uploads `kaiba-dns-test-report` for 14 days. On pushes or
-manual runs of `main`, it also assembles and publishes the project homepage and
-the latest verified report through the repository's `github-pages` environment.
+The topology job uploads `kaiba-dns-test-report` for 14 days. That artifact now
+contains the DNS topology evidence, automated provisioning checks for x86_64
+and AArch64, and the independent physical-hardware qualification state. On
+pushes or manual runs of `main`, it also assembles and publishes the project
+homepage and the latest verified report through the repository's
+`github-pages` environment.
 The homepage is at the Pages root; the canonical report is at
 `reports/latest/`. Report generation precedes the assertion gates and artifact
 collection/upload runs unconditionally, so a functional or security failure
@@ -97,10 +108,23 @@ Production binaries are built for both `x86_64-linux` and `aarch64-linux`:
 - `kaiba-agent`
 - `kaiba-controller`
 - `kaiba-publisher`
+- `kaiba-provision`
+
+`kaiba-provision probe` is an experimental, non-persistent Raspberry Pi 5
+preflight slice. It can normalize imported OTP metadata or acquire it from one
+lane-bound Pi 5 Model B using a digest-pinned metadata-only recovery bundle.
+Its result is correlation and partial preflight evidence, never authentication,
+attestation, or permission to mutate a target. See the
+[Raspberry Pi 5 provisioning probe](docs/raspberry-pi-5-provisioning-probe.md)
+for the safety boundary, station setup, command contract, and required hardware
+qualification.
 
 Reusable NixOS modules cover the device agent, update services, hidden P0,
 hidden P1, and public-secondary role. The seven-VM QEMU topology and interactive
 lab are `x86_64-linux` outputs.
 
-See [the architecture notes](docs/architecture.md) for trust boundaries,
-failure semantics, and intentionally deferred work.
+See [the architecture notes](docs/architecture.md), the
+[device identity lifecycle](docs/device-identity.md), and the
+[provisioning station design](docs/provisioning-station.md) for trust
+boundaries, credential and provisioning requirements, failure semantics, and
+intentionally deferred work.

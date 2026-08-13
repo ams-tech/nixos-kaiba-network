@@ -2,6 +2,7 @@
   pkgs,
   lib,
   kaibaPackage,
+  kaibaProvisionPackage,
   kaibaModules,
 }:
 
@@ -133,6 +134,26 @@ let
     };
   };
 
+  provisioningProbe = {
+    users.users.provisioner.isNormalUser = true;
+    services.kaiba-provisioning-probe = {
+      enable = true;
+      package = kaibaProvisionPackage;
+      operators = [ "provisioner" ];
+    };
+  };
+
+  provisioningProbeDefaultPackage = {
+    services.kaiba-provisioning-probe.enable = true;
+  };
+
+  duplicateProbeOperators = lib.recursiveUpdate provisioningProbe {
+    services.kaiba-provisioning-probe.operators = [
+      "provisioner"
+      "provisioner"
+    ];
+  };
+
   recursionViolation = lib.recursiveUpdate primary {
     kaiba.dns.recursion = true;
   };
@@ -156,6 +177,9 @@ let
   };
 
   applicationConfig = evaluateConfig applicationServices;
+  probeConfig = evaluateConfig provisioningProbe;
+  defaultProbeConfig = evaluateConfig provisioningProbeDefaultPackage;
+  disabledProbeConfig = evaluateConfig { };
   controllerService = applicationConfig.systemd.services.kaiba-controller.serviceConfig;
   publisherService = applicationConfig.systemd.services.kaiba-publisher.serviceConfig;
   controllerUnit = applicationConfig.systemd.services.kaiba-controller;
@@ -194,6 +218,16 @@ let
         "z /var/lib/kaiba-controller/desired-state.db-shm 0660 kaiba-controller kaiba-state - -"
       ];
 
+  probeBoundary =
+    probeConfig.users.groups ? kaiba-provision
+    && builtins.elem "kaiba-provision" probeConfig.users.users.provisioner.extraGroups
+    && builtins.elem kaibaProvisionPackage probeConfig.environment.systemPackages
+    && builtins.elem kaibaProvisionPackage defaultProbeConfig.environment.systemPackages
+    && !disabledProbeConfig.services.kaiba-provisioning-probe.enable
+    && !(disabledProbeConfig.users.groups ? kaiba-provision)
+    && lib.hasInfix ''SUBSYSTEM=="usb", ATTR{idVendor}=="0a5c", ATTR{idProduct}=="2712", MODE="0660", GROUP="kaiba-provision"'' probeConfig.services.udev.extraRules
+    && !(lib.hasInfix ''ATTR{idVendor}=="0a5c", MODE="0660"'' probeConfig.services.udev.extraRules);
+
   invalidRejected = !assertionsPass recursionViolation;
 in
 assert lib.assertMsg (assertionsPass primary) (builtins.toJSON (failedMessages primary));
@@ -204,6 +238,12 @@ assert lib.assertMsg (assertionsPass publicSecondary) (
 assert lib.assertMsg (assertionsPass applicationServices) (
   builtins.toJSON (failedMessages applicationServices)
 );
+assert lib.assertMsg (assertionsPass provisioningProbe) (
+  builtins.toJSON (failedMessages provisioningProbe)
+);
+assert lib.assertMsg (
+  !assertionsPass duplicateProbeOperators
+) "duplicate probe operators were accepted";
 assert invalidRejected;
 assert lib.assertMsg (!assertionsPass singleObserver) "one observation endpoint was accepted";
 assert lib.assertMsg (
@@ -212,6 +252,8 @@ assert lib.assertMsg (
 assert lib.assertMsg (!assertionsPass emptyObserver) "an empty observation endpoint was accepted";
 assert lib.assertMsg serviceBoundary "controller/publisher service boundary is not enforced";
 assert lib.assertMsg sqlitePermissionPreparation "SQLite shared-file modes are not prepared";
+assert lib.assertMsg probeBoundary
+  "provisioning probe package, group, or narrow udev boundary is not enforced";
 pkgs.runCommand "kaiba-module-evaluation" { } ''
   mkdir -p "$out"
   printf '%s\n' \
@@ -219,6 +261,8 @@ pkgs.runCommand "kaiba-module-evaluation" { } ''
     'standby: pass' \
     'public-secondary: pass' \
     'application-services: pass' \
+    'provisioning-probe-module: pass' \
+    'provisioning-probe-usb-boundary: pass' \
     'controller-publisher-uid-and-state-boundary: pass' \
     'sqlite-main-wal-shm-permissions-prepared: pass' \
     'two-distinct-nonempty-observers-required: pass' \

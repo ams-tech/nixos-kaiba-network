@@ -55,7 +55,7 @@
             <p class="eyebrow">Executable DNS control-plane pilot</p>
             <a class="report-signal" id="report-link" href="./reports/latest/">
               <span class="signal-light" id="report-signal" aria-hidden="true"></span>
-              <span id="report-signal-text">Latest report available</span>
+              <span id="report-signal-text">Latest DNS report available</span>
             </a>
           </div>
 
@@ -262,9 +262,10 @@
           <h2 id="validation-title">Every exercised claim has evidence.</h2>
           <p>
             The latest main-branch run exercises seven isolated, dual-stack NixOS VMs under
-            <code>kaiba.test</code>. The report includes assertion results, normalized evidence, DNS
-            answers, zone snapshots, topology diagrams, JUnit XML, canonical JSON, and a SHA-256
-            manifest.
+            <code>kaiba.test</code> and reports automated provisioning-probe checks built from
+            deterministic fixtures and injected fakes. The report includes assertion results,
+            normalized evidence, DNS answers, provisioning check results, zone snapshots,
+            topology diagrams, JUnit XML, canonical JSON, and a SHA-256 manifest.
           </p>
 
           <div class="validation-groups">
@@ -280,12 +281,16 @@
               <span>FAILURE</span>
               <p>outages, bootstrap, reconvergence, lease expiry</p>
             </div>
+            <div>
+              <span>PROVISIONING</span>
+              <p>profile policy, metadata parsing, acquisition safety, CLI, and packaging</p>
+            </div>
           </div>
         </div>
 
         <aside class="report-card" aria-labelledby="report-card-title">
           <div class="report-card-topline">
-            <span>MAIN / LATEST</span>
+            <span>DNS / MAIN / LATEST</span>
             <span
               class="report-card-state is-unavailable"
               id="report-status"
@@ -295,9 +300,9 @@
               Open report for status
             </span>
           </div>
-          <h3 id="report-card-title">Canonical DNS test report</h3>
+          <h3 id="report-card-title">Canonical test report</h3>
           <p id="report-summary">
-            Open the report directly to inspect every assertion and its recorded evidence.
+            Open the report directly to inspect every DNS assertion and its recorded evidence.
           </p>
 
           <dl class="report-metrics">
@@ -315,6 +320,38 @@
             </div>
           </dl>
 
+          <div class="provisioning-statuses" aria-labelledby="provisioning-status-title">
+            <h4 id="provisioning-status-title">Provisioning probe</h4>
+            <p>
+              Automated checks exercise software and simulated acquisition only. They do not
+              authenticate or attest a device, authorize mutation, or replace hardware
+              qualification.
+            </p>
+            <dl>
+              <div>
+                <dt>Automated checks</dt>
+                <dd
+                  class="provisioning-state is-unavailable"
+                  id="provisioning-automated-status"
+                  role="status"
+                  aria-live="polite"
+                >STATUS UNAVAILABLE</dd>
+              </div>
+              <div>
+                <dt>Manual hardware gate</dt>
+                <dd
+                  class="provisioning-state is-unavailable"
+                  id="provisioning-hardware-status"
+                  role="status"
+                  aria-live="polite"
+                >STATUS UNAVAILABLE</dd>
+              </div>
+            </dl>
+            <p id="provisioning-summary">
+              Open the report for the automated scope and physical qualification status.
+            </p>
+          </div>
+
           <a class="button button-primary button-full" href="./reports/latest/">
             Open latest main-branch report
             <span aria-hidden="true">↗</span>
@@ -324,6 +361,7 @@
             <a href="./reports/latest/index.md">Markdown</a>
             <a href="./reports/latest/junit.xml">JUnit XML</a>
             <a href="./reports/latest/result.json">Canonical JSON</a>
+            <a href="./reports/latest/provisioning.json">Provisioning JSON</a>
             <a href="./reports/latest/manifest.sha256">Manifest</a>
           </div>
 

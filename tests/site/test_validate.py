@@ -54,6 +54,10 @@ class SiteValidationTests(unittest.TestCase):
                 str(FIXTURES / "zones"),
                 "--topology",
                 str(REPOSITORY / "tests" / "topology.json"),
+                "--provisioning",
+                str(FIXTURES / "provisioning.json"),
+                "--provisioning-schema",
+                str(REPORT / "provisioning.schema.json"),
                 "--output",
                 str(output),
             ],
@@ -75,13 +79,153 @@ class SiteValidationTests(unittest.TestCase):
             status = validate.main([str(root)])
         return status, output.getvalue()
 
+    def execute_homepage_script(self, *, dns_available: bool = True) -> dict[str, object]:
+        dns = json.loads((FIXTURES / "result.json").read_text(encoding="utf-8"))
+        provisioning = json.loads((FIXTURES / "provisioning.json").read_text(encoding="utf-8"))
+        script = r"""
+const fs = require("fs");
+class ClassList {
+  constructor() { this.values = new Set(); }
+  add(value) { this.values.add(value); }
+  remove(value) { this.values.delete(value); }
+}
+const ids = [
+  "report-link",
+  "report-signal",
+  "report-signal-text",
+  "report-status",
+  "report-summary",
+  "report-assertions",
+  "provisioning-automated-status",
+  "provisioning-hardware-status",
+  "provisioning-summary",
+];
+const elements = new Map(ids.map((id) => [id, { classList: new ClassList(), textContent: "" }]));
+elements.get("report-link").href = "https://example.invalid/reports/latest/";
+global.document = { querySelector: (selector) => elements.get(selector.slice(1)) };
+const dns = JSON.parse(process.argv[2]);
+const provisioning = JSON.parse(process.argv[3]);
+const dnsAvailable = process.argv[4] === "true";
+const fetched = [];
+global.fetch = (url) => {
+  const value = String(url);
+  fetched.push(value);
+  const isProvisioning = value.endsWith("/provisioning.json");
+  return Promise.resolve({
+    ok: isProvisioning || dnsAvailable,
+    json: () => Promise.resolve(isProvisioning ? provisioning : dns),
+  });
+};
+eval(fs.readFileSync(process.argv[1], "utf8"));
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({
+    fetched,
+    dnsSignal: elements.get("report-signal-text").textContent,
+    dnsStatus: elements.get("report-status").textContent,
+    automatedStatus: elements.get("provisioning-automated-status").textContent,
+    hardwareStatus: elements.get("provisioning-hardware-status").textContent,
+    provisioningSummary: elements.get("provisioning-summary").textContent,
+  }));
+}, 0);
+"""
+        completed = subprocess.run(
+            [
+                "node",
+                "-e",
+                script,
+                str(SITE / "site.js"),
+                json.dumps(dns),
+                json.dumps(provisioning),
+                str(dns_available).lower(),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        return json.loads(completed.stdout)
+
     def test_complete_project_site_is_valid(self) -> None:
         status, output = self.validation_result(self.assemble_site())
         self.assertEqual(0, status, output)
 
+    def test_homepage_keeps_dns_and_provisioning_status_separate(self) -> None:
+        result = self.execute_homepage_script(dns_available=False)
+        self.assertEqual("DNS report status unavailable", result["dnsSignal"])
+        self.assertEqual("STATUS UNAVAILABLE", result["dnsStatus"])
+        self.assertEqual("PARTIAL (2 / 3)", result["automatedStatus"])
+        self.assertEqual("PENDING — MANUAL", result["hardwareStatus"])
+        self.assertIn("not run in CI", result["provisioningSummary"])
+        self.assertEqual(
+            [
+                "https://example.invalid/reports/latest/result.json",
+                "https://example.invalid/reports/latest/provisioning.json",
+            ],
+            result["fetched"],
+        )
+
     def test_well_formed_failed_report_is_valid(self) -> None:
         status, output = self.validation_result(self.assemble_site(failed=True))
         self.assertEqual(0, status, output)
+
+    def test_missing_provisioning_result_is_rejected(self) -> None:
+        root = self.assemble_site()
+        provisioning = root / "reports" / "latest" / "provisioning.json"
+        provisioning.unlink()
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("missing required file: reports/latest/provisioning.json", output)
+        self.assertIn("report manifest names absent files: provisioning.json", output)
+
+    def test_inconsistent_provisioning_overall_is_rejected(self) -> None:
+        root = self.assemble_site()
+        provisioning = root / "reports" / "latest" / "provisioning.json"
+        result = json.loads(provisioning.read_text(encoding="utf-8"))
+        result["automated"]["overall"] = "failed"
+        provisioning.write_text(json.dumps(result), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("automated overall must be", output)
+
+    def test_malformed_hardware_qualification_status_is_rejected(self) -> None:
+        root = self.assemble_site()
+        provisioning = root / "reports" / "latest" / "provisioning.json"
+        result = json.loads(provisioning.read_text(encoding="utf-8"))
+        result["hardware_qualification"]["status"] = "not-run"
+        provisioning.write_text(json.dumps(result), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("malformed hardware qualification status", output)
+
+    def test_duplicate_provisioning_check_pair_is_rejected(self) -> None:
+        root = self.assemble_site()
+        provisioning = root / "reports" / "latest" / "provisioning.json"
+        result = json.loads(provisioning.read_text(encoding="utf-8"))
+        result["automated"]["checks"].append(result["automated"]["checks"][0])
+        provisioning.write_text(json.dumps(result), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("duplicate automated system/check pairs", output)
+
+    def test_provisioning_status_must_be_accessible(self) -> None:
+        root = self.assemble_site()
+        index = root / "index.html"
+        index.chmod(index.stat().st_mode | 0o200)
+        index.write_text(
+            index.read_text(encoding="utf-8").replace(
+                'id="provisioning-hardware-status"\n                  role="status"\n                  aria-live="polite"',
+                'id="provisioning-hardware-status"',
+            ),
+            encoding="utf-8",
+        )
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("provisioning-hardware-status", output)
 
     def test_protocol_relative_reference_is_rejected(self) -> None:
         root = self.assemble_site()
