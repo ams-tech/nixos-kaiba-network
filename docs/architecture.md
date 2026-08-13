@@ -133,6 +133,20 @@ implements only target observation and partial baseline evaluation: it has no
 transaction coordinator, mutation authority, key handling, enrollment, or
 activation path.
 
+The [provisioning-station interface demo](provisioning-station-kiosk.md) is a
+separate loopback-only mock operator UI. Its service has no raw USB privilege
+and does not connect the interface to the probe or implement any of the missing
+production authorities.
+
+The public GitHub Pages station simulation and the loopback service share the
+same interface assets and transport implementation. Pages uses an in-memory
+finite graph generated from the authoritative Go mock state machine; the local
+service uses the HTTP mode of that same transport. Exhaustive transition tests
+and byte comparisons prevent a separately maintained browser workflow or UI
+from drifting from the station build. This is interface and simulated-workflow
+parity, not an implementation of the future production orchestrator or its
+hardware and authorization boundaries.
+
 Deferred, rather than exercised: real Namecheap or provider changes and SLAs,
 Internet/ISP/modem/NAT behavior, outside-in probes, public ACME, DNSSEC,
 automatic promotion or fencing, redundant controllers or replicated desired

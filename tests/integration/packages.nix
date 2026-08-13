@@ -4,6 +4,7 @@
   kaibaPackage,
   kaibaModules,
   provisioningTestResult,
+  stationPages,
 }:
 
 let
@@ -103,6 +104,7 @@ let
       ''
         set -eu
         export PYTHONDONTWRITEBYTECODE=1
+        export KAIBA_STATION_PAGES=${stationPages}
         cd ${../..}
         node --check site/site.js
         python3 -m unittest discover -s tests/report -p 'test_*.py' -v

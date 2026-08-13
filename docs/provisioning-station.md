@@ -22,7 +22,10 @@ This remains the target design rather than a complete implemented station. The
 experimental [Raspberry Pi 5 provisioning probe](raspberry-pi-5-provisioning-probe.md)
 implements one deliberately non-persistent adapter slice: target observation
 and partial unprovisioned-baseline evaluation. It cannot authorize or perform a
-device mutation.
+device mutation. The separate
+[provisioning-station interface demo](provisioning-station-kiosk.md) renders
+mock operator states on a loopback-only service; it has no probe or target
+privilege and is not an implementation of the production station components.
 
 ## Objectives and invariants
 

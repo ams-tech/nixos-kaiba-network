@@ -8,5 +8,6 @@
     ./hidden-standby.nix
     ./public-secondary.nix
     ./provisioning-probe.nix
+    ./provisioning-station-demo.nix
   ];
 }

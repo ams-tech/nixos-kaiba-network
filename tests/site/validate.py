@@ -23,6 +23,12 @@ REQUIRED_PATHS = (
     "index.html",
     "styles.css",
     "site.js",
+    "provisioning-demo/index.html",
+    "provisioning-demo/styles.css",
+    "provisioning-demo/transport.js",
+    "provisioning-demo/app.js",
+    "provisioning-demo/runtime-config.json",
+    "provisioning-demo/workflow-graph.json",
     "reports/latest/index.html",
     "reports/latest/result.json",
     "reports/latest/provisioning.json",
@@ -268,6 +274,107 @@ def validate_homepage(root: Path, parser: PageParser, errors: list[str]) -> None
         for reference in parser.references
     ):
         errors.append("index.html: direct provisioning result link is required")
+    if not any(
+        urlsplit(reference).path in {"provisioning-demo/", "./provisioning-demo/"}
+        for reference in parser.references
+    ):
+        errors.append("index.html: direct provisioning-demo/ link is required")
+
+
+def validate_station_demo(root: Path, errors: list[str]) -> None:
+    demo_root = root / "provisioning-demo"
+    config_path = demo_root / "runtime-config.json"
+    graph_path = demo_root / "workflow-graph.json"
+    if not config_path.is_file() or not graph_path.is_file():
+        return
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        errors.append(f"provisioning-demo/runtime-config.json: cannot parse JSON: {exc}")
+        return
+    expected_config = {
+        "schema_version": "provisioning.kaiba.network/station-demo-runtime/v1alpha1",
+        "mode": "transition-graph",
+        "graph_url": "./workflow-graph.json",
+    }
+    if config != expected_config:
+        errors.append("provisioning-demo/runtime-config.json: unexpected Pages runtime configuration")
+
+    try:
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        errors.append(f"provisioning-demo/workflow-graph.json: cannot parse JSON: {exc}")
+        return
+    if not isinstance(graph, dict) or set(graph) != {
+        "schema_version",
+        "state_schema_version",
+        "default_node",
+        "nodes",
+    }:
+        errors.append("provisioning-demo/workflow-graph.json: malformed top-level fields")
+        return
+    if graph.get("schema_version") != "provisioning.kaiba.network/station-demo-transition-graph/v1alpha1":
+        errors.append("provisioning-demo/workflow-graph.json: unsupported graph schema")
+    if graph.get("state_schema_version") != "provisioning.kaiba.network/station-demo-state/v1alpha1":
+        errors.append("provisioning-demo/workflow-graph.json: unsupported state schema")
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, dict) or not nodes or len(nodes) > 512 or graph.get("default_node") not in nodes:
+        errors.append("provisioning-demo/workflow-graph.json: invalid nodes or default node")
+        return
+
+    node_id_pattern = re.compile(r"^sha256:[0-9a-f]{64}$")
+    for node_id, node in nodes.items():
+        label = f"provisioning-demo/workflow-graph.json: node {node_id!r}"
+        if not isinstance(node_id, str) or not node_id_pattern.fullmatch(node_id):
+            errors.append(f"{label} has a malformed identifier")
+            continue
+        if not isinstance(node, dict) or set(node) != {"state", "transitions"}:
+            errors.append(f"{label} has malformed fields")
+            continue
+        state = node.get("state")
+        transitions = node.get("transitions")
+        if not isinstance(state, dict) or not isinstance(transitions, dict):
+            errors.append(f"{label} has malformed state or transitions")
+            continue
+        safety = state.get("safety")
+        if (
+            state.get("schema_version") != graph.get("state_schema_version")
+            or state.get("revision") != 0
+            or state.get("simulation") is not True
+            or not isinstance(safety, dict)
+            or safety.get("simulation") is not True
+            or safety.get("mutation_eligible") is not False
+            or safety.get("full_unprovisioned_state") != "not_established"
+        ):
+            errors.append(f"{label} violates the simulation safety contract")
+        probes = state.get("probes")
+        if not isinstance(probes, list) or any(
+            not isinstance(probe, dict)
+            or not isinstance(probe.get("assessment"), dict)
+            or probe["assessment"].get("mutation_eligible") is not False
+            or probe["assessment"].get("full_unprovisioned_state") != "not_established"
+            for probe in probes
+        ):
+            errors.append(f"{label} contains an unsafe probe assessment")
+        export = state.get("export_record")
+        if export is not None and (
+            not isinstance(export, dict)
+            or export.get("simulation") is not True
+            or export.get("mutation_eligible") is not False
+            or export.get("full_unprovisioned_state") != "not_established"
+        ):
+            errors.append(f"{label} contains an unsafe export record")
+        actions = state.get("allowed_actions")
+        if (
+            not isinstance(actions, list)
+            or any(not isinstance(action, str) or not action for action in actions)
+            or len(actions) != len(set(actions))
+            or set(transitions) != set(actions)
+        ):
+            errors.append(f"{label} does not exactly map its allowed actions")
+            continue
+        if any(not isinstance(target, str) or target not in nodes for target in transitions.values()):
+            errors.append(f"{label} references a missing transition target")
 
 
 def validate_result(root: Path, errors: list[str]) -> None:
@@ -435,6 +542,7 @@ def main(argv: list[str] | None = None) -> int:
     validate_references(root, pages, errors)
     validate_result(root, errors)
     validate_provisioning(root, errors)
+    validate_station_demo(root, errors)
 
     if errors:
         for error in errors:
