@@ -8,7 +8,7 @@
     let
       lib = nixpkgs.lib;
       repositoryRoot = self.sourceInfo.outPath;
-      moduleRoot = "${repositoryRoot}/provisioning";
+      moduleRoot = ../../provisioning;
       systems = [
         "x86_64-linux"
         "aarch64-linux"

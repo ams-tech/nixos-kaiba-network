@@ -6,7 +6,9 @@
 
 let
   version = "0.1.0";
-  goSource = lib.cleanSource moduleRoot;
+  # Flake Git sources are already clean. Filtering this store-backed subpath a
+  # second time can leave an unmaterialized source path under lazy-tree Nix.
+  goSource = moduleRoot;
 
   # Keep the audited recovery firmware on the frozen Nixpkgs source while
   # backporting only the two upstream host-tool commits that make metadata
