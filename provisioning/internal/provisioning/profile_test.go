@@ -37,11 +37,40 @@ func TestParseProfile(t *testing.T) {
 	if got, want := profile.Digest, "sha256:"+hex.EncodeToString(wantDigest[:]); got != want {
 		t.Fatalf("Digest = %q, want %q", got, want)
 	}
+	if !strings.HasPrefix(profile.PolicyDigest, "sha256:") || len(profile.PolicyDigest) != len("sha256:")+64 {
+		t.Fatalf("PolicyDigest = %q", profile.PolicyDigest)
+	}
 	if got, want := profile.Metadata.ID, "rpi5-model-b"; got != want {
 		t.Fatalf("Metadata.ID = %q, want %q", got, want)
 	}
 	if got, want := profile.Spec.BaselineConditions[1].Operator, OperatorPresent; got != want {
 		t.Fatalf("operator = %q, want %q", got, want)
+	}
+}
+
+func TestPolicyDigestIgnoresFormattingAndStatusButNotPolicy(t *testing.T) {
+	experimental, err := ParseProfile([]byte(validProfileJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stableJSON := strings.Replace(validProfileJSON, `"status": "experimental"`, `"status": "stable"`, 1)
+	stable, err := ParseProfile([]byte(" \n" + stableJSON + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if experimental.Digest == stable.Digest {
+		t.Fatal("exact profile digest did not change")
+	}
+	if experimental.PolicyDigest != stable.PolicyDigest {
+		t.Fatalf("status-only promotion changed policy digest: %q != %q", experimental.PolicyDigest, stable.PolicyDigest)
+	}
+	changedJSON := strings.Replace(validProfileJSON, `"value": "23"`, `"value": "24"`, 1)
+	changed, err := ParseProfile([]byte(changedJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if experimental.PolicyDigest == changed.PolicyDigest {
+		t.Fatal("substantive policy change did not change policy digest")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -23,7 +24,9 @@ const (
 	exitEvidence        = 3
 	exitDeviceClass     = 4
 	exitBaseline        = 5
-	resultSchemaVersion = "provisioning.kaiba.network/target-observation/v1alpha1"
+	exitQualification   = 6
+	exitIncomplete      = 7
+	resultSchemaVersion = rpi5.ProbeResultSchemaVersion
 )
 
 // These paths are deliberately populated by the Nix build. They are not
@@ -33,6 +36,7 @@ var (
 	rpibootPath       string
 	probeBundlePath   string
 	probeManifestPath string
+	buildSystem       string
 )
 
 type dependencies struct {
@@ -40,26 +44,9 @@ type dependencies struct {
 	liveSource func() rpi5.EvidenceSource
 }
 
-type profileReference struct {
-	ID     string                     `json:"id"`
-	Status provisioning.ProfileStatus `json:"status"`
-	Digest string                     `json:"digest"`
-}
-
-type adapterReference struct {
-	ID      string `json:"id"`
-	Version string `json:"version"`
-}
-
-type probeResult struct {
-	SchemaVersion string                  `json:"schema_version"`
-	ObservedAt    time.Time               `json:"observed_at"`
-	Profile       profileReference        `json:"profile"`
-	Adapter       adapterReference        `json:"adapter"`
-	Source        rpi5.Provenance         `json:"source"`
-	Observation   rpi5.Observation        `json:"observation"`
-	Assessment    provisioning.Assessment `json:"assessment"`
-}
+type profileReference = rpi5.ProfileReference
+type adapterReference = rpi5.AdapterReference
+type probeResult = rpi5.ProbeResult
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -81,10 +68,27 @@ func productionDependencies() dependencies {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, deps dependencies) int {
-	if len(args) == 0 || args[0] != "probe" {
-		fmt.Fprintln(stderr, "usage: kaiba-provision probe --profile FILE (--metadata FILE|- | --lane-id ID --usb-path PATH)")
+	if len(args) == 0 {
+		printUsage(stderr)
 		return exitUsageOrProfile
 	}
+	switch args[0] {
+	case "probe":
+		return runProbe(ctx, args, stdin, stdout, stderr, deps)
+	case "qualify":
+		return runQualify(args, stdout, stderr)
+	default:
+		printUsage(stderr)
+		return exitUsageOrProfile
+	}
+}
+
+func printUsage(output io.Writer) {
+	fmt.Fprintln(output, "usage: kaiba-provision probe --profile FILE (--metadata FILE|- | --lane-id ID --usb-path PATH)")
+	fmt.Fprintln(output, "       kaiba-provision qualify --profile FILE --first-result FILE --second-result FILE --source-revision HEX --system-closure /nix/store/PATH --power-cycle-confirmation complete --pre-probe-normal-boot confirmed --normal-boot-confirmation pending|unchanged|failed")
+}
+
+func runProbe(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, deps dependencies) int {
 	if deps.now == nil || deps.liveSource == nil {
 		fmt.Fprintln(stderr, "internal error: command dependencies are unavailable")
 		return exitInternal
@@ -169,9 +173,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		SchemaVersion: resultSchemaVersion,
 		ObservedAt:    deps.now().UTC(),
 		Profile: profileReference{
-			ID:     profile.Metadata.ID,
-			Status: profile.Metadata.Status,
-			Digest: profile.Digest,
+			ID:           profile.Metadata.ID,
+			Status:       profile.Metadata.Status,
+			Digest:       profile.Digest,
+			PolicyDigest: profile.PolicyDigest,
 		},
 		Adapter: adapterReference{
 			ID:      observation.AdapterID,
@@ -195,6 +200,115 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitBaseline
 	}
 	return exitOK
+}
+
+func runQualify(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("kaiba-provision qualify", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, "usage: kaiba-provision qualify --profile FILE --first-result FILE --second-result FILE --source-revision HEX --system-closure /nix/store/PATH --power-cycle-confirmation complete --pre-probe-normal-boot confirmed --normal-boot-confirmation pending|unchanged|failed")
+	}
+	profilePath := flags.String("profile", "", "device-class profile JSON file used for both probes")
+	firstPath := flags.String("first-result", "", "private JSON result from the first live probe")
+	secondPath := flags.String("second-result", "", "private JSON result from the second live probe")
+	sourceRevision := flags.String("source-revision", "", "exact lowercase 40- or 64-hex Git revision")
+	systemClosure := flags.String("system-closure", "", "exact NixOS system closure store path")
+	powerCycle := flags.String("power-cycle-confirmation", "", "operator confirmation: complete")
+	preProbeBoot := flags.String("pre-probe-normal-boot", "", "operator confirmation: confirmed")
+	normalBoot := flags.String("normal-boot-confirmation", "", "operator result: pending, unchanged, or failed")
+	if err := flags.Parse(args[1:]); err != nil {
+		return exitUsageOrProfile
+	}
+	if flags.NArg() != 0 || *profilePath == "" || *firstPath == "" || *secondPath == "" ||
+		*sourceRevision == "" || *systemClosure == "" || *powerCycle == "" || *preProbeBoot == "" || *normalBoot == "" {
+		flags.Usage()
+		return exitUsageOrProfile
+	}
+	if *firstPath == *secondPath {
+		fmt.Fprintln(stderr, "qualification requires two different private result files")
+		return exitUsageOrProfile
+	}
+	if *powerCycle != "complete" || *preProbeBoot != "confirmed" || (*normalBoot != "pending" && *normalBoot != "unchanged" && *normalBoot != "failed") {
+		fmt.Fprintln(stderr, "qualification confirmations must be: power cycle complete, pre-probe normal boot confirmed, and normal boot pending, unchanged, or failed")
+		return exitUsageOrProfile
+	}
+
+	context := rpi5.QualificationContext{
+		SourceRevision:           *sourceRevision,
+		StationSystem:            qualificationStationSystem(),
+		NixSystemClosure:         *systemClosure,
+		PowerCycleConfirmation:   rpi5.PowerCycleOperatorConfirmed,
+		PreProbeBootConfirmation: rpi5.PreProbeBootOperatorConfirmed,
+		NormalBootConfirmation:   rpi5.NormalBootUnchanged,
+	}
+	if *normalBoot == "failed" {
+		context.NormalBootConfirmation = rpi5.NormalBootFailed
+	} else if *normalBoot == "pending" {
+		context.NormalBootConfirmation = rpi5.NormalBootPending
+	}
+	if err := rpi5.ValidateQualificationContext(context); err != nil {
+		fmt.Fprintf(stderr, "invalid qualification context: %v\n", err)
+		return exitUsageOrProfile
+	}
+
+	profileFile, err := os.Open(*profilePath)
+	if err != nil {
+		fmt.Fprintf(stderr, "load profile: %v\n", err)
+		return exitUsageOrProfile
+	}
+	profile, profileErr := provisioning.LoadProfile(profileFile)
+	closeErr := profileFile.Close()
+	if profileErr != nil {
+		fmt.Fprintf(stderr, "load profile: %v\n", profileErr)
+		return exitUsageOrProfile
+	}
+	if closeErr != nil {
+		fmt.Fprintf(stderr, "load profile: %v\n", closeErr)
+		return exitUsageOrProfile
+	}
+	first, err := rpi5.LoadProbeResult(*firstPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "load first probe result: %v\n", err)
+		return exitEvidence
+	}
+	second, err := rpi5.LoadProbeResult(*secondPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "load second probe result: %v\n", err)
+		return exitEvidence
+	}
+	record, err := rpi5.BuildQualificationRecord(profile, first, second, context)
+	if err != nil {
+		fmt.Fprintf(stderr, "qualify hardware: %v\n", err)
+		return exitEvidence
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(record); err != nil {
+		fmt.Fprintf(stderr, "encode qualification record: %v\n", err)
+		return exitInternal
+	}
+	if record.Status != rpi5.QualificationStatusPassed {
+		if record.Status == rpi5.QualificationStatusIncomplete {
+			return exitIncomplete
+		}
+		return exitQualification
+	}
+	return exitOK
+}
+
+func qualificationStationSystem() string {
+	if buildSystem != "" {
+		return buildSystem
+	}
+	switch runtime.GOOS + "/" + runtime.GOARCH {
+	case "linux/amd64":
+		return "x86_64-linux"
+	case "linux/arm64":
+		return "aarch64-linux"
+	default:
+		return ""
+	}
 }
 
 func readMetadata(path string, stdin io.Reader) ([]byte, error) {

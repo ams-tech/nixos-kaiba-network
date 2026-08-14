@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.network/schemas/rpi5-hardware-qualification-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 hardware qualification record v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_revision",
+    "station_system",
+    "nix_system_closure_digest",
+    "profile",
+    "adapter",
+    "source",
+    "probes",
+    "comparisons",
+    "power_cycle_confirmation",
+    "pre_probe_normal_boot_confirmation",
+    "normal_boot_confirmation",
+    "status",
+    "quarantine_required",
+    "findings",
+    "mutation_eligible",
+    "full_unprovisioned_state",
+    "disclaimer"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "provisioning.kaiba.network/rpi5-hardware-qualification/v1alpha1"
+    },
+    "source_revision": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "station_system": { "enum": ["x86_64-linux", "aarch64-linux"] },
+    "nix_system_closure_digest": { "$ref": "#/$defs/digest" },
+    "profile": { "$ref": "#/$defs/profile" },
+    "adapter": { "$ref": "#/$defs/adapter" },
+    "source": { "$ref": "#/$defs/source" },
+    "probes": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/probe" },
+            { "properties": { "sequence": { "const": 1 } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/probe" },
+            { "properties": { "sequence": { "const": 2 } } }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "comparisons": {
+      "type": "array",
+      "minItems": 15,
+      "maxItems": 15,
+      "prefixItems": [
+        { "$ref": "#/$defs/comparison-target-fingerprint" },
+        { "$ref": "#/$defs/comparison-user-serial" },
+        { "$ref": "#/$defs/comparison-factory-uuid" },
+        { "$ref": "#/$defs/comparison-board-revision" },
+        { "$ref": "#/$defs/comparison-board-attributes" },
+        { "$ref": "#/$defs/comparison-ethernet-mac" },
+        { "$ref": "#/$defs/comparison-wifi-mac" },
+        { "$ref": "#/$defs/comparison-bluetooth-mac" },
+        { "$ref": "#/$defs/comparison-boot-rom" },
+        { "$ref": "#/$defs/comparison-eeprom-hash" },
+        { "$ref": "#/$defs/comparison-customer-key-hash" },
+        { "$ref": "#/$defs/comparison-customer-key-state" },
+        { "$ref": "#/$defs/comparison-videocore-jtag-locked" },
+        { "$ref": "#/$defs/comparison-signature-mode" },
+        { "$ref": "#/$defs/comparison-advanced-boot" }
+      ],
+      "items": false
+    },
+    "power_cycle_confirmation": { "const": "operator_confirmed_complete" },
+    "pre_probe_normal_boot_confirmation": { "const": "operator_confirmed_normal" },
+    "normal_boot_confirmation": {
+      "enum": ["not_yet_observed", "operator_confirmed_unchanged", "operator_confirmed_failed"]
+    },
+    "status": { "enum": ["incomplete", "passed", "failed"] },
+    "quarantine_required": { "type": "boolean" },
+    "findings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "advanced-boot-changed",
+          "bluetooth-mac-changed",
+          "board-attributes-changed",
+          "board-revision-changed",
+          "boot-rom-changed",
+          "customer-key-hash-changed",
+          "customer-key-state-changed",
+          "eeprom-hash-changed",
+          "ethernet-mac-changed",
+          "factory-uuid-changed",
+          "normal-boot-failed",
+          "signature-mode-changed",
+          "target-fingerprint-changed",
+          "user-serial-changed",
+          "videocore-jtag-locked-changed",
+          "wifi-mac-changed"
+        ]
+      }
+    },
+    "mutation_eligible": { "const": false },
+    "full_unprovisioned_state": { "const": "not_established" },
+    "disclaimer": {
+      "const": "This observation is correlation and partial preflight evidence; it is not device authentication or attestation and does not authorize irreversible provisioning."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "passed" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "quarantine_required": { "const": false },
+          "findings": { "maxItems": 0 },
+          "normal_boot_confirmation": { "const": "operator_confirmed_unchanged" },
+          "comparisons": {
+            "items": {
+              "properties": { "status": { "const": "match" } }
+            }
+          }
+        }
+      },
+      "else": {
+        "if": {
+          "properties": { "status": { "const": "failed" } },
+          "required": ["status"]
+        },
+        "then": {
+          "properties": {
+            "quarantine_required": { "const": true },
+            "findings": { "minItems": 1 }
+          }
+        },
+        "else": {
+          "properties": {
+            "quarantine_required": { "const": false },
+            "findings": { "maxItems": 0 },
+            "normal_boot_confirmation": { "const": "not_yet_observed" },
+            "comparisons": {
+              "items": {
+                "properties": { "status": { "const": "match" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "digest", "policy_digest"],
+      "properties": {
+        "id": { "const": "raspberry-pi-5-model-b-v1alpha1" },
+        "status": { "enum": ["experimental", "stable"] },
+        "digest": { "$ref": "#/$defs/digest" },
+        "policy_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "const": "raspberrypi.rpi5.otp-metadata" },
+        "version": { "const": "v1alpha1" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "tool_version",
+        "tool_digest",
+        "bundle_digest",
+        "firmware_digest",
+        "config_digest",
+        "lane_continuity",
+        "usb_path_continuity"
+      ],
+      "properties": {
+        "kind": { "const": "live-rpiboot" },
+        "tool_version": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "tool_digest": { "$ref": "#/$defs/digest" },
+        "bundle_digest": { "$ref": "#/$defs/digest" },
+        "firmware_digest": { "$ref": "#/$defs/digest" },
+        "config_digest": { "$ref": "#/$defs/digest" },
+        "lane_continuity": { "const": "match" },
+        "usb_path_continuity": { "const": "match" }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "evidence_digest",
+        "target_fingerprint",
+        "board_revision",
+        "board_attributes",
+        "boot_rom",
+        "eeprom_hash",
+        "customer_key_hash",
+        "customer_key_state",
+        "videocore_jtag_locked",
+        "assessment",
+        "mutation_audit"
+      ],
+      "properties": {
+        "sequence": { "enum": [1, 2] },
+        "evidence_digest": { "$ref": "#/$defs/digest" },
+        "target_fingerprint": { "$ref": "#/$defs/digest" },
+        "board_revision": { "$ref": "#/$defs/board-revision" },
+        "board_attributes": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
+        "boot_rom": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
+        "eeprom_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "customer_key_hash": {
+          "const": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "customer_key_state": { "const": "unset" },
+        "videocore_jtag_locked": { "const": false },
+        "assessment": { "$ref": "#/$defs/assessment" },
+        "mutation_audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["success_reported"],
+          "properties": { "success_reported": { "const": false } }
+        }
+      }
+    },
+    "board-revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "new_style",
+        "memory_code",
+        "manufacturer_code",
+        "processor_code",
+        "model_code",
+        "pcb_revision"
+      ],
+      "properties": {
+        "raw": { "type": "string", "pattern": "^[0-9a-f]{4,8}$" },
+        "new_style": { "const": true },
+        "memory_code": { "type": "integer", "minimum": 0, "maximum": 7 },
+        "manufacturer_code": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "processor_code": { "const": 4 },
+        "model_code": { "const": 23 },
+        "pcb_revision": { "type": "integer", "minimum": 0, "maximum": 15 }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device_class_status",
+        "observable_baseline_status",
+        "eligible_for_reversible_qualification",
+        "mutation_eligible",
+        "full_unprovisioned_state"
+      ],
+      "properties": {
+        "device_class_status": { "const": "pass" },
+        "observable_baseline_status": { "const": "pass" },
+        "eligible_for_reversible_qualification": { "const": true },
+        "mutation_eligible": { "const": false },
+        "full_unprovisioned_state": { "const": "not_established" }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "status"],
+      "properties": {
+        "field": { "type": "string" },
+        "status": { "enum": ["match", "changed"] }
+      }
+    },
+    "comparison-target-fingerprint": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "target_fingerprint" } } }]
+    },
+    "comparison-user-serial": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "user_serial" } } }]
+    },
+    "comparison-factory-uuid": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "factory_uuid" } } }]
+    },
+    "comparison-board-revision": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "board_revision" } } }]
+    },
+    "comparison-board-attributes": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "board_attributes" } } }]
+    },
+    "comparison-ethernet-mac": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "ethernet_mac" } } }]
+    },
+    "comparison-wifi-mac": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "wifi_mac" } } }]
+    },
+    "comparison-bluetooth-mac": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "bluetooth_mac" } } }]
+    },
+    "comparison-boot-rom": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "boot_rom" } } }]
+    },
+    "comparison-eeprom-hash": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "eeprom_hash" } } }]
+    },
+    "comparison-customer-key-hash": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "customer_key_hash" } } }]
+    },
+    "comparison-customer-key-state": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "customer_key_state" } } }]
+    },
+    "comparison-videocore-jtag-locked": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "videocore_jtag_locked" } } }]
+    },
+    "comparison-signature-mode": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "signature_mode" } } }]
+    },
+    "comparison-advanced-boot": {
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "advanced_boot" } } }]
+    }
+  }
+}

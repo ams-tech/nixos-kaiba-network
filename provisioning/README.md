@@ -6,7 +6,9 @@ DNS module and currently uses only the Go standard library.
 
 ## Commands
 
-- `kaiba-provision` performs the non-persistent device preflight workflow.
+- `kaiba-provision probe` performs the non-persistent device preflight.
+- `kaiba-provision qualify` strictly compares two private live-probe results
+  and emits deterministic whitelist-redacted hardware evidence.
 - `kaiba-provision-station-demo` serves the loopback-only station simulation.
 - `kaiba-provision-station-graph` generates the browser simulation graph.
 

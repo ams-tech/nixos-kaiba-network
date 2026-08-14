@@ -71,6 +71,12 @@ and both flakes' NixOS module evaluation. The equivalent leaf command is
 `nix build ./nix/dns#dns-test-report -L`. The interactive driver is for
 topology debugging.
 
+The physical ceremony uses `kaiba-provision qualify` to validate and compare
+two private live results and produce a deterministic redacted record. It does
+not automate or prove the required full-power removal or normal-boot check;
+those remain explicit operator confirmations. See the
+[Pi 5 probe runbook](docs/raspberry-pi-5-provisioning-probe.md#sacrificial-device-operator-runbook).
+
 ## Flake layout and consumption
 
 The repository has two independently consumable leaf flakes:
