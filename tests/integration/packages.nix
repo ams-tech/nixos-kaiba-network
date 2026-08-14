@@ -32,6 +32,11 @@ let
         input="$TMPDIR/input"
         mkdir -p "$input"
         cp -R ${raw}/raw/. "$input/"
+        if test -e "$input/evidence/provisioning"; then
+          echo "raw DNS evidence uses the reserved provisioning namespace" >&2
+          exit 1
+        fi
+        cp -R --no-dereference ${provisioningTestResult}/evidence/. "$input/evidence/"
         mkdir -p "$out"
         python3 ${../report/render.py} \
           --result "$input/result.json" \

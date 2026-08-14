@@ -26,7 +26,9 @@ const testMetadata = `{
   "JTAG_LOCKED": "0",
   "MAC_WIFI_ADDR": "2C:CF:67:70:76:F4",
   "MAC_BT_ADDR": "2C:CF:67:70:76:F5",
-  "FACTORY_UUID": "001000911006186073"
+  "FACTORY_UUID": "001000911006186073",
+  "SIGNATURE_MODE": "0",
+  "ADVANCED_BOOT": "00000000"
 }`
 
 type fakeEvidenceSource struct {
@@ -247,6 +249,124 @@ func TestRunLiveAcquisitionError(t *testing.T) {
 	}
 }
 
+func TestRunQualificationEmitsOnlyRedactedPublicEvidence(t *testing.T) {
+	profilePath := repositoryProfilePath(t)
+	profileFile, err := os.Open(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := provisioning.LoadProfile(profileFile)
+	if closeErr := profileFile.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := rpi5.ParseMetadata([]byte(testMetadata))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment := provisioning.Evaluate(profile, provisioning.TargetObservation{
+		AdapterID:      observation.AdapterID,
+		AdapterVersion: observation.AdapterVersion,
+		Facts:          observation.Facts(),
+		UnknownFields:  observation.UnknownFields,
+	})
+	result := probeResult{
+		SchemaVersion: resultSchemaVersion,
+		ObservedAt:    time.Unix(10, 0).UTC(),
+		Profile: profileReference{
+			ID: profile.Metadata.ID, Status: profile.Metadata.Status,
+			Digest: profile.Digest, PolicyDigest: profile.PolicyDigest,
+		},
+		Adapter: adapterReference{ID: rpi5.AdapterID, Version: rpi5.AdapterVersion},
+		Source: rpi5.Provenance{
+			Source: "live-rpiboot", LaneID: "lane-1", USBPath: "1-2.3", ToolVersion: "test",
+			ToolDigest: "sha256:" + strings.Repeat("1", 64), BundleDigest: "sha256:" + strings.Repeat("2", 64),
+			FirmwareDigest: "sha256:" + strings.Repeat("3", 64), ConfigDigest: "sha256:" + strings.Repeat("4", 64),
+		},
+		Observation: observation,
+		Assessment:  assessment,
+	}
+	firstPath := writePrivateProbeResult(t, result, "probe-1.json")
+	result.ObservedAt = time.Unix(20, 0).UTC()
+	secondPath := writePrivateProbeResult(t, result, "probe-2.json")
+
+	args := []string{
+		"qualify",
+		"--profile", profilePath,
+		"--first-result", firstPath,
+		"--second-result", secondPath,
+		"--source-revision", strings.Repeat("a", 40),
+		"--system-closure", "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-nixos-system-kaiba-station-1",
+		"--power-cycle-confirmation", "complete",
+		"--pre-probe-normal-boot", "confirmed",
+		"--normal-boot-confirmation", "unchanged",
+	}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), args, strings.NewReader("unused"), &stdout, &stderr, dependencies{})
+	if code != exitOK || stderr.Len() != 0 {
+		t.Fatalf("run = %d, stderr = %s", code, stderr.String())
+	}
+	var record rpi5.QualificationRecord
+	if err := json.Unmarshal(stdout.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != rpi5.QualificationStatusPassed || record.MutationEligible {
+		t.Fatalf("record = %#v", record)
+	}
+	for _, privateValue := range []string{
+		observation.UserSerial, observation.FactoryUUID, observation.EthernetMAC,
+		observation.WiFiMAC, observation.BluetoothMAC, result.Source.LaneID, result.Source.USBPath,
+		"/nix/store/0123456789abcdfghijklmnpqrsvwxyz-nixos-system-kaiba-station-1",
+	} {
+		if strings.Contains(stdout.String(), privateValue) {
+			t.Fatalf("public output leaked %q", privateValue)
+		}
+	}
+
+	args[len(args)-1] = "pending"
+	stdout.Reset()
+	stderr.Reset()
+	code = run(context.Background(), args, strings.NewReader("unused"), &stdout, &stderr, dependencies{})
+	if code != exitIncomplete || stderr.Len() != 0 {
+		t.Fatalf("pending boot run = %d, stderr = %s", code, stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != rpi5.QualificationStatusIncomplete || record.QuarantineRequired {
+		t.Fatalf("pending boot record = %#v", record)
+	}
+
+	args[len(args)-1] = "failed"
+	stdout.Reset()
+	stderr.Reset()
+	code = run(context.Background(), args, strings.NewReader("unused"), &stdout, &stderr, dependencies{})
+	if code != exitQualification || stderr.Len() != 0 {
+		t.Fatalf("failed boot run = %d, stderr = %s", code, stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != rpi5.QualificationStatusFailed || !record.QuarantineRequired {
+		t.Fatalf("failed boot record = %#v", record)
+	}
+}
+
+func TestRunQualificationRequiresExplicitCeremonyConfirmations(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{
+		"qualify", "--profile", repositoryProfilePath(t), "--first-result", "first.json", "--second-result", "second.json",
+		"--source-revision", strings.Repeat("a", 40),
+		"--system-closure", "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-nixos-system-kaiba-station-1",
+		"--power-cycle-confirmation", "complete", "--pre-probe-normal-boot", "confirmed",
+	}, strings.NewReader(""), &stdout, &stderr, dependencies{})
+	if code != exitUsageOrProfile || stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage:") {
+		t.Fatalf("run = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
+	}
+}
+
 func repositoryProfilePath(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join("..", "..", "profiles", "device-classes", "raspberry-pi-5-model-b-v1alpha1.json")
@@ -275,4 +395,17 @@ func removeLine(raw, marker string) string {
 		}
 	}
 	return raw
+}
+
+func writePrivateProbeResult(t *testing.T, result probeResult, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

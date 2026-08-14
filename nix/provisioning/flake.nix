@@ -110,6 +110,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
+              check-jsonschema
               go
               gopls
               gotools

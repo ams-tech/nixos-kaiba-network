@@ -41,14 +41,17 @@ const (
 )
 
 // DeviceProfile is a declarative device-class and unprovisioned-baseline
-// policy. Digest is calculated from the exact profile bytes and is never read
-// from JSON.
+// policy. Digest is calculated from the exact profile bytes. PolicyDigest is
+// calculated from canonical profile semantics with metadata.status omitted so
+// an experimental-to-stable promotion does not invalidate qualification of an
+// otherwise unchanged policy. Neither digest is read from JSON.
 type DeviceProfile struct {
-	APIVersion string          `json:"apiVersion"`
-	Kind       string          `json:"kind"`
-	Metadata   ProfileMetadata `json:"metadata"`
-	Spec       ProfileSpec     `json:"spec"`
-	Digest     string          `json:"-"`
+	APIVersion   string          `json:"apiVersion"`
+	Kind         string          `json:"kind"`
+	Metadata     ProfileMetadata `json:"metadata"`
+	Spec         ProfileSpec     `json:"spec"`
+	Digest       string          `json:"-"`
+	PolicyDigest string          `json:"-"`
 }
 
 type ProfileMetadata struct {
@@ -131,7 +134,36 @@ func ParseProfile(raw []byte) (DeviceProfile, error) {
 
 	digest := sha256.Sum256(raw)
 	profile.Digest = "sha256:" + hex.EncodeToString(digest[:])
+	policyDigest, err := calculatePolicyDigest(generic)
+	if err != nil {
+		return DeviceProfile{}, fmt.Errorf("calculate policy digest: %w", err)
+	}
+	profile.PolicyDigest = policyDigest
 	return profile, nil
+}
+
+func calculatePolicyDigest(root map[string]any) (string, error) {
+	policy := make(map[string]any, len(root))
+	for name, value := range root {
+		policy[name] = value
+	}
+	metadata, ok := root["metadata"].(map[string]any)
+	if !ok {
+		return "", errors.New("metadata is not an object")
+	}
+	policyMetadata := make(map[string]any, len(metadata))
+	for name, value := range metadata {
+		if name != "status" {
+			policyMetadata[name] = value
+		}
+	}
+	policy["metadata"] = policyMetadata
+	canonical, err := json.Marshal(policy)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(append([]byte("kaiba.device-profile-policy.v1\n"), canonical...))
+	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
 func decodeJSONObject(raw []byte) (map[string]any, error) {

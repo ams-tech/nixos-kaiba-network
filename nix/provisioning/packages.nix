@@ -71,6 +71,7 @@ let
       "-X=main.rpibootPath=${pkgs.rpiboot}/bin/rpiboot"
       "-X=main.probeBundlePath=${rpi5ProbeBundle}/bundle"
       "-X=main.probeManifestPath=${rpi5ProbeBundle}/manifest.json"
+      "-X=main.buildSystem=${pkgs.stdenv.hostPlatform.system}"
     ];
 
     vendorHash = null;
@@ -135,6 +136,8 @@ let
           "$out/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json"
         ln -s ${goSource}/schemas/device-profile-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/device-profile-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json"
         ln -s ${rpi5ProbeBundle}/bundle "$out/share/kaiba/rpi5-probe-bundle"
         ln -s ${rpi5ProbeBundle}/manifest.json "$out/share/kaiba/rpi5-probe-bundle-manifest.json"
       '';
