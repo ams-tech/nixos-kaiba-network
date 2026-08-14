@@ -25,9 +25,7 @@ const testMetadata = `{
   "JTAG_LOCKED": "0",
   "MAC_WIFI_ADDR": "2C:CF:67:70:76:F4",
   "MAC_BT_ADDR": "2C:CF:67:70:76:F5",
-  "FACTORY_UUID": "001000911006186073",
-  "SIGNATURE_MODE": "0",
-  "ADVANCED_BOOT": "00000000"
+  "FACTORY_UUID": "001000911006186073"
 }`
 
 type fakeEvidenceSource struct {
@@ -91,6 +89,9 @@ func TestRunOfflineProbeProducesDeterministicResult(t *testing.T) {
 	}
 	if result.Observation.EEPROMHash != "" {
 		t.Fatalf("optional EEPROM hash = %q, want absent", result.Observation.EEPROMHash)
+	}
+	if len(result.Observation.UpstreamFields) != 0 {
+		t.Fatalf("optional upstream fields = %#v, want absent", result.Observation.UpstreamFields)
 	}
 
 	var secondOut, secondErr bytes.Buffer
@@ -329,18 +330,17 @@ func TestRunQualificationEmitsOnlyRedactedPublicEvidence(t *testing.T) {
 	if len(record.Probes) != 2 || record.Probes[0].EEPROMHash != nil || record.Probes[1].EEPROMHash != nil {
 		t.Fatalf("absent EEPROM hashes were not redacted as null: %#v", record.Probes)
 	}
-	eepromComparisonObserved := false
+	optionalComparisonStatuses := map[string]string{}
 	for _, comparison := range record.Comparisons {
-		if comparison.Field != "eeprom_hash" {
-			continue
-		}
-		eepromComparisonObserved = true
-		if comparison.Status != "not_observed" {
-			t.Fatalf("EEPROM comparison status = %q, want not_observed", comparison.Status)
+		switch comparison.Field {
+		case "eeprom_hash", "signature_mode", "advanced_boot":
+			optionalComparisonStatuses[comparison.Field] = comparison.Status
 		}
 	}
-	if !eepromComparisonObserved {
-		t.Fatal("qualification record omitted EEPROM comparison")
+	for _, field := range []string{"eeprom_hash", "signature_mode", "advanced_boot"} {
+		if status := optionalComparisonStatuses[field]; status != "not_observed" {
+			t.Fatalf("%s comparison status = %q, want not_observed", field, status)
+		}
 	}
 	for _, privateValue := range []string{
 		observation.UserSerial, observation.FactoryUUID, observation.EthernetMAC,
@@ -381,6 +381,187 @@ func TestRunQualificationEmitsOnlyRedactedPublicEvidence(t *testing.T) {
 	}
 }
 
+func TestRunQualificationComparesOptionalUpstreamFieldsWhenObserved(t *testing.T) {
+	profilePath := repositoryProfilePath(t)
+	profileFile, err := os.Open(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := provisioning.LoadProfile(profileFile)
+	if closeErr := profileFile.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	metadataWithOptionalFields := func(fields map[string]string) []byte {
+		t.Helper()
+		metadata := map[string]string{}
+		if err := json.Unmarshal([]byte(testMetadata), &metadata); err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range fields {
+			metadata[name] = value
+		}
+		raw, err := json.Marshal(metadata)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	absentFirst := qualificationTestProbeResult(t, profile, []byte(testMetadata), time.Unix(10, 0).UTC())
+	absentSecond := qualificationTestProbeResult(t, profile, []byte(testMetadata), time.Unix(20, 0).UTC())
+	presentFields := map[string]string{"SIGNATURE_MODE": "0", "ADVANCED_BOOT": "00000000"}
+	presentFirst := qualificationTestProbeResult(t, profile, metadataWithOptionalFields(presentFields), time.Unix(10, 0).UTC())
+	presentSecond := qualificationTestProbeResult(t, profile, metadataWithOptionalFields(presentFields), time.Unix(20, 0).UTC())
+	signatureOnlySecond := qualificationTestProbeResult(t, profile, metadataWithOptionalFields(map[string]string{
+		"SIGNATURE_MODE": "0",
+	}), time.Unix(20, 0).UTC())
+	advancedBootOnlySecond := qualificationTestProbeResult(t, profile, metadataWithOptionalFields(map[string]string{
+		"ADVANCED_BOOT": "00000000",
+	}), time.Unix(20, 0).UTC())
+	changedSignatureSecond := qualificationTestProbeResult(t, profile, metadataWithOptionalFields(map[string]string{
+		"SIGNATURE_MODE": "1",
+		"ADVANCED_BOOT":  "00000000",
+	}), time.Unix(20, 0).UTC())
+	changedAdvancedBootSecond := qualificationTestProbeResult(t, profile, metadataWithOptionalFields(map[string]string{
+		"SIGNATURE_MODE": "0",
+		"ADVANCED_BOOT":  "00000001",
+	}), time.Unix(20, 0).UTC())
+
+	tests := []struct {
+		name            string
+		first           probeResult
+		second          probeResult
+		wantCode        int
+		wantStatus      string
+		wantFindings    []string
+		wantComparisons map[string]string
+	}{
+		{
+			name:         "both optional fields present and matching",
+			first:        presentFirst,
+			second:       presentSecond,
+			wantCode:     exitOK,
+			wantStatus:   rpi5.QualificationStatusPassed,
+			wantFindings: []string{},
+			wantComparisons: map[string]string{
+				"signature_mode": "match",
+				"advanced_boot":  "match",
+			},
+		},
+		{
+			name:         "both optional fields absent then present",
+			first:        absentFirst,
+			second:       presentSecond,
+			wantCode:     exitQualification,
+			wantStatus:   rpi5.QualificationStatusFailed,
+			wantFindings: []string{"advanced-boot-changed", "signature-mode-changed"},
+			wantComparisons: map[string]string{
+				"signature_mode": "changed",
+				"advanced_boot":  "changed",
+			},
+		},
+		{
+			name:         "both optional fields present then absent",
+			first:        presentFirst,
+			second:       absentSecond,
+			wantCode:     exitQualification,
+			wantStatus:   rpi5.QualificationStatusFailed,
+			wantFindings: []string{"advanced-boot-changed", "signature-mode-changed"},
+			wantComparisons: map[string]string{
+				"signature_mode": "changed",
+				"advanced_boot":  "changed",
+			},
+		},
+		{
+			name:         "signature mode absent then present",
+			first:        absentFirst,
+			second:       signatureOnlySecond,
+			wantCode:     exitQualification,
+			wantStatus:   rpi5.QualificationStatusFailed,
+			wantFindings: []string{"signature-mode-changed"},
+			wantComparisons: map[string]string{
+				"signature_mode": "changed",
+				"advanced_boot":  "not_observed",
+			},
+		},
+		{
+			name:         "advanced boot absent then present",
+			first:        absentFirst,
+			second:       advancedBootOnlySecond,
+			wantCode:     exitQualification,
+			wantStatus:   rpi5.QualificationStatusFailed,
+			wantFindings: []string{"advanced-boot-changed"},
+			wantComparisons: map[string]string{
+				"signature_mode": "not_observed",
+				"advanced_boot":  "changed",
+			},
+		},
+		{
+			name:         "signature mode present with different values",
+			first:        presentFirst,
+			second:       changedSignatureSecond,
+			wantCode:     exitQualification,
+			wantStatus:   rpi5.QualificationStatusFailed,
+			wantFindings: []string{"signature-mode-changed"},
+			wantComparisons: map[string]string{
+				"signature_mode": "changed",
+				"advanced_boot":  "match",
+			},
+		},
+		{
+			name:         "advanced boot present with different values",
+			first:        presentFirst,
+			second:       changedAdvancedBootSecond,
+			wantCode:     exitQualification,
+			wantStatus:   rpi5.QualificationStatusFailed,
+			wantFindings: []string{"advanced-boot-changed"},
+			wantComparisons: map[string]string{
+				"signature_mode": "match",
+				"advanced_boot":  "changed",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			firstPath := writePrivateProbeResult(t, tt.first, "probe-1.json")
+			secondPath := writePrivateProbeResult(t, tt.second, "probe-2.json")
+			args := []string{
+				"qualify",
+				"--profile", profilePath,
+				"--first-result", firstPath,
+				"--second-result", secondPath,
+				"--source-revision", strings.Repeat("a", 40),
+				"--system-closure", "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-nixos-system-kaiba-station-1",
+				"--power-cycle-confirmation", "complete",
+				"--pre-probe-normal-boot", "confirmed",
+				"--normal-boot-confirmation", "unchanged",
+			}
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), args, strings.NewReader("unused"), &stdout, &stderr, dependencies{})
+			if code != tt.wantCode || stderr.Len() != 0 {
+				t.Fatalf("run = %d, want %d, stderr = %s", code, tt.wantCode, stderr.String())
+			}
+			var record rpi5.QualificationRecord
+			if err := json.Unmarshal(stdout.Bytes(), &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Status != tt.wantStatus || !equalStrings(record.Findings, tt.wantFindings) {
+				t.Fatalf("record outcome = %#v", record)
+			}
+			for field, wantStatus := range tt.wantComparisons {
+				if status := qualificationComparisonStatus(t, record, field); status != wantStatus {
+					t.Fatalf("%s comparison status = %q, want %q", field, status, wantStatus)
+				}
+			}
+		})
+	}
+}
+
 func TestRunQualificationRequiresExplicitCeremonyConfirmations(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{
@@ -392,6 +573,64 @@ func TestRunQualificationRequiresExplicitCeremonyConfirmations(t *testing.T) {
 	if code != exitUsageOrProfile || stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage:") {
 		t.Fatalf("run = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
 	}
+}
+
+func qualificationTestProbeResult(
+	t *testing.T,
+	profile provisioning.DeviceProfile,
+	metadata []byte,
+	observedAt time.Time,
+) probeResult {
+	t.Helper()
+	observation, err := rpi5.ParseMetadata(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment := provisioning.Evaluate(profile, provisioning.TargetObservation{
+		AdapterID:      observation.AdapterID,
+		AdapterVersion: observation.AdapterVersion,
+		Facts:          observation.Facts(),
+		UnknownFields:  append([]string(nil), observation.UnknownFields...),
+	})
+	return probeResult{
+		SchemaVersion: resultSchemaVersion,
+		ObservedAt:    observedAt,
+		Profile: profileReference{
+			ID: profile.Metadata.ID, Status: profile.Metadata.Status,
+			Digest: profile.Digest, PolicyDigest: profile.PolicyDigest,
+		},
+		Adapter: adapterReference{ID: rpi5.AdapterID, Version: rpi5.AdapterVersion},
+		Source: rpi5.Provenance{
+			Source: "live-rpiboot", LaneID: "lane-1", USBPath: "1-2.3", ToolVersion: "test",
+			ToolDigest: "sha256:" + strings.Repeat("1", 64), BundleDigest: "sha256:" + strings.Repeat("2", 64),
+			FirmwareDigest: "sha256:" + strings.Repeat("3", 64), ConfigDigest: "sha256:" + strings.Repeat("4", 64),
+		},
+		Observation: observation,
+		Assessment:  assessment,
+	}
+}
+
+func qualificationComparisonStatus(t *testing.T, record rpi5.QualificationRecord, field string) string {
+	t.Helper()
+	for _, comparison := range record.Comparisons {
+		if comparison.Field == field {
+			return comparison.Status
+		}
+	}
+	t.Fatalf("qualification record omitted %s comparison", field)
+	return ""
+}
+
+func equalStrings(first, second []string) bool {
+	if len(first) != len(second) {
+		return false
+	}
+	for index := range first {
+		if first[index] != second[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func repositoryProfilePath(t *testing.T) string {

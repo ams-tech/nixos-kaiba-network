@@ -41,6 +41,10 @@ the field to appear: recovery treats that file as an EEPROM update payload,
 which would cross the probe's non-persistent safety boundary. There is no
 `pieeprom.bin` workaround in this qualification procedure.
 
+The same metadata-only path can omit `SIGNATURE_MODE` and `ADVANCED_BOOT`.
+Their absence is an unavailable observation, not an implicit zero or disabled
+state; the probe and qualifier must never invent either value.
+
 The pinned Nixpkgs host tool predates stdout metadata support. Kaiba preserves
 its recovery firmware byte-for-byte and applies only the `main.c` changes from
 the upstream [stdout-output commit] and [stdout-default commit] to the host
@@ -197,10 +201,11 @@ error before deciding whether the target must be quarantined.
 
 The adapter normalizes the factory UUID, user serial, board revision and its
 decoded fields, board attributes, boot ROM, Ethernet/Wi-Fi/Bluetooth MACs,
-customer-key hash, signature mode, VideoCore JTAG state, and an EEPROM hash
-when upstream metadata supplies one. It retains recognized operation-result
-fields as diagnostics and unknown vendor fields as extensions. Raw imported
-metadata is not copied into output; only its SHA-256 digest is retained.
+customer-key hash, and VideoCore JTAG state. When upstream metadata supplies
+them, it also normalizes signature mode, advanced-boot state, and an EEPROM
+hash. It retains recognized operation-result fields as diagnostics and unknown
+vendor fields as extensions. Raw imported metadata is not copied into output;
+only its SHA-256 digest is retained.
 
 The target-binding fingerprint is a domain-separated SHA-256 digest over the
 factory UUID, user serial, and raw board revision. It correlates observations
@@ -222,6 +227,17 @@ the comparison status is `not_observed`; this is an allowed qualification
 outcome, not a fabricated match. A hash present in only one result, or two
 different observed hashes, is a changed comparison and requires quarantine.
 
+`SIGNATURE_MODE` and `ADVANCED_BOOT` are also optional observations because the
+metadata-only recovery path may legitimately omit them. The qualifier treats
+each optional field independently: absence from both results is
+`not_observed`, presence in only one result is `changed`, and presence in both
+results is `match` only when the two canonical values are identical. Different
+observed values are `changed`. Any `changed` comparison requires quarantine.
+Paired absence does not establish a zero, disabled, or otherwise safe value;
+never synthesize a default for either field in qualification evidence. Every
+comparison other than `eeprom_hash`, `signature_mode`, and `advanced_boot` must
+be observed in both results.
+
 Any unknown vendor field makes the baseline indeterminate until the pinned
 adapter and profile understand it. Operation results such as
 `EEPROM_UPDATE=success` or `SECURE_BOOT_PROVISION=success` in live output are a
@@ -239,13 +255,15 @@ Do not promote the profile from `experimental` to `stable` or merge a change
 that enables the live path until a sacrificial fresh Pi 5 Model B passes this
 ceremony:
 
-The hardware finding above changed the profile and qualification contract. Any
-probe result or comparison record produced while `EEPROM_HASH` was still a
-required baseline fact is obsolete. After freezing and installing this revised
-contract, retain the old result only as private diagnostic evidence and restart
-the qualification sequence from probe 1. Never combine a result from the old
-contract with one from this revision. Hardware retries still require the
-complete target power removal and RPIBOOT re-entry described below.
+The hardware findings above changed the profile and qualification contract.
+Any probe result or comparison record produced before this revision is
+obsolete, including results from contracts that required `EEPROM_HASH` as a
+baseline fact or rejected absent `SIGNATURE_MODE` and `ADVANCED_BOOT`. After
+freezing and installing this revised contract, retain an old result only as
+private diagnostic evidence and restart the qualification sequence from probe
+1. Never combine a result from the old contract with one from this revision.
+Hardware retries still require the complete target power removal and RPIBOOT
+re-entry described below.
 
 1. Freeze a clean Git revision whose x86 and native AArch64 checks pass. Build
    and install the station from that revision. Record its exact
@@ -262,16 +280,19 @@ complete target power removal and RPIBOOT re-entry described below.
 5. Run `kaiba-provision qualify` over the two private results with normal boot
    still `pending`. It validates the exact profile and live provenance,
    recomputes the assessment, requires every mandatory signal (including both
-   wireless MACs, signature mode, and advanced-boot state) to match, compares
-   stable target observations, and emits a deterministic whitelist-redacted
-   record. Two absent EEPROM hashes produce `not_observed` and do not fail this
-   preflight. Exit `7` means the two probes are consistent but normal boot is
-   not yet observed; exit `6` means stop and quarantine.
+   wireless MACs) to match, compares stable target observations, and emits a
+   deterministic whitelist-redacted record. For EEPROM hash, signature mode,
+   and advanced-boot state, two absent observations produce `not_observed` and
+   do not fail this preflight; one-sided presence or different observed values
+   produce `changed` and require quarantine. Exit `7` means the two probes are
+   consistent but normal boot is not yet observed; exit `6` means stop and
+   quarantine.
 6. Boot the target normally from the same media and repeat the exact success
    criterion from step 2. Run the qualifier again with the result `unchanged`
-   or `failed`. Only `unchanged`, with every required comparison matching and
-   the optional EEPROM hash either matching or consistently unobserved, can
-   emit a passed record and exit `0`.
+   or `failed`. Only `unchanged`, with every mandatory comparison matching and
+   each optional comparison (EEPROM hash, signature mode, and advanced-boot
+   state) either matching or consistently unobserved, can emit a passed record
+   and exit `0`.
 
 Stop qualification and quarantine the target if any persistent observation
 changes, a mutation result appears, the target cannot boot normally, or the
@@ -287,7 +308,9 @@ that closure path, other hashes, board revision, immutable probe-input
 provenance, the station Nix system, a status-independent profile-policy digest,
 assessment summaries, operator confirmations, and status-only comparisons. An
 observed EEPROM hash is retained; an absent one is represented by JSON `null`
-and the paired absence by comparison status `not_observed`.
+and the paired absence by comparison status `not_observed`. Signature mode and
+advanced-boot values are not retained in the public record; their comparisons
+report only `match`, `changed`, or `not_observed`.
 The target fingerprint and evidence digests are stable
 pseudonymous identifiers even though they are not raw inventory values; review
 their publication with the same care as other hardware evidence. Attach the

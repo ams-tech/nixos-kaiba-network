@@ -259,6 +259,62 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "comparisons": {
+            "contains": {
+              "type": "object",
+              "required": ["field", "status"],
+              "properties": {
+                "field": { "const": "signature_mode" },
+                "status": { "const": "changed" }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "findings": { "contains": { "const": "signature-mode-changed" } }
+        }
+      },
+      "else": {
+        "properties": {
+          "findings": {
+            "not": { "contains": { "const": "signature-mode-changed" } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "comparisons": {
+            "contains": {
+              "type": "object",
+              "required": ["field", "status"],
+              "properties": {
+                "field": { "const": "advanced_boot" },
+                "status": { "const": "changed" }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "findings": { "contains": { "const": "advanced-boot-changed" } }
+        }
+      },
+      "else": {
+        "properties": {
+          "findings": {
+            "not": { "contains": { "const": "advanced-boot-changed" } }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -449,10 +505,10 @@
       "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "videocore_jtag_locked" } } }]
     },
     "comparison-signature-mode": {
-      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "signature_mode" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "signature_mode" } } }]
     },
     "comparison-advanced-boot": {
-      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "advanced_boot" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "advanced_boot" } } }]
     }
   }
 }

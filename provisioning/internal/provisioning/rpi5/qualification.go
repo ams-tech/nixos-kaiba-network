@@ -436,11 +436,6 @@ func validateQualificationObservation(observation Observation) error {
 	if len(unknown) != 0 {
 		return errors.New("qualification does not accept unknown upstream fields")
 	}
-	for _, name := range []string{"SIGNATURE_MODE", "ADVANCED_BOOT"} {
-		if observation.UpstreamFields[name] == "" {
-			return fmt.Errorf("observation upstream field %s is required for qualification", name)
-		}
-	}
 	for name, value := range observation.UpstreamFields {
 		switch name {
 		case "SIGNATURE_MODE":
@@ -524,32 +519,33 @@ func redactedProbe(sequence int, result ProbeResult) RedactedProbe {
 
 func compareQualificationObservations(first, second Observation) ([]QualificationComparison, []string) {
 	type candidate struct {
-		field  string
-		first  any
-		second any
+		field    string
+		first    any
+		second   any
+		optional bool
 	}
 	candidates := []candidate{
-		{"target_fingerprint", first.TargetFingerprint, second.TargetFingerprint},
-		{"user_serial", first.UserSerial, second.UserSerial},
-		{"factory_uuid", first.FactoryUUID, second.FactoryUUID},
-		{"board_revision", first.BoardRevision, second.BoardRevision},
-		{"board_attributes", first.BoardAttributes, second.BoardAttributes},
-		{"ethernet_mac", first.EthernetMAC, second.EthernetMAC},
-		{"wifi_mac", first.WiFiMAC, second.WiFiMAC},
-		{"bluetooth_mac", first.BluetoothMAC, second.BluetoothMAC},
-		{"boot_rom", first.BootROM, second.BootROM},
-		{"eeprom_hash", first.EEPROMHash, second.EEPROMHash},
-		{"customer_key_hash", first.CustomerKeyHash, second.CustomerKeyHash},
-		{"customer_key_state", first.CustomerKeyState, second.CustomerKeyState},
-		{"videocore_jtag_locked", first.VideoCoreJTAGLocked, second.VideoCoreJTAGLocked},
-		{"signature_mode", first.UpstreamFields["SIGNATURE_MODE"], second.UpstreamFields["SIGNATURE_MODE"]},
-		{"advanced_boot", first.UpstreamFields["ADVANCED_BOOT"], second.UpstreamFields["ADVANCED_BOOT"]},
+		{field: "target_fingerprint", first: first.TargetFingerprint, second: second.TargetFingerprint},
+		{field: "user_serial", first: first.UserSerial, second: second.UserSerial},
+		{field: "factory_uuid", first: first.FactoryUUID, second: second.FactoryUUID},
+		{field: "board_revision", first: first.BoardRevision, second: second.BoardRevision},
+		{field: "board_attributes", first: first.BoardAttributes, second: second.BoardAttributes},
+		{field: "ethernet_mac", first: first.EthernetMAC, second: second.EthernetMAC},
+		{field: "wifi_mac", first: first.WiFiMAC, second: second.WiFiMAC},
+		{field: "bluetooth_mac", first: first.BluetoothMAC, second: second.BluetoothMAC},
+		{field: "boot_rom", first: first.BootROM, second: second.BootROM},
+		{field: "eeprom_hash", first: first.EEPROMHash, second: second.EEPROMHash, optional: true},
+		{field: "customer_key_hash", first: first.CustomerKeyHash, second: second.CustomerKeyHash},
+		{field: "customer_key_state", first: first.CustomerKeyState, second: second.CustomerKeyState},
+		{field: "videocore_jtag_locked", first: first.VideoCoreJTAGLocked, second: second.VideoCoreJTAGLocked},
+		{field: "signature_mode", first: first.UpstreamFields["SIGNATURE_MODE"], second: second.UpstreamFields["SIGNATURE_MODE"], optional: true},
+		{field: "advanced_boot", first: first.UpstreamFields["ADVANCED_BOOT"], second: second.UpstreamFields["ADVANCED_BOOT"], optional: true},
 	}
 	comparisons := make([]QualificationComparison, 0, len(candidates))
 	findings := make([]string, 0)
 	for _, item := range candidates {
 		status := "match"
-		if item.field == "eeprom_hash" && item.first == "" && item.second == "" {
+		if item.optional && item.first == "" && item.second == "" {
 			status = "not_observed"
 		} else if !reflect.DeepEqual(item.first, item.second) {
 			status = "changed"

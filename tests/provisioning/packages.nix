@@ -54,22 +54,32 @@ let
       };
     in
     profileReferenceMatches promoted candidate && !profileReferenceMatches promoted changedPolicy;
+  qualificationMetadataFields = {
+    USER_SERIAL_NUM = "A7EB274C";
+    MAC_ADDR = "2C:CF:67:70:76:F3";
+    CUSTOMER_KEY_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
+    BOOT_ROM = "0000000A";
+    BOARD_ATTR = "00000000";
+    USER_BOARDREV = "B04170";
+    JTAG_LOCKED = "0";
+    MAC_WIFI_ADDR = "2C:CF:67:70:76:F4";
+    MAC_BT_ADDR = "2C:CF:67:70:76:F5";
+    FACTORY_UUID = "001000911006186073";
+  };
   qualificationMetadata = pkgs.writeText "kaiba-rpi5-qualification-metadata.json" (
-    builtins.toJSON {
-      USER_SERIAL_NUM = "A7EB274C";
-      MAC_ADDR = "2C:CF:67:70:76:F3";
-      CUSTOMER_KEY_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
-      BOOT_ROM = "0000000A";
-      BOARD_ATTR = "00000000";
-      USER_BOARDREV = "B04170";
-      JTAG_LOCKED = "0";
-      MAC_WIFI_ADDR = "2C:CF:67:70:76:F4";
-      MAC_BT_ADDR = "2C:CF:67:70:76:F5";
-      FACTORY_UUID = "001000911006186073";
-      SIGNATURE_MODE = "0";
-      ADVANCED_BOOT = "00000000";
-    }
+    builtins.toJSON qualificationMetadataFields
   );
+  qualificationMetadataWithOptionalUpstreamFields =
+    pkgs.writeText "kaiba-rpi5-qualification-metadata-with-optional-upstream-fields.json"
+      (
+        builtins.toJSON (
+          qualificationMetadataFields
+          // {
+            SIGNATURE_MODE = "0";
+            ADVANCED_BOOT = "00000000";
+          }
+        )
+      );
 
   deviceProfileSchema =
     assert profilePromotionContract;
@@ -96,7 +106,20 @@ let
           .assessment.device_class.status == "pass"
           and .assessment.observable_baseline.status == "pass"
           and (.observation | has("eeprom_hash") | not)
+          and (.observation | has("upstream_fields") | not)
         ' "$TMPDIR/base-probe.json" > /dev/null
+        ${built.provision}/bin/kaiba-provision probe \
+          --profile ${qualificationProfilePath} \
+          --metadata ${qualificationMetadataWithOptionalUpstreamFields} \
+          > "$TMPDIR/optional-base-probe.json"
+        jq -e '
+          .assessment.device_class.status == "pass"
+          and .assessment.observable_baseline.status == "pass"
+          and .observation.upstream_fields == {
+            "ADVANCED_BOOT": "00000000",
+            "SIGNATURE_MODE": "0"
+          }
+        ' "$TMPDIR/optional-base-probe.json" > /dev/null
         tool_version="$(jq -r .tool_version ${built.rpi5ProbeBundle}/manifest.json)"
         tool_digest="$(jq -r .tool_sha256 ${built.rpi5ProbeBundle}/manifest.json)"
         bundle_digest="$(jq -r .bundle_sha256 ${built.rpi5ProbeBundle}/manifest.json)"
@@ -104,52 +127,115 @@ let
         config_digest="$(jq -r '.files["config.txt"]' ${built.rpi5ProbeBundle}/manifest.json)"
         for sequence in 1 2; do
           observed_at="2026-08-13T12:0$((sequence - 1)):00Z"
-          jq \
-            --arg observed_at "$observed_at" \
-            --arg tool_version "$tool_version" \
-            --arg tool_digest "$tool_digest" \
-            --arg bundle_digest "$bundle_digest" \
-            --arg firmware_digest "$firmware_digest" \
-            --arg config_digest "$config_digest" \
-            '.observed_at = $observed_at | .source = {
-              source: "live-rpiboot",
-              lane_id: "lane-qualification",
-              usb_path: "1-2.3",
-              tool_version: $tool_version,
-              tool_digest: $tool_digest,
-              bundle_digest: $bundle_digest,
-              firmware_digest: $firmware_digest,
-              config_digest: $config_digest
-            }' \
-            "$TMPDIR/base-probe.json" > "$TMPDIR/probe-$sequence.json"
+          for fixture in base optional-base; do
+            output_prefix="probe-"
+            if test "$fixture" = optional-base; then
+              output_prefix="optional-probe-"
+            fi
+            jq \
+              --arg observed_at "$observed_at" \
+              --arg tool_version "$tool_version" \
+              --arg tool_digest "$tool_digest" \
+              --arg bundle_digest "$bundle_digest" \
+              --arg firmware_digest "$firmware_digest" \
+              --arg config_digest "$config_digest" \
+              '.observed_at = $observed_at | .source = {
+                source: "live-rpiboot",
+                lane_id: "lane-qualification",
+                usb_path: "1-2.3",
+                tool_version: $tool_version,
+                tool_digest: $tool_digest,
+                bundle_digest: $bundle_digest,
+                firmware_digest: $firmware_digest,
+                config_digest: $config_digest
+              }' \
+              "$TMPDIR/$fixture-probe.json" > "$TMPDIR/$output_prefix''${sequence}.json"
+          done
         done
         qualify() {
           ${built.provision}/bin/kaiba-provision qualify \
             --profile ${qualificationProfilePath} \
-            --first-result "$TMPDIR/probe-1.json" \
-            --second-result "$TMPDIR/probe-2.json" \
+            --first-result "$1" \
+            --second-result "$2" \
             --source-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             --system-closure /nix/store/0123456789abcdfghijklmnpqrsvwxyz-nixos-system-qualification-station-1 \
             --power-cycle-confirmation complete \
             --pre-probe-normal-boot confirmed \
-            --normal-boot-confirmation "$1"
+            --normal-boot-confirmation "$3"
         }
-        qualify unchanged > "$TMPDIR/passed.json"
-        if qualify pending > "$TMPDIR/incomplete.json"; then
+        qualify "$TMPDIR/probe-1.json" "$TMPDIR/probe-2.json" unchanged > "$TMPDIR/passed.json"
+        if qualify "$TMPDIR/probe-1.json" "$TMPDIR/probe-2.json" pending > "$TMPDIR/incomplete.json"; then
           echo "incomplete qualification unexpectedly exited zero" >&2
           exit 1
         else
           test "$?" -eq 7
         fi
-        if qualify failed > "$TMPDIR/failed.json"; then
+        if qualify "$TMPDIR/probe-1.json" "$TMPDIR/probe-2.json" failed > "$TMPDIR/failed.json"; then
           echo "failed qualification unexpectedly exited zero" >&2
+          exit 1
+        else
+          test "$?" -eq 6
+        fi
+        qualify \
+          "$TMPDIR/optional-probe-1.json" \
+          "$TMPDIR/optional-probe-2.json" \
+          unchanged > "$TMPDIR/optional-present.json"
+        if qualify \
+          "$TMPDIR/probe-1.json" \
+          "$TMPDIR/optional-probe-2.json" \
+          unchanged > "$TMPDIR/optional-mixed.json"; then
+          echo "mixed optional upstream observations unexpectedly passed" >&2
           exit 1
         else
           test "$?" -eq 6
         fi
         check-jsonschema \
           --schemafile ${built.goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json \
-          "$TMPDIR/passed.json" "$TMPDIR/incomplete.json" "$TMPDIR/failed.json"
+          "$TMPDIR/passed.json" \
+          "$TMPDIR/incomplete.json" \
+          "$TMPDIR/failed.json" \
+          "$TMPDIR/optional-present.json" \
+          "$TMPDIR/optional-mixed.json"
+        schema_must_reject() {
+          description="$1"
+          record="$2"
+          if check-jsonschema \
+            --schemafile ${built.goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json \
+            "$record"; then
+            echo "schema accepted $description" >&2
+            exit 1
+          fi
+        }
+        jq '
+          (.comparisons[] | select(.field == "boot_rom") | .status) = "not_observed"
+        ' "$TMPDIR/passed.json" > "$TMPDIR/invalid-unobserved-required-comparison.json"
+        schema_must_reject \
+          "not_observed for the mandatory boot_rom comparison" \
+          "$TMPDIR/invalid-unobserved-required-comparison.json"
+        jq '
+          .findings |= map(select(. != "signature-mode-changed"))
+        ' "$TMPDIR/optional-mixed.json" > "$TMPDIR/invalid-missing-signature-mode-finding.json"
+        schema_must_reject \
+          "a changed signature_mode comparison without its finding" \
+          "$TMPDIR/invalid-missing-signature-mode-finding.json"
+        jq '
+          .findings |= map(select(. != "advanced-boot-changed"))
+        ' "$TMPDIR/optional-mixed.json" > "$TMPDIR/invalid-missing-advanced-boot-finding.json"
+        schema_must_reject \
+          "a changed advanced_boot comparison without its finding" \
+          "$TMPDIR/invalid-missing-advanced-boot-finding.json"
+        jq '
+          .findings += ["signature-mode-changed"] | .findings |= sort
+        ' "$TMPDIR/failed.json" > "$TMPDIR/invalid-spurious-signature-mode-finding.json"
+        schema_must_reject \
+          "a signature-mode-changed finding for a not_observed comparison" \
+          "$TMPDIR/invalid-spurious-signature-mode-finding.json"
+        jq '
+          .findings += ["advanced-boot-changed"] | .findings |= sort
+        ' "$TMPDIR/failed.json" > "$TMPDIR/invalid-spurious-advanced-boot-finding.json"
+        schema_must_reject \
+          "an advanced-boot-changed finding for a not_observed comparison" \
+          "$TMPDIR/invalid-spurious-advanced-boot-finding.json"
         test "$(jq -r .profile.digest "$TMPDIR/passed.json")" = '${qualificationProfileReference.digest}'
         test "$(jq -r .profile.policy_digest "$TMPDIR/passed.json")" = '${qualificationPolicyDigest}'
         test "$(jq -r .station_system "$TMPDIR/passed.json")" = '${pkgs.stdenv.hostPlatform.system}'
@@ -157,7 +243,22 @@ let
         jq -e '
           [.probes[].eeprom_hash] == [null, null]
           and ([.comparisons[] | select(.field == "eeprom_hash") | .status] == ["not_observed"])
+          and ([.comparisons[] | select(.field == "signature_mode") | .status] == ["not_observed"])
+          and ([.comparisons[] | select(.field == "advanced_boot") | .status] == ["not_observed"])
         ' "$TMPDIR/passed.json" > /dev/null
+        jq -e '
+          .status == "passed"
+          and .findings == []
+          and ([.comparisons[] | select(.field == "signature_mode") | .status] == ["match"])
+          and ([.comparisons[] | select(.field == "advanced_boot") | .status] == ["match"])
+        ' "$TMPDIR/optional-present.json" > /dev/null
+        jq -e '
+          .status == "failed"
+          and .quarantine_required == true
+          and .findings == ["advanced-boot-changed", "signature-mode-changed"]
+          and ([.comparisons[] | select(.field == "signature_mode") | .status] == ["changed"])
+          and ([.comparisons[] | select(.field == "advanced_boot") | .status] == ["changed"])
+        ' "$TMPDIR/optional-mixed.json" > /dev/null
         ! grep -F 'nixos-system-qualification-station' "$TMPDIR/passed.json"
 
         mkdir -p "$out"

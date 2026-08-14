@@ -22,9 +22,7 @@ const qualificationMetadata = `{
   "JTAG_LOCKED": "0",
   "MAC_WIFI_ADDR": "2C:CF:67:70:76:F4",
   "MAC_BT_ADDR": "2C:CF:67:70:76:F5",
-  "FACTORY_UUID": "001000911006186073",
-  "SIGNATURE_MODE": "0",
-  "ADVANCED_BOOT": "00000000"
+  "FACTORY_UUID": "001000911006186073"
 }`
 
 func TestBuildQualificationRecordPassesAndRedactsInventory(t *testing.T) {
@@ -45,7 +43,8 @@ func TestBuildQualificationRecordPassesAndRedactsInventory(t *testing.T) {
 	}
 	for _, comparison := range record.Comparisons {
 		want := "match"
-		if comparison.Field == "eeprom_hash" && first.Observation.EEPROMHash == "" {
+		switch comparison.Field {
+		case "eeprom_hash", "signature_mode", "advanced_boot":
 			want = "not_observed"
 		}
 		if comparison.Status != want {
@@ -178,7 +177,7 @@ func TestBuildQualificationRecordMatchesAnObservedEEPROMHash(t *testing.T) {
 	}
 }
 
-func TestBuildQualificationRecordRequiresEveryComparedSignal(t *testing.T) {
+func TestBuildQualificationRecordRequiresMandatoryComparedSignals(t *testing.T) {
 	profile := qualificationProfile(t)
 	baseFirst := qualificationProbeResult(t, profile, time.Unix(10, 0).UTC())
 	baseSecond := qualificationProbeResult(t, profile, time.Unix(20, 0).UTC())
@@ -190,8 +189,6 @@ func TestBuildQualificationRecordRequiresEveryComparedSignal(t *testing.T) {
 	}{
 		{"Wi-Fi MAC", func(observation *Observation) { observation.WiFiMAC = "" }, "Wi-Fi MAC is required"},
 		{"Bluetooth MAC", func(observation *Observation) { observation.BluetoothMAC = "" }, "Bluetooth MAC is required"},
-		{"signature mode", func(observation *Observation) { delete(observation.UpstreamFields, "SIGNATURE_MODE") }, "SIGNATURE_MODE is required"},
-		{"advanced boot", func(observation *Observation) { delete(observation.UpstreamFields, "ADVANCED_BOOT") }, "ADVANCED_BOOT is required"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -201,6 +198,61 @@ func TestBuildQualificationRecordRequiresEveryComparedSignal(t *testing.T) {
 			_, err := BuildQualificationRecord(profile, first, second, validQualificationContext())
 			if err == nil || !strings.Contains(err.Error(), tt.match) {
 				t.Fatalf("error = %v, want containing %q", err, tt.match)
+			}
+		})
+	}
+}
+
+func TestBuildQualificationRecordComparesOptionalUpstreamSignals(t *testing.T) {
+	profile := qualificationProfile(t)
+	baseFirst := qualificationProbeResult(t, profile, time.Unix(10, 0).UTC())
+	baseSecond := qualificationProbeResult(t, profile, time.Unix(20, 0).UTC())
+
+	tests := []struct {
+		name        string
+		upstream    string
+		field       string
+		firstValue  string
+		secondValue string
+		wantStatus  string
+	}{
+		{name: "signature mode not observed", upstream: "SIGNATURE_MODE", field: "signature_mode", wantStatus: "not_observed"},
+		{name: "signature mode match", upstream: "SIGNATURE_MODE", field: "signature_mode", firstValue: "1", secondValue: "1", wantStatus: "match"},
+		{name: "signature mode present then absent", upstream: "SIGNATURE_MODE", field: "signature_mode", firstValue: "0", wantStatus: "changed"},
+		{name: "signature mode absent then present", upstream: "SIGNATURE_MODE", field: "signature_mode", secondValue: "0", wantStatus: "changed"},
+		{name: "signature mode changed", upstream: "SIGNATURE_MODE", field: "signature_mode", firstValue: "0", secondValue: "1", wantStatus: "changed"},
+		{name: "advanced boot not observed", upstream: "ADVANCED_BOOT", field: "advanced_boot", wantStatus: "not_observed"},
+		{name: "advanced boot match", upstream: "ADVANCED_BOOT", field: "advanced_boot", firstValue: "00000001", secondValue: "00000001", wantStatus: "match"},
+		{name: "advanced boot present then absent", upstream: "ADVANCED_BOOT", field: "advanced_boot", firstValue: "00000000", wantStatus: "changed"},
+		{name: "advanced boot absent then present", upstream: "ADVANCED_BOOT", field: "advanced_boot", secondValue: "00000000", wantStatus: "changed"},
+		{name: "advanced boot changed", upstream: "ADVANCED_BOOT", field: "advanced_boot", firstValue: "00000000", secondValue: "00000001", wantStatus: "changed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first := cloneProbeResult(t, baseFirst)
+			second := cloneProbeResult(t, baseSecond)
+			if tt.firstValue != "" {
+				setQualificationUpstreamField(&first.Observation, tt.upstream, tt.firstValue)
+			}
+			if tt.secondValue != "" {
+				setQualificationUpstreamField(&second.Observation, tt.upstream, tt.secondValue)
+			}
+
+			record, err := BuildQualificationRecord(profile, first, second, validQualificationContext())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if comparison := qualificationComparison(t, record, tt.field); comparison.Status != tt.wantStatus {
+				t.Fatalf("comparison = %#v, want status %q", comparison, tt.wantStatus)
+			}
+
+			finding := strings.ReplaceAll(tt.field, "_", "-") + "-changed"
+			if tt.wantStatus == "changed" {
+				if record.Status != QualificationStatusFailed || !record.QuarantineRequired || strings.Join(record.Findings, ",") != finding {
+					t.Fatalf("outcome = %#v, want finding %q", record, finding)
+				}
+			} else if record.Status != QualificationStatusPassed || record.QuarantineRequired || len(record.Findings) != 0 {
+				t.Fatalf("outcome = %#v", record)
 			}
 		})
 	}
@@ -310,9 +362,23 @@ func TestBuildQualificationRecordRejectsInvalidOrIncomparableInputs(t *testing.T
 			match: "EEPROM hash must be canonical when present",
 		},
 		{
+			name: "invalid signature mode",
+			mutate: func(_, second *ProbeResult) {
+				setQualificationUpstreamField(&second.Observation, "SIGNATURE_MODE", "2")
+			},
+			match: "signature mode is invalid",
+		},
+		{
+			name: "invalid advanced boot",
+			mutate: func(_, second *ProbeResult) {
+				setQualificationUpstreamField(&second.Observation, "ADVANCED_BOOT", "ABCDEF12")
+			},
+			match: "advanced-boot value is invalid",
+		},
+		{
 			name: "mutation success",
 			mutate: func(_, second *ProbeResult) {
-				second.Observation.UpstreamFields["EEPROM_UPDATE"] = "success"
+				setQualificationUpstreamField(&second.Observation, "EEPROM_UPDATE", "success")
 				second.Observation.MutationSuccess = []string{"EEPROM_UPDATE"}
 			},
 			match: "successful mutation operation",
@@ -472,6 +538,13 @@ func qualificationComparison(t *testing.T, record QualificationRecord, field str
 	}
 	t.Fatalf("comparison %q was not emitted", field)
 	return QualificationComparison{}
+}
+
+func setQualificationUpstreamField(observation *Observation, name, value string) {
+	if observation.UpstreamFields == nil {
+		observation.UpstreamFields = make(map[string]string)
+	}
+	observation.UpstreamFields[name] = value
 }
 
 func cloneProbeResult(t *testing.T, input ProbeResult) ProbeResult {
