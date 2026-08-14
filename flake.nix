@@ -112,6 +112,7 @@
           module-eval = moduleEval;
           provisioning-test-result = provisioning.checks.${system}.provisioning-test-result;
           station-ui = provisioning.checks.${system}.station-ui;
+          rpiboot-metadata-stdout = provisioning.checks.${system}.rpiboot-metadata-stdout;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
               {

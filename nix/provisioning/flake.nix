@@ -74,6 +74,7 @@
           module-eval = provisioning.moduleEval;
           provisioning-test-result = provisioning.provisioningTestResult;
           rpi5-probe-bundle = provisioning.probeBundleIntegrity;
+          rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           station-ui =
             pkgs.runCommand "kaiba-provisioning-station-ui-check"
               {

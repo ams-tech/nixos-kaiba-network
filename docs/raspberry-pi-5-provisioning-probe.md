@@ -29,24 +29,38 @@ The Nix package therefore constructs a separate immutable bundle containing
 exactly:
 
 ```text
-bootcode5.bin  # recovery.bin from the source pinned by pkgs.rpiboot
+bootcode5.bin  # recovery.bin from the unmodified source pinned by pkgs.rpiboot
 config.txt     # exactly: recovery_metadata=1
 ```
 
-The package also records the SHA-256 digests of `rpiboot`, both bundle files,
-and the complete bundle. The command checks those values and the exact file
-set before every live probe. Symlinks, additional files, altered content, and
-programming or erase directives fail before USB access. The command invokes
-the pinned binary directly, with an exact USB path and without a shell,
-`sudo`, loop mode, overlays, file-based metadata output, or a user-selected
-payload:
+The pinned Nixpkgs host tool predates stdout metadata support. Kaiba preserves
+its recovery firmware byte-for-byte and applies only the `main.c` changes from
+the upstream [stdout-output commit] and [stdout-default commit] to the host
+binary. The patched `main.c` must match the exact SHA-256 recorded in the Nix
+expression, and its build banner is fixed to the audited upstream revision
+instead of the wall clock so executable digests are reproducible. A native
+compatibility check drives its file server with scripted metadata, requires
+exactly one JSON object on stdout, verifies that stdout remains open, and
+proves that no JSON side file was created. CI runs that check on x86_64 and
+AArch64.
+
+The package records the SHA-256 digests of the patched `rpiboot` executable,
+both bundle files, and the complete bundle. The command checks those values
+and the exact file set before every live probe. Symlinks, additional files,
+altered content, and programming or erase directives fail before USB access.
+The command invokes the pinned binary directly, with an exact USB path and
+without a shell, `sudo`, loop mode, overlays, file-based metadata output, or a
+user-selected payload:
 
 ```text
 rpiboot -p <exact-usb-path> -d <probe-bundle>
 ```
 
-The recovery program emits its metadata object on standard output by default;
-the probe deliberately does not pass `rpiboot`'s `-j` file-output option.
+The recovery program sends metadata fields to the patched host tool, which
+emits their JSON object on standard output by default. The probe deliberately
+does not pass `rpiboot`'s `-j` file-output option. Do not substitute an
+operator-created `-j` directory: it would move private metadata to an
+additional serial-derived file outside the wrapper's bounded capture path.
 
 This unsigned recovery program is usable only before a customer secure-boot
 key is fused. BCM2712 requires recovery firmware to be counter-signed by that
@@ -214,7 +228,8 @@ ceremony:
 
 1. Freeze a clean Git revision whose x86 and native AArch64 checks pass. Build
    and install the station from that revision. Record its exact
-   `/run/current-system` store target.
+   `/run/current-system` store target. Both architectures must have passed the
+   `rpiboot-metadata-stdout` compatibility check.
 2. Before entering RPIBOOT mode, boot the target normally from named,
    known-good media. Define and record an observable success criterion, such as
    reaching a local console with the expected board model and storage visible.
@@ -363,3 +378,5 @@ GitHub Pages; never add raw results or an `incomplete` preflight record.
 [Raspberry Pi recovery documentation]: https://github.com/raspberrypi/usbboot/blob/master/recovery5/README.md
 [Raspberry Pi maintainer]: https://github.com/raspberrypi/rpi-eeprom/issues/735
 [official Pi 5 secure-boot procedure]: https://github.com/raspberrypi/usbboot/blob/master/secure-boot-recovery5/README.md
+[stdout-output commit]: https://github.com/raspberrypi/usbboot/commit/163cc6e5e69c92f39666ad40c496bcd917c1a0d8
+[stdout-default commit]: https://github.com/raspberrypi/usbboot/commit/f64fa310afd45eb7c5b46ec4f9319e5404a48e6a

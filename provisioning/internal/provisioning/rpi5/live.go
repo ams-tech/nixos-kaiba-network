@@ -208,8 +208,8 @@ func (s LiveSource) Acquire(ctx context.Context, request ProbeRequest) (RawEvide
 	}
 	stdout := &limitedBuffer{limit: MaxCommandOutput}
 	stderr := &limitedBuffer{limit: MaxCommandOutput}
-	// The recovery firmware emits metadata on stdout by default. In rpiboot,
-	// -j selects file-based metadata output, so it is intentionally absent.
+	// The packaged rpiboot carries the audited upstream stdout-metadata
+	// backport. -j selects file-based output, so it is intentionally absent.
 	args := []string{"-p", request.USBPath, "-d", s.Config.BundlePath}
 	err = runner.Run(probeCtx, s.Config.BinaryPath, args, stdout, stderr)
 	// A complete mutation result is the highest-priority outcome, even if

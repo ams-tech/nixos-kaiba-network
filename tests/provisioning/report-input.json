@@ -33,6 +33,13 @@
         "evidence": []
       },
       {
+        "id": "rpiboot-metadata-stdout",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Pinned rpiboot host tool emits one bounded metadata object on stdout without creating a side file.",
+        "evidence": []
+      },
+      {
         "id": "provision-package",
         "system": "aarch64-linux",
         "status": "not-observed",
@@ -65,6 +72,13 @@
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Immutable metadata-only probe bundle and compiled digest-manifest integrity.",
+        "evidence": []
+      },
+      {
+        "id": "rpiboot-metadata-stdout",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Pinned rpiboot host tool emits one bounded metadata object on stdout without creating a side file.",
         "evidence": []
       },
       {

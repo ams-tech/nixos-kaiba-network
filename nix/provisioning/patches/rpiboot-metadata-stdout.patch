@@ -1,0 +1,85 @@
+Backport the host-side main.c changes from these upstream commits:
+
+  163cc6e5e69c92f39666ad40c496bcd917c1a0d8
+  rpiboot: Output metadata to stdout when path not provided or invalid
+
+  f64fa310afd45eb7c5b46ec4f9319e5404a48e6a
+  rpiboot: Enable metadata output by default when metadata is received
+
+The complete second commit also changes recovery configuration and documentation.
+Those changes are intentionally excluded so that Kaiba continues to use the recovery5
+firmware and configuration from the frozen 20250908-162618-bookworm source. Applying
+this patch to that tag makes main.c byte-identical to main.c at f64fa31.
+
+diff --git a/main.c b/main.c
+index 81c7813..10fbf56 100644
+--- a/main.c
++++ b/main.c
+@@ -90 +90 @@ void usage(int error)
+-	fprintf(dest, "        -j [path]        : Enable output of metadata JSON files in a given directory for BCM2712/2711\n");
++	fprintf(dest, "        -j [path]        : Write metadata JSON object to a file at the given path (BCM2712/2711)\n");
+@@ -543,5 +543,4 @@ void get_options(int argc, char *argv[])
+-			argv++; argc--;
+-			if(argc < 1)
+-				usage(1);
+-			metadata_path = *argv;
+-			metadata = 1;
++			if ((argc > 1) && (argv[1][0] != '-')) {
++				argv++; argc--;
++				metadata_path = *argv;
++			}
+@@ -791,2 +790,3 @@ void close_metadata_file(FILE ** fp){
+-	fprintf(*fp, "\n}");
+-	fclose(*fp);
++	fprintf(*fp, "\n}\n");
++	if (*fp != stdout)
++		fclose(*fp);
+@@ -807 +807,3 @@ void write_metadata_file(char *metadata_str, FILE **fp, int index)
+-		if (index != 0)
++		if (index == 0)
++			fprintf(*fp, "{");
++		else
+@@ -816 +818 @@ void write_metadata_file(char *metadata_str, FILE **fp, int index)
+-				fprintf(*fp, "\n\t\"%s\" : \"%s\"", property, c40_str);
++				fprintf(*fp, "\n\t\"%s\": \"%s\"", property, c40_str);
+@@ -820 +822 @@ void write_metadata_file(char *metadata_str, FILE **fp, int index)
+-			fprintf(*fp, "\n\t\"%s\" : \"%s\"", property, value);
++			fprintf(*fp, "\n\t\"%s\": \"%s\"", property, value);
+@@ -829 +831,6 @@ void create_metadata_file(FILE ** fp)
+-	char fname[MAX_PATH_LEN + FILE_NAME_LENGTH + 5]; // 5 for extension .json
++	if (metadata_path == NULL)
++	{
++		*fp = stdout;
++		return;
++	}
++	char fname[MAX_PATH_LEN + FILE_NAME_LENGTH + 5]; // + 5 for extension ".json"
+@@ -836 +842,0 @@ void create_metadata_file(FILE ** fp)
+-		fprintf(*fp, "{");
+@@ -840,2 +846,2 @@ void create_metadata_file(FILE ** fp)
+-		fprintf(stderr, "Failed to create metadata file: %s\n", fname);
+-		metadata = 0;
++		fprintf(stderr, "Failed to create metadata file: %s\nWriting to stdout instead...\n", fname);
++		*fp = stdout;
+@@ -857,13 +862,0 @@ int file_server(libusb_device_handle * usb_device)
+-	if (metadata)
+-	{
+-		if (bcm2711 || bcm2712)
+-		{
+-			create_metadata_file(&metadata_fp);
+-		}
+-		else
+-		{
+-			fprintf(stderr, "Failed to create metadata file: expected BCM2712/2711");
+-			metadata = 0;
+-		}
+-	}
+-
+@@ -893,0 +887,8 @@ int file_server(libusb_device_handle * usb_device)
++			if (!metadata_fp)
++			{
++				if (bcm2711 || bcm2712)
++				{
++					create_metadata_file(&metadata_fp);
++					metadata = 1;
++				}
++			}

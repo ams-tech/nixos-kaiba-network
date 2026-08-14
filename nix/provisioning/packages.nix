@@ -8,6 +8,41 @@ let
   version = "0.1.0";
   goSource = lib.cleanSource moduleRoot;
 
+  # Keep the audited recovery firmware on the frozen Nixpkgs source while
+  # backporting only the two upstream host-tool commits that make metadata
+  # arrive on stdout without -j. The post-patch digest is the exact main.c
+  # blob produced by upstream commit f64fa310afd45eb7c5b46ec4f9319e5404a48e6a.
+  rpibootBase = pkgs.rpiboot;
+  rpibootSource = pkgs.applyPatches {
+    name = "rpiboot-${rpibootBase.version}-kaiba-source";
+    src = rpibootBase.src;
+    patches = [ ./patches/rpiboot-metadata-stdout.patch ];
+    postPatch = ''
+      test "$(sha256sum main.c | cut -d ' ' -f 1)" = \
+        d506bbde92c66f96655d000892e13903a19c39468f87be9fdd930334d95c0e7c
+    '';
+  };
+  rpiboot = rpibootBase.overrideAttrs (previous: {
+    version = "${previous.version}+kaiba-stdout-metadata.1";
+    src = rpibootSource;
+    patches = [ ];
+    makeFlags = (previous.makeFlags or [ ]) ++ [
+      "BUILD_DATE=2025/12/02"
+      "GIT_VER=f64fa310"
+      "PKG_VER=20250908~162618~bookworm+kaiba-stdout-metadata.1"
+    ];
+    passthru = (previous.passthru or { }) // {
+      kaibaMetadataStdoutBackport = {
+        baseVersion = rpibootBase.version;
+        mainSHA256 = "d506bbde92c66f96655d000892e13903a19c39468f87be9fdd930334d95c0e7c";
+        upstreamCommits = [
+          "163cc6e5e69c92f39666ad40c496bcd917c1a0d8"
+          "f64fa310afd45eb7c5b46ec4f9319e5404a48e6a"
+        ];
+      };
+    };
+  });
+
   rpi5ProbeBundle =
     pkgs.runCommand "kaiba-rpi5-probe-bundle"
       {
@@ -16,16 +51,16 @@ let
           pkgs.jq
         ];
         passthru = {
-          inherit (pkgs) rpiboot;
+          inherit rpiboot;
         };
       }
       ''
         mkdir -p "$out/bundle"
-        install -m 0444 ${pkgs.rpiboot.src}/recovery5/bootcode5.bin "$out/bundle/bootcode5.bin"
+        install -m 0444 ${rpibootBase.src}/recovery5/bootcode5.bin "$out/bundle/bootcode5.bin"
         printf '%s\n' 'recovery_metadata=1' > "$out/bundle/config.txt"
         chmod 0444 "$out/bundle/config.txt"
 
-        rpiboot_sha256="sha256:$(sha256sum ${pkgs.rpiboot}/bin/rpiboot | cut -d ' ' -f 1)"
+        rpiboot_sha256="sha256:$(sha256sum ${rpiboot}/bin/rpiboot | cut -d ' ' -f 1)"
         bootcode_sha256="sha256:$(sha256sum "$out/bundle/bootcode5.bin" | cut -d ' ' -f 1)"
         config_sha256="sha256:$(sha256sum "$out/bundle/config.txt" | cut -d ' ' -f 1)"
         bundle_sha256="$(
@@ -39,7 +74,7 @@ let
 
         jq --null-input \
           --arg schema 'kaiba.rpi5-probe-bundle/v1alpha1' \
-          --arg tool_version '${pkgs.rpiboot.version}' \
+          --arg tool_version '${rpiboot.version}' \
           --arg rpiboot_sha256 "$rpiboot_sha256" \
           --arg bootcode_sha256 "$bootcode_sha256" \
           --arg config_sha256 "$config_sha256" \
@@ -68,7 +103,7 @@ let
     ];
 
     ldflags = [
-      "-X=main.rpibootPath=${pkgs.rpiboot}/bin/rpiboot"
+      "-X=main.rpibootPath=${rpiboot}/bin/rpiboot"
       "-X=main.probeBundlePath=${rpi5ProbeBundle}/bundle"
       "-X=main.probeManifestPath=${rpi5ProbeBundle}/manifest.json"
       "-X=main.buildSystem=${pkgs.stdenv.hostPlatform.system}"
@@ -131,7 +166,7 @@ let
           "$out/share/kaiba/device-profiles" \
           "$out/share/kaiba/schemas"
         ln -s ${suite}/bin/kaiba-provision "$out/bin/kaiba-provision"
-        ln -s ${pkgs.rpiboot}/bin/rpiboot "$out/libexec/kaiba/rpiboot"
+        ln -s ${rpiboot}/bin/rpiboot "$out/libexec/kaiba/rpiboot"
         ln -s ${goSource}/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json \
           "$out/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json"
         ln -s ${goSource}/schemas/device-profile-v1alpha1.schema.json \
@@ -161,6 +196,8 @@ in
   inherit
     goSource
     provision
+    rpiboot
+    rpibootSource
     rpi5ProbeBundle
     stationDemo
     stationGraphGenerator

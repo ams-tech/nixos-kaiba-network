@@ -162,13 +162,15 @@ let
         test "$(find ${built.rpi5ProbeBundle}/bundle -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)" = $'bootcode5.bin\nconfig.txt'
         test ! -L ${built.rpi5ProbeBundle}/bundle/bootcode5.bin
         test ! -L ${built.rpi5ProbeBundle}/bundle/config.txt
+        cmp ${built.rpi5ProbeBundle}/bundle/bootcode5.bin \
+          ${pkgs.rpiboot.src}/recovery5/bootcode5.bin
         test "$(cat ${built.rpi5ProbeBundle}/bundle/config.txt)" = 'recovery_metadata=1'
         test "$(wc -c < ${built.rpi5ProbeBundle}/bundle/config.txt)" -eq 20
         test "$(jq -r .schema ${built.rpi5ProbeBundle}/manifest.json)" = 'kaiba.rpi5-probe-bundle/v1alpha1'
         test "$(jq -c 'keys | sort' ${built.rpi5ProbeBundle}/manifest.json)" = '["bundle_sha256","files","schema","tool_sha256","tool_version"]'
         test "$(jq -c '.files | keys | sort' ${built.rpi5ProbeBundle}/manifest.json)" = '["bootcode5.bin","config.txt"]'
-        test "$(jq -r .tool_version ${built.rpi5ProbeBundle}/manifest.json)" = '${pkgs.rpiboot.version}'
-        tool_digest="sha256:$(sha256sum ${pkgs.rpiboot}/bin/rpiboot | cut -d ' ' -f 1)"
+        test "$(jq -r .tool_version ${built.rpi5ProbeBundle}/manifest.json)" = '${built.rpiboot.version}'
+        tool_digest="sha256:$(sha256sum ${built.rpiboot}/bin/rpiboot | cut -d ' ' -f 1)"
         firmware_digest="sha256:$(sha256sum ${built.rpi5ProbeBundle}/bundle/bootcode5.bin | cut -d ' ' -f 1)"
         config_digest="sha256:$(sha256sum ${built.rpi5ProbeBundle}/bundle/config.txt | cut -d ' ' -f 1)"
         bundle_digest="sha256:$(
@@ -182,6 +184,76 @@ let
         test "$(jq -r '.files["bootcode5.bin"]' ${built.rpi5ProbeBundle}/manifest.json)" = "$firmware_digest"
         test "$(jq -r '.files["config.txt"]' ${built.rpi5ProbeBundle}/manifest.json)" = "$config_digest"
         test "$(jq -r .bundle_sha256 ${built.rpi5ProbeBundle}/manifest.json)" = "$bundle_digest"
+        mkdir -p "$out"
+        touch "$out/passed"
+      '';
+
+  rpibootMetadataStdoutCompatibility =
+    pkgs.runCommand "kaiba-rpiboot-metadata-stdout-compatibility"
+      {
+        nativeBuildInputs = [
+          pkgs.jq
+          pkgs.pkg-config
+          pkgs.stdenv.cc
+        ];
+        buildInputs = [ pkgs.libusb1 ];
+      }
+      ''
+        set -eu
+        test "$(sha256sum ${built.rpibootSource}/main.c | cut -d ' ' -f 1)" = \
+          d506bbde92c66f96655d000892e13903a19c39468f87be9fdd930334d95c0e7c
+        test '${built.rpiboot.version}' = \
+          '${pkgs.rpiboot.version}+kaiba-stdout-metadata.1'
+        ! cmp -s ${built.rpiboot}/bin/rpiboot ${pkgs.rpiboot}/bin/rpiboot
+
+        ${built.rpiboot}/bin/rpiboot --help > "$TMPDIR/help.txt"
+        grep -F \
+          -- '-j [path]        : Write metadata JSON object to a file at the given path (BCM2712/2711)' \
+          "$TMPDIR/help.txt"
+        test "$(${built.rpiboot}/bin/rpiboot --version)" = \
+          'RPIBOOT: build-date 2025/12/02 pkg-version 20250908~162618~bookworm+kaiba-stdout-metadata.1 f64fa310'
+
+        mkdir "$TMPDIR/harness"
+        cp -R ${built.rpibootSource}/. "$TMPDIR/harness/source"
+        chmod -R u+w "$TMPDIR/harness/source"
+        cd "$TMPDIR/harness/source"
+        $CC -Wall -Wextra bin2c.c -o bin2c
+        ./bin2c msd/bootcode.bin msd/bootcode.h
+        ./bin2c msd/start.elf msd/start.h
+        ./bin2c msd/bootcode4.bin msd/bootcode4.h
+        cflags="$(pkg-config --cflags libusb-1.0)"
+        libs="$(pkg-config --libs libusb-1.0)"
+        $CC -Wall -Wextra $cflags \
+          -Dmain=rpiboot_program_main \
+          '-DGIT_VER="compatibility-test"' \
+          '-DPKG_VER="compatibility-test"' \
+          '-DBUILD_DATE="1970/01/01"' \
+          '-DINSTALL_PREFIX="/nonexistent"' \
+          -c main.c -o main.o
+        $CC -Wall -Wextra $cflags \
+          -c bootfiles.c -o bootfiles.o
+        $CC -Wall -Wextra $cflags \
+          -c decode_duid.c -o decode_duid.o
+        $CC -Wall -Wextra $cflags \
+          ${./rpiboot-metadata-stdout-harness.c} \
+          main.o bootfiles.o decode_duid.o \
+          -Wl,--wrap=libusb_control_transfer \
+          $libs \
+          -o rpiboot-metadata-stdout-harness
+
+        ./rpiboot-metadata-stdout-harness > stdout.txt
+        test -z "$(find . -maxdepth 1 -name '*.json' -print -quit)"
+        test "$(grep -c '^{' stdout.txt)" -eq 1
+        test "$(grep -c '^}$' stdout.txt)" -eq 1
+        sed -n '/^{/,/^}$/p' stdout.txt > metadata.json
+        jq -e '
+          keys == ["EEPROM_HASH", "USER_SERIAL_NUM"]
+          and .USER_SERIAL_NUM == "A7EB274C"
+          and .EEPROM_HASH == "dfc8ef2c77b8152a5cfa008c2296246413fd580fdc26dfacd431e348571a2137"
+        ' metadata.json > /dev/null
+        grep -Fx 'KAIBA_RPIBOOT_STDOUT_HARNESS_DONE' stdout.txt
+        ! grep -F 'Created metadata file:' stdout.txt
+
         mkdir -p "$out"
         touch "$out/passed"
       '';
@@ -208,6 +280,10 @@ let
     {
       id = "probe-bundle-integrity";
       description = "Immutable metadata-only probe bundle and compiled digest-manifest integrity.";
+    }
+    {
+      id = "rpiboot-metadata-stdout";
+      description = "Pinned rpiboot host tool emits one bounded metadata object on stdout without creating a side file.";
     }
     {
       id = "provision-package";
@@ -343,6 +419,7 @@ let
         test -x ${built.provision}/bin/kaiba-provision
         test -f ${deviceProfileSchema}/passed
         test -f ${probeBundleIntegrity}/passed
+        test -f ${rpibootMetadataStdoutCompatibility}/passed
         test -f ${moduleEval}/results.txt
 
         mkdir -p "$out/evidence/provisioning/hardware-qualification"
@@ -385,5 +462,6 @@ in
     moduleEval
     probeBundleIntegrity
     provisioningTestResult
+    rpibootMetadataStdoutCompatibility
     ;
 }
