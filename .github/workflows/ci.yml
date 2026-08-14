@@ -54,6 +54,7 @@ jobs:
             ./nix/provisioning#checks.x86_64-linux.module-eval \
             ./nix/provisioning#checks.x86_64-linux.provisioning-test-result \
             ./nix/provisioning#checks.x86_64-linux.rpi5-probe-bundle \
+            ./nix/provisioning#checks.x86_64-linux.rpiboot-metadata-stdout \
             ./nix/provisioning#checks.x86_64-linux.station-ui \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision \
             ./nix/dns#checks.x86_64-linux.module-eval \
@@ -87,6 +88,7 @@ jobs:
             ./nix/dns#packages.aarch64-linux.kaiba-publisher \
             ./nix/provisioning#checks.aarch64-linux.unit \
             ./nix/provisioning#checks.aarch64-linux.rpi5-probe-bundle \
+            ./nix/provisioning#checks.aarch64-linux.rpiboot-metadata-stdout \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-pages

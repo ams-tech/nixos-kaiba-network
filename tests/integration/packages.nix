@@ -36,6 +36,7 @@ let
           echo "raw DNS evidence uses the reserved provisioning namespace" >&2
           exit 1
         fi
+        chmod u+w "$input/evidence"
         cp -R --no-dereference ${provisioningTestResult}/evidence/. "$input/evidence/"
         mkdir -p "$out"
         python3 ${../report/render.py} \
