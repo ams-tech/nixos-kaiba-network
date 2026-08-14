@@ -18,7 +18,6 @@ import (
 const testMetadata = `{
   "USER_SERIAL_NUM": "A7EB274C",
   "MAC_ADDR": "2C:CF:67:70:76:F3",
-  "EEPROM_HASH": "dfc8ef2c77b8152a5cfa008c2296246413fd580fdc26dfacd431e348571a2137",
   "CUSTOMER_KEY_HASH": "0000000000000000000000000000000000000000000000000000000000000000",
   "BOOT_ROM": "0000000A",
   "BOARD_ATTR": "00000000",
@@ -90,6 +89,9 @@ func TestRunOfflineProbeProducesDeterministicResult(t *testing.T) {
 	if len(result.Observation.TargetFingerprint) != len("sha256:")+64 || len(result.Observation.EvidenceDigest) != len("sha256:")+64 {
 		t.Fatalf("observation digests = %#v", result.Observation)
 	}
+	if result.Observation.EEPROMHash != "" {
+		t.Fatalf("optional EEPROM hash = %q, want absent", result.Observation.EEPROMHash)
+	}
 
 	var secondOut, secondErr bytes.Buffer
 	code = run(context.Background(), []string{
@@ -137,40 +139,46 @@ func TestRunLiveProbeUsesExactTargetAndProvenance(t *testing.T) {
 
 func TestRunAssessmentExitCodesStillEmitJSON(t *testing.T) {
 	tests := []struct {
-		name     string
-		metadata string
-		wantCode int
-		want     provisioning.Status
+		name         string
+		metadata     string
+		wantCode     int
+		wantClass    provisioning.Status
+		wantBaseline provisioning.Status
 	}{
 		{
-			name:     "compute module 5",
-			metadata: strings.Replace(testMetadata, "B04170", "804180", 1),
-			wantCode: exitDeviceClass,
-			want:     provisioning.StatusFail,
+			name:         "compute module 5",
+			metadata:     strings.Replace(testMetadata, "B04170", "804180", 1),
+			wantCode:     exitDeviceClass,
+			wantClass:    provisioning.StatusFail,
+			wantBaseline: provisioning.StatusIndeterminate,
 		},
 		{
-			name:     "pi 500",
-			metadata: strings.Replace(testMetadata, "B04170", "8041A0", 1),
-			wantCode: exitDeviceClass,
-			want:     provisioning.StatusFail,
+			name:         "pi 500",
+			metadata:     strings.Replace(testMetadata, "B04170", "8041A0", 1),
+			wantCode:     exitDeviceClass,
+			wantClass:    provisioning.StatusFail,
+			wantBaseline: provisioning.StatusIndeterminate,
 		},
 		{
-			name:     "locked JTAG",
-			metadata: strings.Replace(testMetadata, `"JTAG_LOCKED": "0"`, `"JTAG_LOCKED": "1"`, 1),
-			wantCode: exitBaseline,
-			want:     provisioning.StatusPass,
+			name:         "locked JTAG",
+			metadata:     strings.Replace(testMetadata, `"JTAG_LOCKED": "0"`, `"JTAG_LOCKED": "1"`, 1),
+			wantCode:     exitBaseline,
+			wantClass:    provisioning.StatusPass,
+			wantBaseline: provisioning.StatusFail,
 		},
 		{
-			name:     "missing optional EEPROM hash",
-			metadata: removeLine(testMetadata, `"EEPROM_HASH"`),
-			wantCode: exitBaseline,
-			want:     provisioning.StatusPass,
+			name:         "missing optional EEPROM hash",
+			metadata:     testMetadata,
+			wantCode:     exitOK,
+			wantClass:    provisioning.StatusPass,
+			wantBaseline: provisioning.StatusPass,
 		},
 		{
-			name:     "future metadata field",
-			metadata: strings.Replace(testMetadata, `"FACTORY_UUID"`, `"FUTURE_SECURITY_STATE": "unknown", "FACTORY_UUID"`, 1),
-			wantCode: exitBaseline,
-			want:     provisioning.StatusPass,
+			name:         "future metadata field",
+			metadata:     strings.Replace(testMetadata, `"FACTORY_UUID"`, `"FUTURE_SECURITY_STATE": "unknown", "FACTORY_UUID"`, 1),
+			wantCode:     exitBaseline,
+			wantClass:    provisioning.StatusPass,
+			wantBaseline: provisioning.StatusIndeterminate,
 		},
 	}
 	for _, tt := range tests {
@@ -189,8 +197,11 @@ func TestRunAssessmentExitCodesStillEmitJSON(t *testing.T) {
 			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Assessment.Class.Status != tt.want {
-				t.Fatalf("class status = %q, want %q", result.Assessment.Class.Status, tt.want)
+			if result.Assessment.Class.Status != tt.wantClass {
+				t.Fatalf("class status = %q, want %q", result.Assessment.Class.Status, tt.wantClass)
+			}
+			if result.Assessment.ObservableBaseline.Status != tt.wantBaseline {
+				t.Fatalf("baseline status = %q, want %q", result.Assessment.ObservableBaseline.Status, tt.wantBaseline)
 			}
 		})
 	}
@@ -315,6 +326,22 @@ func TestRunQualificationEmitsOnlyRedactedPublicEvidence(t *testing.T) {
 	if record.Status != rpi5.QualificationStatusPassed || record.MutationEligible {
 		t.Fatalf("record = %#v", record)
 	}
+	if len(record.Probes) != 2 || record.Probes[0].EEPROMHash != nil || record.Probes[1].EEPROMHash != nil {
+		t.Fatalf("absent EEPROM hashes were not redacted as null: %#v", record.Probes)
+	}
+	eepromComparisonObserved := false
+	for _, comparison := range record.Comparisons {
+		if comparison.Field != "eeprom_hash" {
+			continue
+		}
+		eepromComparisonObserved = true
+		if comparison.Status != "not_observed" {
+			t.Fatalf("EEPROM comparison status = %q, want not_observed", comparison.Status)
+		}
+	}
+	if !eepromComparisonObserved {
+		t.Fatal("qualification record omitted EEPROM comparison")
+	}
 	for _, privateValue := range []string{
 		observation.UserSerial, observation.FactoryUUID, observation.EthernetMAC,
 		observation.WiFiMAC, observation.BluetoothMAC, result.Source.LaneID, result.Source.USBPath,
@@ -385,16 +412,6 @@ func testDependencies(t *testing.T) dependencies {
 			return nil
 		},
 	}
-}
-
-func removeLine(raw, marker string) string {
-	lines := strings.Split(raw, "\n")
-	for i, line := range lines {
-		if strings.Contains(line, marker) {
-			return strings.Join(append(lines[:i], lines[i+1:]...), "\n")
-		}
-	}
-	return raw
 }
 
 func writePrivateProbeResult(t *testing.T, result probeResult, name string) string {

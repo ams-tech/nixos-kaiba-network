@@ -129,8 +129,12 @@
           "findings": { "maxItems": 0 },
           "normal_boot_confirmation": { "const": "operator_confirmed_unchanged" },
           "comparisons": {
-            "items": {
-              "properties": { "status": { "const": "match" } }
+            "not": {
+              "contains": {
+                "type": "object",
+                "required": ["status"],
+                "properties": { "status": { "const": "changed" } }
+              }
             }
           }
         }
@@ -152,8 +156,104 @@
             "findings": { "maxItems": 0 },
             "normal_boot_confirmation": { "const": "not_yet_observed" },
             "comparisons": {
-              "items": {
-                "properties": { "status": { "const": "match" } }
+              "not": {
+                "contains": {
+                  "type": "object",
+                  "required": ["status"],
+                  "properties": { "status": { "const": "changed" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "probes": {
+            "prefixItems": [
+              { "properties": { "eeprom_hash": { "type": "null" } } },
+              { "properties": { "eeprom_hash": { "type": "null" } } }
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "comparisons": {
+            "contains": {
+              "type": "object",
+              "required": ["field", "status"],
+              "properties": {
+                "field": { "const": "eeprom_hash" },
+                "status": { "const": "not_observed" }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "comparisons": {
+            "contains": {
+              "type": "object",
+              "required": ["field", "status"],
+              "properties": {
+                "field": { "const": "eeprom_hash" },
+                "status": { "enum": ["match", "changed"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "probes": {
+            "prefixItems": [
+              { "properties": { "eeprom_hash": { "type": "null" } } },
+              { "properties": { "eeprom_hash": { "type": "string" } } }
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "comparisons": {
+            "contains": {
+              "type": "object",
+              "required": ["field", "status"],
+              "properties": {
+                "field": { "const": "eeprom_hash" },
+                "status": { "const": "changed" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "probes": {
+            "prefixItems": [
+              { "properties": { "eeprom_hash": { "type": "string" } } },
+              { "properties": { "eeprom_hash": { "type": "null" } } }
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "comparisons": {
+            "contains": {
+              "type": "object",
+              "required": ["field", "status"],
+              "properties": {
+                "field": { "const": "eeprom_hash" },
+                "status": { "const": "changed" }
               }
             }
           }
@@ -234,7 +334,12 @@
         "board_revision": { "$ref": "#/$defs/board-revision" },
         "board_attributes": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
         "boot_rom": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
-        "eeprom_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "eeprom_hash": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          ]
+        },
         "customer_key_hash": {
           "const": "0000000000000000000000000000000000000000000000000000000000000000"
         },
@@ -295,53 +400,59 @@
       "required": ["field", "status"],
       "properties": {
         "field": { "type": "string" },
-        "status": { "enum": ["match", "changed"] }
+        "status": { "enum": ["match", "changed", "not_observed"] }
       }
     },
+    "comparison-observed": {
+      "allOf": [
+        { "$ref": "#/$defs/comparison" },
+        { "properties": { "status": { "enum": ["match", "changed"] } } }
+      ]
+    },
     "comparison-target-fingerprint": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "target_fingerprint" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "target_fingerprint" } } }]
     },
     "comparison-user-serial": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "user_serial" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "user_serial" } } }]
     },
     "comparison-factory-uuid": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "factory_uuid" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "factory_uuid" } } }]
     },
     "comparison-board-revision": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "board_revision" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "board_revision" } } }]
     },
     "comparison-board-attributes": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "board_attributes" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "board_attributes" } } }]
     },
     "comparison-ethernet-mac": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "ethernet_mac" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "ethernet_mac" } } }]
     },
     "comparison-wifi-mac": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "wifi_mac" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "wifi_mac" } } }]
     },
     "comparison-bluetooth-mac": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "bluetooth_mac" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "bluetooth_mac" } } }]
     },
     "comparison-boot-rom": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "boot_rom" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "boot_rom" } } }]
     },
     "comparison-eeprom-hash": {
       "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "eeprom_hash" } } }]
     },
     "comparison-customer-key-hash": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "customer_key_hash" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "customer_key_hash" } } }]
     },
     "comparison-customer-key-state": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "customer_key_state" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "customer_key_state" } } }]
     },
     "comparison-videocore-jtag-locked": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "videocore_jtag_locked" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "videocore_jtag_locked" } } }]
     },
     "comparison-signature-mode": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "signature_mode" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "signature_mode" } } }]
     },
     "comparison-advanced-boot": {
-      "allOf": [{ "$ref": "#/$defs/comparison" }, { "properties": { "field": { "const": "advanced_boot" } } }]
+      "allOf": [{ "$ref": "#/$defs/comparison-observed" }, { "properties": { "field": { "const": "advanced_boot" } } }]
     }
   }
 }

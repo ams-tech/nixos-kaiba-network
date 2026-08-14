@@ -244,7 +244,7 @@
       current = "probe-two";
     }
     if (probeCount >= 2 || ["awaiting_normal_boot_confirmation", "awaiting_boot_confirmation", "complete", "qualified", "quarantined"].includes(phase)) {
-      if (normalized(secondProbe?.status) === "failed" || state.comparison?.some((item) => normalized(item.status) !== "match")) {
+      if (normalized(secondProbe?.status) === "failed" || state.comparison?.some(comparisonFailed)) {
         failed.add("probe-two");
         current = null;
       } else {
@@ -256,6 +256,11 @@
     if (phase === "quarantined" && state.outcome?.title === "Normal boot failed") failed.add("boot");
     if (phase === "stopped" || phase === "quarantined") current = null;
     return { complete, failed, current };
+  }
+
+  function comparisonFailed(item) {
+    const status = normalized(item?.status);
+    return status !== "match" && !(normalized(item?.field) === "eeprom_hash" && status === "not_observed");
   }
 
   function render(state) {

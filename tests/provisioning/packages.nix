@@ -58,7 +58,6 @@ let
     builtins.toJSON {
       USER_SERIAL_NUM = "A7EB274C";
       MAC_ADDR = "2C:CF:67:70:76:F3";
-      EEPROM_HASH = "dfc8ef2c77b8152a5cfa008c2296246413fd580fdc26dfacd431e348571a2137";
       CUSTOMER_KEY_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
       BOOT_ROM = "0000000A";
       BOARD_ATTR = "00000000";
@@ -93,6 +92,11 @@ let
           --profile ${qualificationProfilePath} \
           --metadata ${qualificationMetadata} \
           > "$TMPDIR/base-probe.json"
+        jq -e '
+          .assessment.device_class.status == "pass"
+          and .assessment.observable_baseline.status == "pass"
+          and (.observation | has("eeprom_hash") | not)
+        ' "$TMPDIR/base-probe.json" > /dev/null
         tool_version="$(jq -r .tool_version ${built.rpi5ProbeBundle}/manifest.json)"
         tool_digest="$(jq -r .tool_sha256 ${built.rpi5ProbeBundle}/manifest.json)"
         bundle_digest="$(jq -r .bundle_sha256 ${built.rpi5ProbeBundle}/manifest.json)"
@@ -150,6 +154,10 @@ let
         test "$(jq -r .profile.policy_digest "$TMPDIR/passed.json")" = '${qualificationPolicyDigest}'
         test "$(jq -r .station_system "$TMPDIR/passed.json")" = '${pkgs.stdenv.hostPlatform.system}'
         test "$(jq -r .source.bundle_digest "$TMPDIR/passed.json")" = "$bundle_digest"
+        jq -e '
+          [.probes[].eeprom_hash] == [null, null]
+          and ([.comparisons[] | select(.field == "eeprom_hash") | .status] == ["not_observed"])
+        ' "$TMPDIR/passed.json" > /dev/null
         ! grep -F 'nixos-system-qualification-station' "$TMPDIR/passed.json"
 
         mkdir -p "$out"

@@ -218,7 +218,7 @@ func confirmBoot(state *State, ok bool) {
 	state.Outcome = &Outcome{
 		Status:  "hardware_qualification_passed",
 		Title:   "Hardware qualification passed",
-		Message: "Two matching non-persistent probe observations and an operator-supplied normal-boot confirmation were recorded.",
+		Message: "Two consistent non-persistent probe observations and an operator-supplied normal-boot confirmation were recorded.",
 	}
 	state.AllowedActions = []Action{ActionExportRedacted, ActionReset}
 }
@@ -284,7 +284,7 @@ func syntheticTarget() *TargetSummary {
 		Processor:           "4 — BCM2712",
 		ModelCode:           "0x17",
 		BootROM:             "0000000a",
-		EEPROMHash:          "dfc8ef2c77b8152a5cfa008c2296246413fd580fdc26dfacd431e348571a2137",
+		EEPROMHash:          "",
 		CustomerKeyState:    "unset — zero hash",
 		VideoCoreJTAGState:  "unlocked",
 		VideoCoreJTAGLocked: false,
@@ -351,8 +351,10 @@ func compareObservations(first, second *TargetSummary) []Comparison {
 	result := make([]Comparison, 0, len(fields))
 	for _, field := range fields {
 		status := "match"
-		if field.first == "" || field.second == "" {
+		if field.first == "" && field.second == "" {
 			status = "not_observed"
+		} else if field.first == "" || field.second == "" {
+			status = "changed"
 		} else if field.first != field.second {
 			status = "changed"
 		}
@@ -363,9 +365,10 @@ func compareObservations(first, second *TargetSummary) []Comparison {
 
 func hasChangedComparison(comparison []Comparison) bool {
 	for _, field := range comparison {
-		if field.Status != "match" {
-			return true
+		if field.Status == "match" || (field.Field == "eeprom_hash" && field.Status == "not_observed") {
+			continue
 		}
+		return true
 	}
 	return false
 }
