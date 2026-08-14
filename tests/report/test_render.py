@@ -56,7 +56,7 @@ def hardware_qualification_record() -> dict[str, object]:
         },
         "board_attributes": "00000000",
         "boot_rom": "0000000a",
-        "eeprom_hash": "b" * 64,
+        "eeprom_hash": None,
         "customer_key_hash": "0" * 64,
         "customer_key_state": "unset",
         "videocore_jtag_locked": False,
@@ -92,7 +92,10 @@ def hardware_qualification_record() -> dict[str, object]:
             "usb_path_continuity": "match",
         },
         "probes": [probe, {**probe, "sequence": 2}],
-        "comparisons": [{"field": field, "status": "match"} for field in comparison_fields],
+        "comparisons": [
+            {"field": field, "status": "not_observed" if field == "eeprom_hash" else "match"}
+            for field in comparison_fields
+        ],
         "power_cycle_confirmation": "operator_confirmed_complete",
         "pre_probe_normal_boot_confirmation": "operator_confirmed_normal",
         "normal_boot_confirmation": "operator_confirmed_unchanged",
@@ -473,10 +476,58 @@ class ReportRendererTest(unittest.TestCase):
         record = hardware_qualification_record()
         self.assertEqual([], schema_gate.validate(schema, record))
 
+        observed = json.loads(json.dumps(record))
+        for probe in observed["probes"]:
+            probe["eeprom_hash"] = "b" * 64
+        observed["comparisons"][9]["status"] = "match"
+        self.assertEqual([], schema_gate.validate(schema, observed))
+
+        null_match = json.loads(json.dumps(record))
+        null_match["comparisons"][9]["status"] = "match"
+        self.assertTrue(any("comparisons" in item for item in schema_gate.validate(schema, null_match)))
+
+        observed_not_observed = json.loads(json.dumps(observed))
+        observed_not_observed["comparisons"][9]["status"] = "not_observed"
+        self.assertTrue(any("comparisons" in item for item in schema_gate.validate(schema, observed_not_observed)))
+
+        mixed_match = json.loads(json.dumps(observed))
+        mixed_match["probes"][0]["eeprom_hash"] = None
+        self.assertTrue(any("comparisons" in item for item in schema_gate.validate(schema, mixed_match)))
+
+        reverse_mixed_match = json.loads(json.dumps(observed))
+        reverse_mixed_match["probes"][1]["eeprom_hash"] = None
+        self.assertTrue(any("comparisons" in item for item in schema_gate.validate(schema, reverse_mixed_match)))
+
+        for null_probe in (0, 1):
+            with self.subTest(null_probe=null_probe):
+                mixed_changed = json.loads(json.dumps(observed))
+                mixed_changed["probes"][null_probe]["eeprom_hash"] = None
+                mixed_changed["comparisons"][9]["status"] = "changed"
+                mixed_changed["status"] = "failed"
+                mixed_changed["quarantine_required"] = True
+                mixed_changed["findings"] = ["eeprom-hash-changed"]
+                self.assertEqual([], schema_gate.validate(schema, mixed_changed))
+
         incomplete = json.loads(json.dumps(record))
         incomplete["status"] = "incomplete"
         incomplete["normal_boot_confirmation"] = "not_yet_observed"
         self.assertEqual([], schema_gate.validate(schema, incomplete))
+
+        missing_hash = json.loads(json.dumps(record))
+        del missing_hash["probes"][0]["eeprom_hash"]
+        self.assertTrue(any("eeprom_hash" in item for item in schema_gate.validate(schema, missing_hash)))
+
+        malformed_hash = json.loads(json.dumps(record))
+        malformed_hash["probes"][0]["eeprom_hash"] = "not-a-hash"
+        self.assertTrue(any("eeprom_hash" in item for item in schema_gate.validate(schema, malformed_hash)))
+
+        unrelated_not_observed = json.loads(json.dumps(record))
+        unrelated_not_observed["comparisons"][0]["status"] = "not_observed"
+        self.assertTrue(any("comparisons[0].status" in item for item in schema_gate.validate(schema, unrelated_not_observed)))
+
+        changed_while_passed = json.loads(json.dumps(record))
+        changed_while_passed["comparisons"][9]["status"] = "changed"
+        self.assertNotEqual([], schema_gate.validate(schema, changed_while_passed))
 
         unredacted = json.loads(json.dumps(record))
         unredacted["probes"][0]["user_serial"] = "private-inventory-value"

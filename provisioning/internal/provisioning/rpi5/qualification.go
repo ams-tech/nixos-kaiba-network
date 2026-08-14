@@ -118,7 +118,7 @@ type RedactedProbe struct {
 	BoardRevision       Revision                `json:"board_revision"`
 	BoardAttributes     string                  `json:"board_attributes"`
 	BootROM             string                  `json:"boot_rom"`
-	EEPROMHash          string                  `json:"eeprom_hash"`
+	EEPROMHash          *string                 `json:"eeprom_hash"`
 	CustomerKeyHash     string                  `json:"customer_key_hash"`
 	CustomerKeyState    string                  `json:"customer_key_state"`
 	VideoCoreJTAGLocked bool                    `json:"videocore_jtag_locked"`
@@ -380,8 +380,8 @@ func validateQualificationObservation(observation Observation) error {
 			return fmt.Errorf("observation %s is not canonical", item.name)
 		}
 	}
-	if !hex64Pattern.MatchString(observation.EEPROMHash) || observation.EEPROMHash != strings.ToLower(observation.EEPROMHash) {
-		return errors.New("observation EEPROM hash is required and must be canonical")
+	if observation.EEPROMHash != "" && (!hex64Pattern.MatchString(observation.EEPROMHash) || observation.EEPROMHash != strings.ToLower(observation.EEPROMHash)) {
+		return errors.New("observation EEPROM hash must be canonical when present")
 	}
 	if !hex64Pattern.MatchString(observation.CustomerKeyHash) || observation.CustomerKeyHash != strings.ToLower(observation.CustomerKeyHash) {
 		return errors.New("observation customer-key hash is not canonical")
@@ -507,7 +507,7 @@ func redactedProbe(sequence int, result ProbeResult) RedactedProbe {
 		BoardRevision:       result.Observation.BoardRevision,
 		BoardAttributes:     result.Observation.BoardAttributes,
 		BootROM:             result.Observation.BootROM,
-		EEPROMHash:          result.Observation.EEPROMHash,
+		EEPROMHash:          nullableString(result.Observation.EEPROMHash),
 		CustomerKeyHash:     result.Observation.CustomerKeyHash,
 		CustomerKeyState:    result.Observation.CustomerKeyState,
 		VideoCoreJTAGLocked: result.Observation.VideoCoreJTAGLocked,
@@ -549,13 +549,22 @@ func compareQualificationObservations(first, second Observation) ([]Qualificatio
 	findings := make([]string, 0)
 	for _, item := range candidates {
 		status := "match"
-		if !reflect.DeepEqual(item.first, item.second) {
+		if item.field == "eeprom_hash" && item.first == "" && item.second == "" {
+			status = "not_observed"
+		} else if !reflect.DeepEqual(item.first, item.second) {
 			status = "changed"
 			findings = append(findings, strings.ReplaceAll(item.field, "_", "-")+"-changed")
 		}
 		comparisons = append(comparisons, QualificationComparison{Field: item.field, Status: status})
 	}
 	return comparisons, findings
+}
+
+func nullableString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func canonicalDigest(value string) bool {

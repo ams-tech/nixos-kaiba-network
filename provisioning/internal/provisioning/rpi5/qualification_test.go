@@ -15,7 +15,6 @@ import (
 const qualificationMetadata = `{
   "USER_SERIAL_NUM": "A7EB274C",
   "MAC_ADDR": "2C:CF:67:70:76:F3",
-  "EEPROM_HASH": "dfc8ef2c77b8152a5cfa008c2296246413fd580fdc26dfacd431e348571a2137",
   "CUSTOMER_KEY_HASH": "0000000000000000000000000000000000000000000000000000000000000000",
   "BOOT_ROM": "0000000A",
   "BOARD_ATTR": "00000000",
@@ -45,7 +44,11 @@ func TestBuildQualificationRecordPassesAndRedactsInventory(t *testing.T) {
 		t.Fatalf("record shape = %#v", record)
 	}
 	for _, comparison := range record.Comparisons {
-		if comparison.Status != "match" {
+		want := "match"
+		if comparison.Field == "eeprom_hash" && first.Observation.EEPROMHash == "" {
+			want = "not_observed"
+		}
+		if comparison.Status != want {
 			t.Fatalf("comparison = %#v", comparison)
 		}
 	}
@@ -80,6 +83,98 @@ func TestBuildQualificationRecordPassesAndRedactsInventory(t *testing.T) {
 	}
 	if !canonicalDigest(record.NixSystemClosureDigest) {
 		t.Fatalf("NixOS closure digest = %q", record.NixSystemClosureDigest)
+	}
+}
+
+func TestBuildQualificationRecordAcceptsAnUnobservedEEPROMHash(t *testing.T) {
+	profile := qualificationProfile(t)
+	first := qualificationProbeResult(t, profile, time.Unix(10, 0).UTC())
+	second := qualificationProbeResult(t, profile, time.Unix(20, 0).UTC())
+	first.Observation.EEPROMHash = ""
+	second.Observation.EEPROMHash = ""
+	first.Assessment = qualificationAssessment(profile, first.Observation)
+	second.Assessment = qualificationAssessment(profile, second.Observation)
+
+	record, err := BuildQualificationRecord(profile, first, second, validQualificationContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != QualificationStatusPassed || record.QuarantineRequired || len(record.Findings) != 0 {
+		t.Fatalf("outcome = %#v", record)
+	}
+	comparison := qualificationComparison(t, record, "eeprom_hash")
+	if comparison.Status != "not_observed" {
+		t.Fatalf("EEPROM comparison = %#v", comparison)
+	}
+	for _, probe := range record.Probes {
+		if probe.EEPROMHash != nil {
+			t.Fatalf("redacted EEPROM hash = %#v, want nil", probe.EEPROMHash)
+		}
+	}
+	if count := bytes.Count(qualificationJSON(t, record), []byte(`"eeprom_hash": null`)); count != 2 {
+		t.Fatalf("null EEPROM hash count = %d, want 2", count)
+	}
+}
+
+func TestBuildQualificationRecordDetectsChangedEEPROMHash(t *testing.T) {
+	profile := qualificationProfile(t)
+	firstHash := strings.Repeat("d", 64)
+	tests := []struct {
+		name       string
+		firstHash  string
+		secondHash string
+	}{
+		{name: "present then absent", firstHash: firstHash},
+		{name: "absent then present", secondHash: firstHash},
+		{name: "unequal present hashes", firstHash: firstHash, secondHash: strings.Repeat("a", 64)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first := qualificationProbeResult(t, profile, time.Unix(10, 0).UTC())
+			second := qualificationProbeResult(t, profile, time.Unix(20, 0).UTC())
+			first.Observation.EEPROMHash = tt.firstHash
+			second.Observation.EEPROMHash = tt.secondHash
+			first.Assessment = qualificationAssessment(profile, first.Observation)
+			second.Assessment = qualificationAssessment(profile, second.Observation)
+
+			record, err := BuildQualificationRecord(profile, first, second, validQualificationContext())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.Status != QualificationStatusFailed || !record.QuarantineRequired {
+				t.Fatalf("outcome = %#v", record)
+			}
+			if strings.Join(record.Findings, ",") != "eeprom-hash-changed" {
+				t.Fatalf("findings = %#v", record.Findings)
+			}
+			if comparison := qualificationComparison(t, record, "eeprom_hash"); comparison.Status != "changed" {
+				t.Fatalf("EEPROM comparison = %#v", comparison)
+			}
+		})
+	}
+}
+
+func TestBuildQualificationRecordMatchesAnObservedEEPROMHash(t *testing.T) {
+	profile := qualificationProfile(t)
+	first := qualificationProbeResult(t, profile, time.Unix(10, 0).UTC())
+	second := qualificationProbeResult(t, profile, time.Unix(20, 0).UTC())
+	hash := strings.Repeat("d", 64)
+	first.Observation.EEPROMHash = hash
+	second.Observation.EEPROMHash = hash
+	first.Assessment = qualificationAssessment(profile, first.Observation)
+	second.Assessment = qualificationAssessment(profile, second.Observation)
+
+	record, err := BuildQualificationRecord(profile, first, second, validQualificationContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comparison := qualificationComparison(t, record, "eeprom_hash"); comparison.Status != "match" {
+		t.Fatalf("EEPROM comparison = %#v", comparison)
+	}
+	for _, probe := range record.Probes {
+		if probe.EEPROMHash == nil || *probe.EEPROMHash != hash {
+			t.Fatalf("redacted EEPROM hash = %#v", probe.EEPROMHash)
+		}
 	}
 }
 
@@ -199,6 +294,20 @@ func TestBuildQualificationRecordRejectsInvalidOrIncomparableInputs(t *testing.T
 				second.Observation.TargetFingerprint = "sha256:" + strings.Repeat("f", 64)
 			},
 			match: "fingerprint is internally inconsistent",
+		},
+		{
+			name: "malformed EEPROM hash",
+			mutate: func(_, second *ProbeResult) {
+				second.Observation.EEPROMHash = strings.Repeat("g", 64)
+			},
+			match: "EEPROM hash must be canonical when present",
+		},
+		{
+			name: "uppercase EEPROM hash",
+			mutate: func(_, second *ProbeResult) {
+				second.Observation.EEPROMHash = strings.Repeat("A", 64)
+			},
+			match: "EEPROM hash must be canonical when present",
 		},
 		{
 			name: "mutation success",
@@ -352,6 +461,17 @@ func qualificationJSON(t *testing.T, record QualificationRecord) []byte {
 		t.Fatal(err)
 	}
 	return output.Bytes()
+}
+
+func qualificationComparison(t *testing.T, record QualificationRecord, field string) QualificationComparison {
+	t.Helper()
+	for _, comparison := range record.Comparisons {
+		if comparison.Field == field {
+			return comparison
+		}
+	}
+	t.Fatalf("comparison %q was not emitted", field)
+	return QualificationComparison{}
 }
 
 func cloneProbeResult(t *testing.T, input ProbeResult) ProbeResult {

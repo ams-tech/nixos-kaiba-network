@@ -36,7 +36,11 @@ func TestHappyPathRequiresPowerCycleAndBootConfirmation(t *testing.T) {
 		t.Fatalf("observations: probes=%d comparison=%d", len(state.Probes), len(state.Comparison))
 	}
 	for _, comparison := range state.Comparison {
-		if comparison.Status != "match" {
+		want := "match"
+		if comparison.Field == "eeprom_hash" {
+			want = "not_observed"
+		}
+		if comparison.Status != want {
 			t.Fatalf("comparison %q = %q", comparison.Field, comparison.Status)
 		}
 	}
@@ -48,6 +52,52 @@ func TestHappyPathRequiresPowerCycleAndBootConfirmation(t *testing.T) {
 	}
 	if state.ExportRecord.NormalBootConfirmation != "operator_confirmed_normal" {
 		t.Fatalf("boot confirmation = %q", state.ExportRecord.NormalBootConfirmation)
+	}
+}
+
+func TestComparisonOnlyDefersAnUnobservedEEPROMHash(t *testing.T) {
+	tests := []struct {
+		name       string
+		comparison []Comparison
+		changed    bool
+	}{
+		{name: "all observed", comparison: []Comparison{{Field: "target_fingerprint", Status: "match"}}},
+		{name: "EEPROM unavailable", comparison: []Comparison{{Field: "eeprom_hash", Status: "not_observed"}}},
+		{name: "other field unavailable", comparison: []Comparison{{Field: "boot_rom", Status: "not_observed"}}, changed: true},
+		{name: "unknown status", comparison: []Comparison{{Field: "eeprom_hash", Status: "unknown"}}, changed: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasChangedComparison(tt.comparison); got != tt.changed {
+				t.Fatalf("hasChangedComparison() = %t, want %t", got, tt.changed)
+			}
+		})
+	}
+}
+
+func TestComparisonTreatsMixedEEPROMPresenceAsChanged(t *testing.T) {
+	absent := syntheticTarget()
+	present := *absent
+	present.EEPROMHash = "dfc8ef2c77b8152a5cfa008c2296246413fd580fdc26dfacd431e348571a2137"
+
+	for _, pair := range []struct {
+		name          string
+		first, second *TargetSummary
+	}{
+		{name: "present then absent", first: &present, second: absent},
+		{name: "absent then present", first: absent, second: &present},
+	} {
+		t.Run(pair.name, func(t *testing.T) {
+			for _, comparison := range compareObservations(pair.first, pair.second) {
+				if comparison.Field == "eeprom_hash" {
+					if comparison.Status != "changed" {
+						t.Fatalf("EEPROM comparison = %#v", comparison)
+					}
+					return
+				}
+			}
+			t.Fatal("EEPROM comparison was not emitted")
+		})
 	}
 }
 
