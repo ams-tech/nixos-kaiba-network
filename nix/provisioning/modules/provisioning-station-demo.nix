@@ -72,10 +72,30 @@ in
         "target-replaced"
         "mutation-safety-violation"
         "boot-failure"
+        "preparation-failure"
+        "approval-failure"
+        "trust-failure"
+        "commit-uncertain"
+        "commit-readback-mismatch"
+        "signed-boot-failure"
+        "owned-readback-mismatch"
+        "recovery-failure"
+        "negative-boot-failure"
+        "root-integrity-failure"
+        "rollback-failure"
+        "finalization-failure"
+        "final-retest-failure"
+        "audit-failure"
+        "deferred-baseline-failure"
+        "precommit-target-replaced"
+        "post-recovery-readback-mismatch"
       ];
       default = "happy-path";
-      example = "baseline-failure";
-      description = "Named deterministic demonstration scenario rendered by the interface.";
+      example = "commit-readback-mismatch";
+      description = ''
+        Named deterministic secure-boot ceremony scenario rendered by the
+        simulation interface. Scenarios have no hardware or mutation authority.
+      '';
     };
   };
 

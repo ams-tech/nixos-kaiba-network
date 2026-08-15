@@ -25,8 +25,11 @@ func TestHTTPStateAndAction(t *testing.T) {
 	if err := json.Unmarshal(stateResponse.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
+	if state.SchemaVersion != "provisioning.kaiba.network/station-demo-state/v1alpha2" || state.Phase != PhaseStationAdmission || state.Revision != 1 {
+		t.Fatalf("initial state = %#v", state)
+	}
 
-	body := `{"action":"attach_target","expected_revision":1}`
+	body := `{"action":"run_station_admission","expected_revision":1}`
 	actionResponse := request(t, handler, http.MethodPost, "/api/v1/actions", body, "http://"+testHost, testHost)
 	if actionResponse.Code != http.StatusOK {
 		t.Fatalf("POST action = %d %s", actionResponse.Code, actionResponse.Body.String())
@@ -34,7 +37,7 @@ func TestHTTPStateAndAction(t *testing.T) {
 	if err := json.Unmarshal(actionResponse.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Phase != PhaseTargetDetected || state.Revision != 2 {
+	if state.Phase != PhaseTransactionCreation || state.Revision != 2 {
 		t.Fatalf("state = %#v", state)
 	}
 	for _, header := range []string{"Content-Security-Policy", "X-Content-Type-Options", "Referrer-Policy", "Cache-Control", "Permissions-Policy"} {
@@ -51,8 +54,8 @@ func TestHTTPRejectsHostOriginMethodAndContentType(t *testing.T) {
 		status                                              int
 	}{
 		{"host", http.MethodGet, "/api/v1/state", "", "", "evil.example", "", http.StatusMisdirectedRequest},
-		{"origin absent", http.MethodPost, "/api/v1/actions", `{"action":"attach_target","expected_revision":1}`, "", testHost, "application/json", http.StatusForbidden},
-		{"origin foreign", http.MethodPost, "/api/v1/actions", `{"action":"attach_target","expected_revision":1}`, "https://evil.example", testHost, "application/json", http.StatusForbidden},
+		{"origin absent", http.MethodPost, "/api/v1/actions", `{"action":"run_station_admission","expected_revision":1}`, "", testHost, "application/json", http.StatusForbidden},
+		{"origin foreign", http.MethodPost, "/api/v1/actions", `{"action":"run_station_admission","expected_revision":1}`, "https://evil.example", testHost, "application/json", http.StatusForbidden},
 		{"content type", http.MethodPost, "/api/v1/actions", `{}`, "http://" + testHost, testHost, "text/plain", http.StatusUnsupportedMediaType},
 		{"content type parameter", http.MethodPost, "/api/v1/actions", `{}`, "http://" + testHost, testHost, "application/json; charset=utf-8", http.StatusUnsupportedMediaType},
 		{"state method", http.MethodPost, "/api/v1/state", `{}`, "http://" + testHost, testHost, "application/json", http.StatusMethodNotAllowed},
@@ -78,16 +81,16 @@ func TestHTTPRejectsMalformedNonCanonicalAndConflictingActions(t *testing.T) {
 	}{
 		{"empty", "", http.StatusBadRequest},
 		{"malformed", `{`, http.StatusBadRequest},
-		{"duplicate", `{"action":"attach_target","action":"reset","expected_revision":1}`, http.StatusBadRequest},
-		{"unknown", `{"action":"attach_target","expected_revision":1,"extra":true}`, http.StatusBadRequest},
-		{"missing", `{"action":"attach_target"}`, http.StatusBadRequest},
-		{"trailing", `{"action":"attach_target","expected_revision":1}{}`, http.StatusBadRequest},
-		{"nested revision", `{"action":"attach_target","expected_revision":{"value":1}}`, http.StatusBadRequest},
-		{"fractional revision", `{"action":"attach_target","expected_revision":1.0}`, http.StatusBadRequest},
-		{"zero revision", `{"action":"attach_target","expected_revision":0}`, http.StatusBadRequest},
+		{"duplicate", `{"action":"run_station_admission","action":"reset","expected_revision":1}`, http.StatusBadRequest},
+		{"unknown", `{"action":"run_station_admission","expected_revision":1,"extra":true}`, http.StatusBadRequest},
+		{"missing", `{"action":"run_station_admission"}`, http.StatusBadRequest},
+		{"trailing", `{"action":"run_station_admission","expected_revision":1}{}`, http.StatusBadRequest},
+		{"nested revision", `{"action":"run_station_admission","expected_revision":{"value":1}}`, http.StatusBadRequest},
+		{"fractional revision", `{"action":"run_station_admission","expected_revision":1.0}`, http.StatusBadRequest},
+		{"zero revision", `{"action":"run_station_admission","expected_revision":0}`, http.StatusBadRequest},
 		{"oversized", strings.Repeat("x", maxActionBody+1), http.StatusBadRequest},
-		{"illegal transition", `{"action":"run_first_probe","expected_revision":1}`, http.StatusConflict},
-		{"stale revision", `{"action":"attach_target","expected_revision":2}`, http.StatusConflict},
+		{"illegal transition", `{"action":"create_transaction","expected_revision":1}`, http.StatusConflict},
+		{"stale revision", `{"action":"run_station_admission","expected_revision":2}`, http.StatusConflict},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

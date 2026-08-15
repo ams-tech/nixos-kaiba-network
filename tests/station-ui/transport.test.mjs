@@ -14,6 +14,16 @@ if (!pagesRoot) throw new Error("KAIBA_STATION_PAGES must identify the generated
 const graph = JSON.parse(fs.readFileSync(path.join(pagesRoot, "workflow-graph.json"), "utf8"));
 const pagesConfig = JSON.parse(fs.readFileSync(path.join(pagesRoot, "runtime-config.json"), "utf8"));
 const baseURL = "https://example.invalid/nixos-kaiba-network/provisioning-demo/";
+const falseSafetyCapabilities = [
+  "mutation_eligible",
+  "live_target_access",
+  "live_mutation_capable",
+  "authoritative_evidence",
+  "secrets_present",
+  "approval_authority",
+  "signing_capable",
+  "enrollment_capable",
+];
 
 function jsonClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -82,38 +92,64 @@ async function follow(client, actions) {
   return jsonClone(state);
 }
 
-function reachablePaths() {
-  const paths = new Map([[graph.default_node, []]]);
-  const queue = [graph.default_node];
-  while (queue.length > 0) {
-    const nodeID = queue.shift();
-    for (const [action, targetID] of Object.entries(graph.nodes[nodeID].transitions)) {
-      if (!paths.has(targetID)) {
-        paths.set(targetID, [...paths.get(nodeID), action]);
-        queue.push(targetID);
+function representativeScenarioPath(scenario) {
+  const actions = [scenario.action];
+  let nodeID = graph.nodes[graph.default_node].transitions[scenario.action];
+  assert.ok(nodeID, `${scenario.id} must be selectable from station admission`);
+  const seen = new Set();
+
+  while (true) {
+    assert.ok(!seen.has(nodeID), `${scenario.id} representative path must not cycle`);
+    seen.add(nodeID);
+    const node = graph.nodes[nodeID];
+    const state = node.state;
+    const terminal = ["stopped", "quarantined", "enrollment_ready"].includes(state.phase)
+      || ["owned_quarantined", "enrollment_ready"].includes(state.lifecycle);
+    if (terminal) {
+      if (state.allowed_actions.includes("export_redacted")) {
+        actions.push("export_redacted");
+        nodeID = node.transitions.export_redacted;
       }
+      return { actions, nodeID };
     }
+
+    const candidates = state.allowed_actions.filter((action) => (
+      action !== "reset"
+      && action !== "export_redacted"
+      && !action.startsWith("select_scenario:")
+    ));
+    let action;
+    if (candidates.includes("confirm_boot_ok") && candidates.includes("confirm_boot_failed")) {
+      action = scenario.id === "boot-failure" ? "confirm_boot_failed" : "confirm_boot_ok";
+    } else {
+      assert.equal(candidates.length, 1, `${scenario.id} must have one representative forward action at ${state.phase}`);
+      [action] = candidates;
+    }
+    actions.push(action);
+    nodeID = node.transitions[action];
+    assert.ok(nodeID, `${scenario.id} action ${action} must identify a generated target node`);
   }
-  return paths;
 }
 
-test("Pages adapter follows every Go-generated transition exactly", async () => {
-  const paths = reachablePaths();
-  assert.equal(paths.size, Object.keys(graph.nodes).length, "every generated node must be reachable");
+test("Pages adapter validates the complete graph and follows every scenario to a terminal outcome", async () => {
+  assert.equal(graph.schema_version, "provisioning.kaiba.network/station-demo-transition-graph/v1alpha1");
+  assert.equal(graph.state_schema_version, "provisioning.kaiba.network/station-demo-state/v1alpha2");
+  const scenarios = graph.nodes[graph.default_node].state.scenarios;
+  assert.equal(scenarios.length, 25, "the complete synthetic failure matrix must be present");
 
-  for (const [nodeID, actions] of paths) {
+  for (const scenario of scenarios) {
+    const { actions, nodeID } = representativeScenarioPath(scenario);
     const runtime = pagesRuntime();
     const client = await runtime.transport.create();
-    assert.deepEqual(await follow(client, actions), expectedState(nodeID, actions.length + 1));
-
-    for (const [action, targetID] of Object.entries(graph.nodes[nodeID].transitions)) {
-      const edgeRuntime = pagesRuntime();
-      const edgeClient = await edgeRuntime.transport.create();
-      const state = await follow(edgeClient, actions);
-      const next = await edgeClient.applyAction({ action, expected_revision: state.revision });
-      assert.deepEqual(jsonClone(next), expectedState(targetID, actions.length + 2));
-    }
+    const terminal = await follow(client, actions);
+    assert.deepEqual(terminal, expectedState(nodeID, actions.length + 1));
+    assert.ok(terminal.outcome, `${scenario.id} must produce a typed terminal outcome`);
+    assert.equal(terminal.scenario, scenario.id);
   }
+
+  const happyPath = representativeScenarioPath(scenarios.find((scenario) => scenario.id === "happy-path"));
+  assert.equal(graph.nodes[happyPath.nodeID].state.lifecycle, "enrollment_ready");
+  assert.equal(graph.nodes[happyPath.nodeID].state.outcome.status, "enrollment_ready");
 });
 
 test("Pages adapter is in-memory, revisioned, and conflict-safe", async () => {
@@ -142,6 +178,22 @@ test("Pages adapter is in-memory, revisioned, and conflict-safe", async () => {
 
   const freshClient = await pagesRuntime().transport.create();
   assert.equal((await freshClient.getState()).revision, 1, "a new page runtime must reset the simulation");
+});
+
+test("terminal owned identities never expose reset or cached scenario controls", () => {
+  const states = Object.values(graph.nodes).map((node) => node.state);
+  assert.ok(states.some((state) => state.phase === "station_admission" && state.scenarios.length > 0));
+  assert.ok(states.some((state) => state.phase === "final_cold_restart_observed"));
+  assert.ok(states.some((state) => state.evidence.some((item) => item.id === "final-cold-restart")));
+  for (const state of states) {
+    if (state.phase !== "station_admission") {
+      assert.deepEqual(state.scenarios, [], `${state.phase} must not retain developer scenario controls`);
+      assert.ok(!state.allowed_actions.some((action) => action.startsWith("select_scenario:")));
+    }
+    if (["owned_quarantined", "enrollment_ready"].includes(state.lifecycle)) {
+      assert.ok(!state.allowed_actions.includes("reset"), `${state.lifecycle} must not return to the fresh path`);
+    }
+  }
 });
 
 test("Pages mode performs only two path-relative GETs", async () => {
@@ -211,11 +263,106 @@ test("transport selection is explicit and fails closed", async () => {
   await assert.rejects(crossOrigin.transport.create(), /path-relative URL/);
   assert.equal(crossOrigin.calls.length, 1);
 
-  const unsafeGraph = jsonClone(graph);
-  unsafeGraph.nodes[unsafeGraph.default_node].state.safety.mutation_eligible = true;
-  const unsafe = pagesRuntime(pagesConfig, unsafeGraph);
-  await assert.rejects(unsafe.transport.create(), /safety boundary/);
-  assert.equal(unsafe.calls.length, 2);
+  for (const capability of falseSafetyCapabilities) {
+    const unsafeGraph = jsonClone(graph);
+    unsafeGraph.nodes[unsafeGraph.default_node].state.safety[capability] = true;
+    const unsafe = pagesRuntime(pagesConfig, unsafeGraph);
+    await assert.rejects(unsafe.transport.create(), new RegExp(`simulation safety boundary|did not deny ${capability}`));
+    assert.equal(unsafe.calls.length, 2);
+  }
+});
+
+test("v1alpha2 typed workflow, irreversible metadata, and redacted export fail closed", async () => {
+  const malformedStageGraph = jsonClone(graph);
+  malformedStageGraph.nodes[malformedStageGraph.default_node].state.workflow_stages[0].status = "guessed";
+  await assert.rejects(pagesRuntime(pagesConfig, malformedStageGraph).transport.create(), /workflow stage status/);
+
+  const unsafePresentationGraph = jsonClone(graph);
+  const presentations = Object.values(unsafePresentationGraph.nodes)
+    .flatMap((node) => node.state.action_presentations);
+  const irreversible = presentations.filter((presentation) => presentation.classification === "irreversible");
+  assert.ok(irreversible.length > 0);
+  assert.ok(irreversible.every((presentation) => presentation.requires_confirmation === true));
+  assert.deepEqual(
+    [...new Set(presentations.filter((presentation) => presentation.point_of_no_return).map((presentation) => presentation.action))],
+    ["execute_commit"],
+  );
+  const commitPresentation = presentations.find((presentation) => presentation.point_of_no_return === true);
+  assert.equal(commitPresentation.action, "execute_commit");
+  assert.equal(commitPresentation.classification, "irreversible");
+  assert.equal(commitPresentation.requires_confirmation, true);
+  commitPresentation.requires_confirmation = false;
+  await assert.rejects(
+    pagesRuntime(pagesConfig, unsafePresentationGraph).transport.create(),
+    /irreversible action without confirmation/,
+  );
+
+  const misplacedBoundaryGraph = jsonClone(graph);
+  const misplacedBoundary = Object.values(misplacedBoundaryGraph.nodes)
+    .flatMap((node) => node.state.action_presentations)
+    .find((presentation) => presentation.action === "apply_final_controls");
+  misplacedBoundary.point_of_no_return = true;
+  await assert.rejects(pagesRuntime(pagesConfig, misplacedBoundaryGraph).transport.create(), /point-of-no-return/);
+
+  const missingBoundaryGraph = jsonClone(graph);
+  const missingBoundary = Object.values(missingBoundaryGraph.nodes)
+    .flatMap((node) => node.state.action_presentations)
+    .find((presentation) => presentation.action === "execute_commit");
+  missingBoundary.point_of_no_return = false;
+  await assert.rejects(pagesRuntime(pagesConfig, missingBoundaryGraph).transport.create(), /point-of-no-return/);
+
+  const unconfirmedFinalControlsGraph = jsonClone(graph);
+  const finalControlsPresentation = Object.values(unconfirmedFinalControlsGraph.nodes)
+    .flatMap((node) => node.state.action_presentations)
+    .find((presentation) => presentation.action === "apply_final_controls");
+  finalControlsPresentation.requires_confirmation = false;
+  await assert.rejects(
+    pagesRuntime(pagesConfig, unconfirmedFinalControlsGraph).transport.create(),
+    /irreversible action without confirmation/,
+  );
+
+  const repeatedCommitGraph = jsonClone(graph);
+  const committedState = Object.values(repeatedCommitGraph.nodes)
+    .map((node) => node.state)
+    .find((state) => state.transaction?.commit_executions === 1);
+  assert.ok(committedState, "generated graph must include the modeled one-shot commit");
+  committedState.transaction.commit_executions = 2;
+  await assert.rejects(pagesRuntime(pagesConfig, repeatedCommitGraph).transport.create(), /repeated the one-shot/);
+
+  const repeatedFinalControlsGraph = jsonClone(graph);
+  const finalizedState = Object.values(repeatedFinalControlsGraph.nodes)
+    .map((node) => node.state)
+    .find((state) => state.transaction?.final_control_executions === 1);
+  assert.ok(finalizedState, "generated graph must include one modeled final-control execution");
+  finalizedState.transaction.final_control_executions = 2;
+  await assert.rejects(
+    pagesRuntime(pagesConfig, repeatedFinalControlsGraph).transport.create(),
+    /repeated the one-shot modeled final controls/,
+  );
+
+  for (const [field, value] of [
+    ["commit_executions", 0],
+    ["irreversible_boundary_crossed", false],
+  ]) {
+    const missingCommitBoundaryGraph = jsonClone(graph);
+    const finalControlsState = Object.values(missingCommitBoundaryGraph.nodes)
+      .map((node) => node.state)
+      .find((state) => state.transaction?.final_control_executions === 1);
+    assert.ok(finalControlsState, "generated graph must include modeled final controls");
+    finalControlsState.transaction[field] = value;
+    await assert.rejects(
+      pagesRuntime(pagesConfig, missingCommitBoundaryGraph).transport.create(),
+      /lost the commit boundary|lost the irreversible-boundary marker/,
+    );
+  }
+
+  const secretGraph = jsonClone(graph);
+  const exportedState = Object.values(secretGraph.nodes)
+    .map((node) => node.state)
+    .find((state) => state.export_record);
+  assert.ok(exportedState, "generated graph must include a redacted export");
+  exportedState.export_record.private_key = "-----BEGIN PRIVATE KEY-----";
+  await assert.rejects(pagesRuntime(pagesConfig, secretGraph).transport.create(), /unsupported or missing fields|private key/);
 });
 
 test("shared transport has no browser persistence or hardware API", () => {

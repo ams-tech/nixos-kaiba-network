@@ -19,6 +19,111 @@ PROVISIONING_IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 SOURCE_REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 EVIDENCE_PATH = re.compile(r"^evidence/[A-Za-z0-9._/-]+$")
 ALLOWED_EXTERNAL_SCHEMES = {"http", "https", "mailto"}
+STATION_STATE_SCHEMA = "provisioning.kaiba.network/station-demo-state/v1alpha2"
+STATION_EXPORT_SCHEMA = "provisioning.kaiba.network/station-demo-export/v1alpha2"
+STATION_SAFETY_FALSE_FIELDS = {
+    "mutation_eligible",
+    "live_target_access",
+    "live_mutation_capable",
+    "authoritative_evidence",
+    "secrets_present",
+    "approval_authority",
+    "signing_capable",
+    "enrollment_capable",
+}
+STATION_SAFETY_FIELDS = STATION_SAFETY_FALSE_FIELDS | {
+    "simulation",
+    "full_unprovisioned_state",
+    "disclaimer",
+}
+STATION_LIFECYCLES = {
+    "unregistered",
+    "qualified_fresh_candidate",
+    "prepared",
+    "commit_in_progress",
+    "security_applied",
+    "enrollment_ready",
+    "owned_quarantined",
+}
+STATION_TRANSACTION_STATUSES = {
+    "created",
+    "target_bound",
+    "preflight_passed",
+    "commit_approved",
+    "trust_established",
+    "security_applied",
+    "aborted",
+    "quarantined",
+}
+STATION_WORKFLOW_STATUSES = {"pending", "current", "complete", "failed"}
+STATION_WORKFLOW_STAGE_IDS = [
+    "admission",
+    "transaction",
+    "qualification",
+    "preparation",
+    "approval",
+    "initial_trust",
+    "ownership_commit",
+    "owned_verification",
+    "finalization",
+    "audit_reconciliation",
+]
+STATION_ACTION_CLASSIFICATIONS = {
+    "administrative",
+    "read_only",
+    "reversible",
+    "authorization_affecting",
+    "irreversible",
+}
+STATION_EVIDENCE_STATUSES = {"pending", "passed", "failed", "recorded"}
+STATION_OUTCOME_STATUSES = {"aborted", "owned_quarantined", "enrollment_ready"}
+STATION_REQUIRED_OPERATOR_ACTIONS = {
+    "run_station_admission",
+    "create_transaction",
+    "attach_target",
+    "run_first_probe",
+    "disconnect_target",
+    "reconnect_target",
+    "run_second_probe",
+    "confirm_boot_ok",
+    "confirm_boot_failed",
+    "close_deferred_baseline",
+    "prepare_transaction",
+    "request_commit_approval",
+    "establish_initial_trust",
+    "reidentify_commit_target",
+    "record_commit_intent",
+    "execute_commit",
+    "observe_commit_readback",
+    "power_off_owned_target",
+    "confirm_signed_boot",
+    "run_owned_readback",
+    "test_owned_recovery",
+    "rerun_owned_readback",
+    "test_negative_boot",
+    "test_root_integrity",
+    "test_rollback",
+    "request_finalization_approval",
+    "record_finalization_intent",
+    "apply_final_controls",
+    "cold_restart_finalized_target",
+    "observe_final_controls_readback",
+    "run_final_retest",
+    "reconcile_audit",
+    "mark_enrollment_ready",
+    "export_redacted",
+    "reset",
+}
+STATION_FORBIDDEN_SECRET_KEYS = {
+    "private_key",
+    "private_key_pem",
+    "signing_key",
+    "shared_secret",
+    "enrollment_secret",
+    "password",
+    "credential",
+    "access_token",
+}
 REQUIRED_PATHS = (
     "index.html",
     "styles.css",
@@ -296,6 +401,181 @@ def validate_homepage(parser: PageParser, errors: list[str]) -> None:
         errors.append("index.html: direct dns/ product link is required")
 
 
+def station_secret_free(value: object) -> bool:
+    if isinstance(value, str):
+        return re.search(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", value) is None
+    if isinstance(value, list):
+        return all(station_secret_free(item) for item in value)
+    if isinstance(value, dict):
+        return not (set(value) & STATION_FORBIDDEN_SECRET_KEYS) and all(
+            station_secret_free(item) for item in value.values()
+        )
+    return True
+
+
+def station_safety_valid(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == STATION_SAFETY_FIELDS
+        and value.get("simulation") is True
+        and value.get("full_unprovisioned_state") == "not_established"
+        and isinstance(value.get("disclaimer"), str)
+        and bool(value["disclaimer"])
+        and all(value.get(field) is False for field in STATION_SAFETY_FALSE_FIELDS)
+    )
+
+
+STATION_TRANSACTION_FIELDS = {
+    "id",
+    "status",
+    "asset_id",
+    "intended_logical_id",
+    "claim_id",
+    "fence_epoch",
+    "operator_id",
+    "approver_id",
+    "target_fingerprint",
+    "digest",
+    "plan_digest",
+    "approval_id",
+    "intent_receipt",
+    "finalization_approval_id",
+    "finalization_intent_receipt",
+    "irreversible_boundary_crossed",
+    "commit_executions",
+    "final_control_executions",
+}
+
+
+def station_transaction_valid(value: object, *, allow_empty_status: bool = False) -> bool:
+    if not isinstance(value, dict) or set(value) != STATION_TRANSACTION_FIELDS:
+        return False
+    string_fields = STATION_TRANSACTION_FIELDS - {
+        "fence_epoch",
+        "irreversible_boundary_crossed",
+        "commit_executions",
+        "final_control_executions",
+    }
+    if any(not isinstance(value.get(field), str) for field in string_fields):
+        return False
+    status = value.get("status")
+    if status not in STATION_TRANSACTION_STATUSES and not (allow_empty_status and status == ""):
+        return False
+    fence = value.get("fence_epoch")
+    executions = value.get("commit_executions")
+    final_executions = value.get("final_control_executions")
+    crossed = value.get("irreversible_boundary_crossed")
+    return (
+        isinstance(fence, int)
+        and not isinstance(fence, bool)
+        and fence >= 0
+        and isinstance(executions, int)
+        and not isinstance(executions, bool)
+        and 0 <= executions <= 1
+        and isinstance(final_executions, int)
+        and not isinstance(final_executions, bool)
+        and 0 <= final_executions <= 1
+        and isinstance(crossed, bool)
+        and (executions != 1 or crossed is True)
+        and (
+            executions != 1
+            or (bool(value.get("approval_id")) and bool(value.get("intent_receipt")))
+        )
+        and (
+            final_executions != 1
+            or (
+                executions == 1
+                and crossed is True
+                and bool(value.get("finalization_approval_id"))
+                and bool(value.get("finalization_intent_receipt"))
+            )
+        )
+    )
+
+
+STATION_MANIFEST_FIELDS = {
+    "id",
+    "digest",
+    "profile_id",
+    "profile_digest",
+    "adapter_id",
+    "adapter_digest",
+    "expected_customer_key_hash",
+    "eeprom_image_digest",
+    "boot_image_digest",
+    "boot_signature_digest",
+    "root_integrity_digest",
+    "fresh_commit_bundle_digest",
+    "owned_recovery_bundle_digest",
+    "boot_order",
+    "rollback_policy",
+    "debug_policy",
+    "eeprom_write_protection_policy",
+    "signer_id",
+    "signing_tool_version",
+    "verification_status",
+}
+
+
+def station_manifest_valid(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == STATION_MANIFEST_FIELDS
+        and all(isinstance(item, str) for item in value.values())
+    )
+
+
+def station_evidence_valid(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    identifiers: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) != {"id", "label", "stage", "status", "digest", "detail"}:
+            return False
+        if any(not isinstance(entry.get(field), str) for field in entry):
+            return False
+        if not entry["id"] or not entry["label"] or not entry["stage"] or entry["status"] not in STATION_EVIDENCE_STATUSES:
+            return False
+        if entry["id"] in identifiers:
+            return False
+        identifiers.add(entry["id"])
+    return True
+
+
+def station_export_valid(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "simulation",
+        "secret_free",
+        "scenario",
+        "station_id",
+        "lane_id",
+        "lifecycle",
+        "transaction",
+        "manifest",
+        "evidence",
+        "outcome",
+        "safety",
+    }:
+        return False
+    outcome = value.get("outcome")
+    return (
+        value.get("schema_version") == STATION_EXPORT_SCHEMA
+        and value.get("simulation") is True
+        and value.get("secret_free") is True
+        and value.get("lifecycle") in STATION_LIFECYCLES
+        and station_transaction_valid(value.get("transaction"), allow_empty_status=True)
+        and station_manifest_valid(value.get("manifest"))
+        and station_evidence_valid(value.get("evidence"))
+        and isinstance(outcome, dict)
+        and set(outcome) == {"status", "title", "message"}
+        and all(isinstance(item, str) for item in outcome.values())
+        and (outcome.get("status") in STATION_OUTCOME_STATUSES or outcome.get("status") == "")
+        and station_safety_valid(value.get("safety"))
+        and station_secret_free(value)
+    )
+
+
 def validate_station_demo(root: Path, errors: list[str]) -> None:
     demo_root = root / "provisioning-demo"
     config_path = demo_root / "runtime-config.json"
@@ -330,7 +610,7 @@ def validate_station_demo(root: Path, errors: list[str]) -> None:
         return
     if graph.get("schema_version") != "provisioning.kaiba.network/station-demo-transition-graph/v1alpha1":
         errors.append("provisioning-demo/workflow-graph.json: unsupported graph schema")
-    if graph.get("state_schema_version") != "provisioning.kaiba.network/station-demo-state/v1alpha1":
+    if graph.get("state_schema_version") != STATION_STATE_SCHEMA:
         errors.append("provisioning-demo/workflow-graph.json: unsupported state schema")
     nodes = graph.get("nodes")
     if not isinstance(nodes, dict) or not nodes or len(nodes) > 512 or graph.get("default_node") not in nodes:
@@ -338,6 +618,7 @@ def validate_station_demo(root: Path, errors: list[str]) -> None:
         return
 
     node_id_pattern = re.compile(r"^sha256:[0-9a-f]{64}$")
+    graph_actions: set[str] = set()
     for node_id, node in nodes.items():
         label = f"provisioning-demo/workflow-graph.json: node {node_id!r}"
         if not isinstance(node_id, str) or not node_id_pattern.fullmatch(node_id):
@@ -356,12 +637,30 @@ def validate_station_demo(root: Path, errors: list[str]) -> None:
             state.get("schema_version") != graph.get("state_schema_version")
             or state.get("revision") != 0
             or state.get("simulation") is not True
-            or not isinstance(safety, dict)
-            or safety.get("simulation") is not True
-            or safety.get("mutation_eligible") is not False
-            or safety.get("full_unprovisioned_state") != "not_established"
+            or state.get("lifecycle") not in STATION_LIFECYCLES
+            or not station_safety_valid(safety)
         ):
             errors.append(f"{label} violates the simulation safety contract")
+        stages = state.get("workflow_stages")
+        if (
+            not isinstance(stages, list)
+            or not stages
+            or any(
+                not isinstance(stage, dict)
+                or set(stage) != {"id", "label", "status"}
+                or not isinstance(stage.get("id"), str)
+                or not stage["id"]
+                or not isinstance(stage.get("label"), str)
+                or not stage["label"]
+                or stage.get("status") not in STATION_WORKFLOW_STATUSES
+                for stage in stages
+            )
+            or len({stage.get("id") for stage in stages if isinstance(stage, dict)}) != len(stages)
+            or [stage.get("id") for stage in stages if isinstance(stage, dict)]
+            != STATION_WORKFLOW_STAGE_IDS
+            or sum(stage.get("status") == "current" for stage in stages if isinstance(stage, dict)) > 1
+        ):
+            errors.append(f"{label} has malformed typed workflow stages")
         probes = state.get("probes")
         if not isinstance(probes, list) or any(
             not isinstance(probe, dict)
@@ -371,13 +670,16 @@ def validate_station_demo(root: Path, errors: list[str]) -> None:
             for probe in probes
         ):
             errors.append(f"{label} contains an unsafe probe assessment")
+        transaction = state.get("transaction")
+        if transaction is not None and not station_transaction_valid(transaction):
+            errors.append(f"{label} has malformed transaction state")
+        manifest = state.get("manifest")
+        if manifest is not None and not station_manifest_valid(manifest):
+            errors.append(f"{label} has malformed manifest state")
+        if not station_evidence_valid(state.get("evidence")):
+            errors.append(f"{label} has malformed cumulative evidence")
         export = state.get("export_record")
-        if export is not None and (
-            not isinstance(export, dict)
-            or export.get("simulation") is not True
-            or export.get("mutation_eligible") is not False
-            or export.get("full_unprovisioned_state") != "not_established"
-        ):
+        if export is not None and not station_export_valid(export):
             errors.append(f"{label} contains an unsafe export record")
         actions = state.get("allowed_actions")
         if (
@@ -388,8 +690,104 @@ def validate_station_demo(root: Path, errors: list[str]) -> None:
         ):
             errors.append(f"{label} does not exactly map its allowed actions")
             continue
+        graph_actions.update(
+            action for action in actions if not action.startswith("select_scenario:")
+        )
+        scenarios = state.get("scenarios")
+        scenario_actions = {
+            scenario.get("action")
+            for scenario in scenarios
+            if isinstance(scenarios, list) and isinstance(scenario, dict)
+        } if isinstance(scenarios, list) else set()
+        allowed_scenario_actions = {
+            action for action in actions if action.startswith("select_scenario:")
+        }
+        if (
+            not isinstance(scenarios, list)
+            or any(
+                not isinstance(scenario, dict)
+                or set(scenario) != {"id", "label", "action"}
+                or not isinstance(scenario.get("id"), str)
+                or not scenario["id"]
+                or not isinstance(scenario.get("label"), str)
+                or not scenario["label"]
+                or not isinstance(scenario.get("action"), str)
+                or not scenario["action"].startswith("select_scenario:")
+                for scenario in scenarios
+            )
+            or len(scenario_actions) != len(scenarios)
+            or scenario_actions != allowed_scenario_actions
+            or (state.get("phase") != "station_admission" and scenarios)
+        ):
+            errors.append(f"{label} has malformed or out-of-phase scenario controls")
+        presentations = state.get("action_presentations")
+        normal_actions = {
+            action for action in actions if not action.startswith("select_scenario:")
+        }
+        if (
+            not isinstance(presentations, list)
+            or any(
+                not isinstance(presentation, dict)
+                or set(presentation)
+                != {
+                    "action",
+                    "label",
+                    "description",
+                    "classification",
+                    "requires_confirmation",
+                    "point_of_no_return",
+                }
+                or not isinstance(presentation.get("action"), str)
+                or not isinstance(presentation.get("label"), str)
+                or not presentation["label"]
+                or not isinstance(presentation.get("description"), str)
+                or not presentation["description"]
+                or presentation.get("classification") not in STATION_ACTION_CLASSIFICATIONS
+                or not isinstance(presentation.get("requires_confirmation"), bool)
+                or not isinstance(presentation.get("point_of_no_return"), bool)
+                or (
+                    presentation.get("classification") == "irreversible"
+                    and presentation.get("requires_confirmation") is not True
+                )
+                or (
+                    presentation.get("point_of_no_return")
+                    != (presentation.get("action") == "execute_commit")
+                )
+                or (
+                    presentation.get("point_of_no_return") is True
+                    and (
+                        presentation.get("classification") != "irreversible"
+                        or presentation.get("requires_confirmation") is not True
+                    )
+                )
+                for presentation in presentations
+            )
+            or len(
+                {
+                    presentation.get("action")
+                    for presentation in presentations
+                    if isinstance(presentation, dict)
+                }
+            )
+            != len(presentations)
+            or {
+                presentation.get("action")
+                for presentation in presentations
+                if isinstance(presentation, dict)
+            }
+            != normal_actions
+        ):
+            errors.append(f"{label} has malformed action presentation metadata")
         if any(not isinstance(target, str) or target not in nodes for target in transitions.values()):
             errors.append(f"{label} references a missing transition target")
+        if not station_secret_free(state):
+            errors.append(f"{label} contains forbidden secret material")
+    missing_actions = sorted(STATION_REQUIRED_OPERATOR_ACTIONS - graph_actions)
+    if missing_actions:
+        errors.append(
+            "provisioning-demo/workflow-graph.json: required secure-boot actions are absent: "
+            + ", ".join(missing_actions)
+        )
 
 
 def validate_result(root: Path, errors: list[str]) -> None:

@@ -5,12 +5,46 @@ for evaluating the operator workflow on a provisioning-station display. It is
 suitable for an HDMI display and USB touchscreen attached to an AArch64 or
 x86_64 NixOS host.
 
-This demo is not a provisioning authority. It renders simulated scenarios; it
-does not invoke `kaiba-provision`, enumerate USB devices, upload recovery
-firmware, authenticate or attest a target, handle device secrets, or authorize
-a mutation. The demo and the experimental live
+The interface models the complete Raspberry Pi 5 secure-boot ceremony from
+station admission and a qualified fresh candidate through the
+`enrollment_ready` handoff defined by the
+[Raspberry Pi 5 secure-boot guide](raspberry-pi-5-secure-boot.md). It covers the
+irreversible path as deterministic display states, but it is not a provisioning
+authority. It does not invoke `kaiba-provision`, enumerate USB devices, upload
+recovery firmware, authenticate or attest a target, contact an external signer
+or control service, handle device secrets, program OTP, update EEPROM, boot a
+target, or reconcile inventory. The demo and the experimental live
 [Raspberry Pi 5 probe](raspberry-pi-5-provisioning-probe.md) intentionally have
 separate privilege boundaries.
+
+The modeled happy path is:
+
+1. pass station admission, create the transaction, acquire the claim, and bind
+   exactly one target;
+2. close the deferred baseline by checking the remaining OTP and protected-key
+   rows, EEPROM posture, storage, inventory and prior transactions, firmware
+   authenticity, and debug and alternate paths; then resolve the signed
+   manifest, artifacts, recovery bundle, and all required policies;
+3. bind independent commit approval to the exact target and plan, and establish
+   both directions of initial trust; immediately before intent, re-identify the
+   same zero-key target on the exclusively claimed and fenced RPIBOOT lane;
+4. export durable intent, simulate one execution of the approved OTP/EEPROM
+   commit, and reconcile authoritative readback;
+5. simulate signed cold boot, the customer-counter-signed owned probe and
+   recovery path, repeat the owned readback after recovery, and run rejection
+   tests for altered, unsigned, and wrong-key inputs, persistent-root integrity,
+   and anti-rollback enforcement;
+6. separately approve final controls, record their durable intent, apply them
+   once, cold restart, read them back directly, repeat affected tests, export
+   audit, reconcile inventory, and enter `enrollment_ready`.
+
+Failures before the simulated irreversible boundary may stop cleanly. An
+uncertain result at or after that boundary, changed target, mismatched readback,
+missing evidence, or failed acceptance test leaves the simulated device owned
+and quarantined; the workflow never presents it as fresh again. Reaching
+`enrollment_ready` does not create a device key, issue a certificate, activate a
+credential, or authorize production use. Device-identity enrollment remains a
+later, separately gated lifecycle transaction.
 
 ## NixOS service
 
@@ -77,9 +111,32 @@ The deterministic scenarios are:
 - `target-replaced`
 - `mutation-safety-violation`
 - `boot-failure`
+- `preparation-failure`
+- `approval-failure`
+- `trust-failure`
+- `commit-uncertain`
+- `commit-readback-mismatch`
+- `signed-boot-failure`
+- `owned-readback-mismatch`
+- `recovery-failure`
+- `negative-boot-failure`
+- `root-integrity-failure`
+- `rollback-failure`
+- `finalization-failure`
+- `final-retest-failure`
+- `audit-failure`
+- `deferred-baseline-failure`
+- `precommit-target-replaced`
+- `post-recovery-readback-mismatch`
 
-They exercise display states only. A scenario labelled as successful is not
-evidence from live hardware.
+They exercise display states only. A scenario labelled as successful means only
+that the synthetic state machine reached `enrollment_ready`; it is not evidence
+from live hardware and does not represent identity enrollment. A precommit
+failure stops or aborts before the simulated one-way operation when the modeled
+state is reusable. An uncertain commit or any post-OTP failure ends in
+`owned_quarantined`. No reset is offered after the irreversible boundary;
+exporting the record leaves the terminal state in place, and reloading starts
+an independent synthetic run rather than presenting the owned target as fresh.
 
 ## Shared local and GitHub Pages interface
 
@@ -120,11 +177,11 @@ provide all of the response security headers used by the loopback service; a
 restrictive HTML content-security policy is defense in depth, not an
 equivalent station boundary.
 
-This provides one common interface and one common simulated workflow today.
-The production provisioning orchestrator is still future work. It should
-implement the same typed state/action contract behind the HTTP transport; the
-browser graph must remain a public demonstration and must never become a
-fallback for a live station.
+This provides one common interface and one common simulated secure-boot
+workflow today. The production provisioning orchestrator is still future work.
+It should implement the same typed state/action contract behind the HTTP
+transport; the browser graph must remain a public demonstration and must never
+become a fallback for a live station.
 
 ## Local operator session
 
@@ -164,7 +221,8 @@ postcondition checks. The UI should receive only structured, secret-free state
 and should never accept arbitrary commands, executable paths, payload paths,
 profiles, or device selectors from browser content.
 
-Until those components exist and the sacrificial-device qualification is
-complete, use the kiosk only to review interaction design and use
-`kaiba-provision probe` separately for controlled, non-persistent hardware
-qualification. Persistent provisioning remains disabled.
+Until those components and the secure-boot hardware qualification exist, use
+the kiosk only to review the modeled ceremony and use `kaiba-provision probe`
+separately for controlled, non-persistent hardware qualification. OTP and
+EEPROM mutation, owned-device reconciliation, and identity enrollment remain
+disabled.

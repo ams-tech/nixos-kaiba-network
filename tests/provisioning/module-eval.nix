@@ -76,7 +76,7 @@ let
       package = kaibaStationDemoPackage;
       listenAddress = "::1";
       port = 8081;
-      scenario = "target-replaced";
+      scenario = "post-recovery-readback-mismatch";
     };
   };
 
@@ -119,7 +119,7 @@ let
     && stationDemoConfig.services.kaiba-provisioning-station-demo.scenario == "happy-path"
     && builtins.elem stationDemoConfig.services.kaiba-provisioning-station-demo.package stationDemoConfig.environment.systemPackages
     && lib.hasInfix ''"--listen" "127.0.0.1:8080" "--scenario" "happy-path"'' stationDemoService.ExecStart
-    && lib.hasInfix ''"--listen" "[::1]:8081" "--scenario" "target-replaced"'' stationDemoIPv6Service.ExecStart
+    && lib.hasInfix ''"--listen" "[::1]:8081" "--scenario" "post-recovery-readback-mismatch"'' stationDemoIPv6Service.ExecStart
     && stationDemoService.DynamicUser
     && stationDemoService.AmbientCapabilities == ""
     && stationDemoService.CapabilityBoundingSet == ""

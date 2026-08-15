@@ -267,16 +267,144 @@ setTimeout(() => {
         self.assertEqual(1, status)
         self.assertIn("missing required file: provisioning-demo/index.html", output)
 
-    def test_unsafe_station_demo_graph_is_rejected(self) -> None:
+    def test_every_live_capability_in_station_graph_must_be_false(self) -> None:
+        for capability in (
+            "mutation_eligible",
+            "live_target_access",
+            "live_mutation_capable",
+            "authoritative_evidence",
+            "secrets_present",
+            "approval_authority",
+            "signing_capable",
+            "enrollment_capable",
+        ):
+            with self.subTest(capability=capability):
+                shutil.rmtree(self.workspace / "pages-site", ignore_errors=True)
+                shutil.rmtree(self.workspace / "report", ignore_errors=True)
+                root = self.assemble_site()
+                graph_path = root / "provisioning-demo" / "workflow-graph.json"
+                graph = json.loads(graph_path.read_text(encoding="utf-8"))
+                graph["nodes"][graph["default_node"]]["state"]["safety"][capability] = True
+                graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+                status, output = self.validation_result(root)
+                self.assertEqual(1, status)
+                self.assertIn("violates the simulation safety contract", output)
+
+    def test_station_graph_requires_typed_workflow_stages(self) -> None:
         root = self.assemble_site()
         graph_path = root / "provisioning-demo" / "workflow-graph.json"
         graph = json.loads(graph_path.read_text(encoding="utf-8"))
-        graph["nodes"][graph["default_node"]]["state"]["safety"]["mutation_eligible"] = True
+        graph["nodes"][graph["default_node"]]["state"]["workflow_stages"][0]["status"] = "guessed"
         graph_path.write_text(json.dumps(graph), encoding="utf-8")
 
         status, output = self.validation_result(root)
         self.assertEqual(1, status)
-        self.assertIn("violates the simulation safety contract", output)
+        self.assertIn("malformed typed workflow stages", output)
+
+    def test_scenario_controls_are_admission_only(self) -> None:
+        root = self.assemble_site()
+        graph_path = root / "provisioning-demo" / "workflow-graph.json"
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        state = next(
+            node["state"]
+            for node in graph["nodes"].values()
+            if node["state"]["phase"] != "station_admission"
+        )
+        state["scenarios"] = [
+            {"id": "forged", "label": "Forged scenario", "action": "select_scenario:forged"}
+        ]
+        graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("malformed or out-of-phase scenario controls", output)
+
+    def test_point_of_no_return_metadata_cannot_be_weakened(self) -> None:
+        root = self.assemble_site()
+        graph_path = root / "provisioning-demo" / "workflow-graph.json"
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        presentation = next(
+            presentation
+            for node in graph["nodes"].values()
+            for presentation in node["state"]["action_presentations"]
+            if presentation["point_of_no_return"]
+        )
+        presentation["requires_confirmation"] = False
+        graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("malformed action presentation metadata", output)
+
+    def test_execute_commit_must_be_the_point_of_no_return(self) -> None:
+        root = self.assemble_site()
+        graph_path = root / "provisioning-demo" / "workflow-graph.json"
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        presentation = next(
+            presentation
+            for node in graph["nodes"].values()
+            for presentation in node["state"]["action_presentations"]
+            if presentation["action"] == "execute_commit"
+        )
+        presentation["point_of_no_return"] = False
+        graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("malformed action presentation metadata", output)
+
+    def test_required_secure_boot_action_cannot_be_removed(self) -> None:
+        root = self.assemble_site()
+        graph_path = root / "provisioning-demo" / "workflow-graph.json"
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        for node in graph["nodes"].values():
+            node["state"]["allowed_actions"] = [
+                action for action in node["state"]["allowed_actions"] if action != "execute_commit"
+            ]
+            node["state"]["action_presentations"] = [
+                presentation
+                for presentation in node["state"]["action_presentations"]
+                if presentation["action"] != "execute_commit"
+            ]
+            node["transitions"].pop("execute_commit", None)
+        graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("required secure-boot actions are absent", output)
+
+    def test_export_with_secret_field_is_rejected(self) -> None:
+        root = self.assemble_site()
+        graph_path = root / "provisioning-demo" / "workflow-graph.json"
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        export = next(
+            node["state"]["export_record"]
+            for node in graph["nodes"].values()
+            if node["state"].get("export_record") is not None
+        )
+        export["private_key"] = "-----BEGIN PRIVATE KEY-----"
+        graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("unsafe export record", output)
+
+    def test_final_controls_require_the_commit_boundary(self) -> None:
+        root = self.assemble_site()
+        graph_path = root / "provisioning-demo" / "workflow-graph.json"
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        transaction = next(
+            node["state"]["transaction"]
+            for node in graph["nodes"].values()
+            if node["state"].get("transaction", {}).get("final_control_executions") == 1
+        )
+        transaction["commit_executions"] = 0
+        graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+        status, output = self.validation_result(root)
+        self.assertEqual(1, status)
+        self.assertIn("malformed transaction state", output)
 
     def test_inconsistent_provisioning_overall_is_rejected(self) -> None:
         root = self.assemble_site()

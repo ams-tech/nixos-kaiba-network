@@ -34,10 +34,70 @@ class StationUIValidationTests(unittest.TestCase):
         with self.fixture() as fixture:
             index = fixture / "index.html"
             index.write_text(
-                index.read_text(encoding="utf-8").replace("PERSISTENT MUTATION BLOCKED", "PERSISTENT CHANGE AVAILABLE"),
+                index.read_text(encoding="utf-8").replace(
+                    "SIMULATION ONLY · LIVE MUTATION AND ENROLLMENT UNAVAILABLE",
+                    "LIVE PROVISIONING AVAILABLE",
+                ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "mutation boundary"):
+            with self.assertRaisesRegex(ValueError, "live-capability boundary"):
+                validate.validate(fixture)
+
+    def test_hard_coded_workflow_progress_is_rejected(self) -> None:
+        with self.fixture() as fixture:
+            index = fixture / "index.html"
+            index.write_text(
+                index.read_text(encoding="utf-8").replace(
+                    '<li class="is-current" aria-current="step">',
+                    '<li class="is-current" aria-current="step" data-step="commit">',
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "must not be hard-coded"):
+                validate.validate(fixture)
+
+    def test_live_target_boundary_is_required(self) -> None:
+        with self.fixture() as fixture:
+            index = fixture / "index.html"
+            index.write_text(
+                index.read_text(encoding="utf-8").replace("no live target access", "direct target access"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "live target boundary"):
+                validate.validate(fixture)
+
+    def test_all_false_safety_capabilities_are_required_in_both_clients(self) -> None:
+        for capability in (
+            "mutation_eligible",
+            "live_target_access",
+            "live_mutation_capable",
+            "authoritative_evidence",
+            "secrets_present",
+            "approval_authority",
+            "signing_capable",
+            "enrollment_capable",
+        ):
+            for asset in ("app.js", "transport.js"):
+                with self.subTest(capability=capability, asset=asset), self.fixture() as fixture:
+                    script = fixture / asset
+                    script.write_text(
+                        script.read_text(encoding="utf-8").replace(
+                            f'"{capability}"',
+                            '"removed_capability"',
+                        ),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, "safety contract"):
+                        validate.validate(fixture)
+
+    def test_one_shot_commit_styling_is_required(self) -> None:
+        with self.fixture() as fixture:
+            styles = fixture / "styles.css"
+            styles.write_text(
+                styles.read_text(encoding="utf-8").replace(".button-commit", ".button-ordinary"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "one-shot simulated commit styling"):
                 validate.validate(fixture)
 
     def fixture(self):
