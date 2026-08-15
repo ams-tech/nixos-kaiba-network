@@ -6,20 +6,20 @@
     <meta name="theme-color" content="#07111d">
     <meta
       name="description"
-      content="Kaiba's secure provisioning design starts with a non-persistent device preflight, explicit mutation boundaries, and an evidence-backed path to protected identity enrollment."
+      content="Walk Kaiba's synthetic Raspberry Pi 5 secure-boot ceremony from station admission through an evidence-backed enrollment-ready handoff."
     >
     <meta property="og:type" content="website">
-    <meta property="og:title" content="Kaiba provisioning — Observe before you mutate">
+    <meta property="og:title" content="Kaiba provisioning — Rehearse the one-way boundary">
     <meta
       property="og:description"
-      content="A controlled provisioning design with an executable preflight probe, a shared station simulation, and explicit production trust boundaries."
+      content="A synthetic end-to-end Raspberry Pi 5 secure-boot workflow with explicit approval, one-shot commit, readback, verification, and quarantine gates."
     >
     <meta property="og:url" content="https://ams-tech.github.io/nixos-kaiba-network/provisioning/">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Kaiba secure device provisioning">
     <meta
       name="twitter:description"
-      content="Inspect one claimed target, preserve partial qualification evidence, and keep irreversible work behind an explicit authorization boundary."
+      content="Explore the complete secure-boot ceremony through enrollment readiness without hardware access or mutation authority."
     >
     <link rel="canonical" href="https://ams-tech.github.io/nixos-kaiba-network/provisioning/">
     <link rel="stylesheet" href="../styles.css">
@@ -47,88 +47,90 @@
     <main id="content">
       <section class="detail-hero section-shell" aria-labelledby="hero-title">
         <div class="detail-hero-copy">
-          <p class="eyebrow">Provisioning / Experimental preflight</p>
+          <p class="eyebrow">Provisioning / Secure-boot ceremony</p>
           <h1 id="hero-title">
-            Observe the target.
-            <span>Before a one-way change.</span>
+            Rehearse the one-way boundary.
+            <span>Make every gate visible.</span>
           </h1>
           <p class="hero-lede">
-            Kaiba's first executable provisioning slice identifies one lane-bound Raspberry Pi 5
-            and evaluates the observable part of its unprovisioned baseline. It is deliberately
-            non-persistent and stops before authentication, attestation, key installation,
-            enrollment, or mutation authorization.
+            The station demo now walks a qualified Raspberry Pi 5 candidate through deferred
+            baseline closure, commit-time target re-identification, a journaled OTP and EEPROM
+            commit, authoritative readback, and the complete owned-state proof required for
+            <code>enrollment_ready</code>. Every state is synthetic: the current implementation
+            still cannot mutate a target.
           </p>
           <div class="hero-actions">
-            <a class="button button-primary" href="../provisioning-demo/">Try the station simulation <span aria-hidden="true">↗</span></a>
-            <a class="button button-secondary" href="../reports/latest/provisioning.json">Inspect probe evidence</a>
+            <a class="button button-primary" href="../provisioning-demo/">Walk the secure-boot ceremony <span aria-hidden="true">↗</span></a>
+            <a class="button button-secondary" href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/raspberry-pi-5-secure-boot.md">Read the secure-boot design</a>
           </div>
-          <ul class="hero-facts" aria-label="Provisioning preflight highlights">
-            <li><span aria-hidden="true">01</span> Exact lane + USB path</li>
-            <li><span aria-hidden="true">02</span> Digest-pinned inputs</li>
-            <li><span aria-hidden="true">03</span> Strict profile policy</li>
-            <li><span aria-hidden="true">04</span> No persistent mutation</li>
+          <ul class="hero-facts" aria-label="Secure-boot ceremony highlights">
+            <li><span aria-hidden="true">01</span> Closed deferred baseline</li>
+            <li><span aria-hidden="true">02</span> Exact approved manifest</li>
+            <li><span aria-hidden="true">03</span> Re-identify, commit, read back</li>
+            <li><span aria-hidden="true">04</span> Quarantine on uncertainty</li>
           </ul>
         </div>
 
-        <aside class="control-card" aria-label="Current provisioning probe boundary">
+        <aside class="control-card" aria-label="Secure-boot simulation boundary">
           <div class="control-card-header">
-            <span>PREFLIGHT / PROBE-001</span>
-            <span class="control-online control-caution"><i aria-hidden="true"></i> PARTIAL EVIDENCE</span>
+            <span>CEREMONY / SB-001</span>
+            <span class="control-online control-caution"><i aria-hidden="true"></i> SYNTHETIC WORKFLOW</span>
           </div>
           <div class="mini-flow">
             <div class="mini-node mini-device">
-              <span class="mini-kicker">ACQUIRE</span>
-              <strong>Raw metadata</strong>
-              <small>one claimed target</small>
+              <span class="mini-kicker">PREPARE</span>
+              <strong>Exact plan</strong>
+              <small>manifest + policy</small>
             </div>
-            <div class="mini-link" aria-hidden="true"><span>parse</span><i></i></div>
+            <div class="mini-link" aria-hidden="true"><span>approve</span><i></i></div>
             <div class="mini-node mini-controller">
-              <span class="mini-kicker">NORMALIZE</span>
-              <strong>Observation</strong>
-              <small>typed identifiers</small>
+              <span class="mini-kicker">COMMIT</span>
+              <strong>OTP + EEPROM</strong>
+              <small>intent, once, readback</small>
             </div>
-            <div class="mini-link" aria-hidden="true"><span>evaluate</span><i></i></div>
+            <div class="mini-link" aria-hidden="true"><span>verify</span><i></i></div>
             <div class="mini-node mini-origin">
-              <span class="mini-kicker">ASSESS</span>
-              <strong>Profile findings</strong>
-              <small>reversible gate only</small>
+              <span class="mini-kicker">PROVE</span>
+              <strong>Owned state</strong>
+              <small>positive + negative tests</small>
             </div>
           </div>
           <dl class="control-readout">
             <div>
-              <dt>Mutation</dt>
-              <dd>false</dd>
+              <dt>Authority</dt>
+              <dd>none</dd>
             </div>
             <div>
-              <dt>Full baseline</dt>
-              <dd>not established</dd>
+              <dt>Hardware evidence</dt>
+              <dd>simulated</dd>
             </div>
             <div>
-              <dt>Qualification</dt>
-              <dd>manual hardware gate</dd>
+              <dt>Terminal gate</dt>
+              <dd>enrollment_ready</dd>
             </div>
           </dl>
           <p class="control-note">
-            “Non-persistent” describes target state, not passive inspection: Raspberry Pi–signed
-            recovery firmware executes in volatile RAM during a live probe.
+            Enrollment readiness is not device identity. Key generation, certificate issuance,
+            activation, and production authorization remain later, separately gated work.
           </p>
         </aside>
       </section>
 
       <section class="signal-strip" aria-label="Provisioning safety properties">
-        <div><span>TARGET</span> One explicit lane and USB path</div>
-        <div><span>RESULT</span> Correlation, never authentication</div>
-        <div><span>CHANGE</span> Mutation eligibility always false</div>
+        <div><span>DEMO</span> Public, synthetic, per tab</div>
+        <div><span>CHANGE</span> No USB access or target mutation</div>
+        <div><span>OUTCOME</span> Enrollment readiness, not enrollment</div>
       </section>
 
       <section class="feature-section section-shell section-block" id="current-slice" aria-labelledby="current-title">
         <div class="section-heading">
           <p class="section-index">01 / What runs today</p>
           <div>
-            <h2 id="current-title">A narrow executable slice with hard edges.</h2>
+            <h2 id="current-title">One live probe. One complete ceremony simulation.</h2>
             <p>
-              Acquisition, normalization, and policy evaluation remain separate so future hardware
-              adapters can change without weakening the transaction semantics.
+              The read-only probe remains the only hardware-backed slice. The interface now
+              rehearses the complete Pi 5 secure-boot transaction without pretending those
+              mutation, recovery, or verification operations exist in production.
             </p>
           </div>
         </div>
@@ -136,42 +138,43 @@
         <div class="feature-grid">
           <article class="feature-card">
             <span class="card-index">A</span>
-            <h3>Offline evaluation</h3>
+            <h3>Live preflight boundary</h3>
             <p>
-              Import bounded metadata from a file or standard input and receive the same normalized
-              assessment without touching USB or starting a subprocess.
+              The existing tool can identify one lane-bound Pi 5 and evaluate partial public
+              observations. Its result never authorizes a write or establishes the full baseline.
             </p>
           </article>
           <article class="feature-card">
             <span class="card-index">B</span>
-            <h3>Lane-bound live probe</h3>
+            <h3>Admission + preparation</h3>
             <p>
-              Require a stable lane ID and exact USB path. Reject missing, multiple, replaced, or
-              unexpected targets instead of auto-selecting hardware.
+              Simulate station health, exclusive target binding, then close deferred OTP, EEPROM,
+              storage, inventory, firmware, and debug checks before preparing the exact manifest.
             </p>
           </article>
           <article class="feature-card">
             <span class="card-index">C</span>
-            <h3>Immutable probe inputs</h3>
+            <h3>Approved one-shot commit</h3>
             <p>
-              Revalidate the pinned tool and the exact two-file metadata-only recovery bundle before
-              each run. Reject extra files, symlinks, and mutation directives.
+              After approval and bidirectional trust, re-identify the exact target on its exclusive
+              RPIBOOT lane before durable intent, execute-once commit, and authoritative readback.
             </p>
           </article>
           <article class="feature-card">
             <span class="card-index">D</span>
-            <h3>Strict evidence policy</h3>
+            <h3>Owned-state proof matrix</h3>
             <p>
-              Normalize revision, identity, key-hash, JTAG, boot ROM, and EEPROM observations under
-              a digest-bound profile. Unknown upstream fields make the baseline indeterminate.
+              Walk signed cold boot, owned readback, authorized recovery, mandatory post-recovery
+              readback, wrong-key rejection, root-integrity enforcement, and anti-rollback checks.
             </p>
           </article>
           <article class="feature-card">
             <span class="card-index">E</span>
-            <h3>Deterministic result</h3>
+            <h3>Fail-closed recovery</h3>
             <p>
-              Emit one JSON observation with evidence and profile digests, a domain-separated target
-              fingerprint, typed findings, and unconditional safety fields.
+              Keep an uncertain one-way result in progress until reconciliation. Changed targets,
+              mismatched readback, missing evidence, or failed tests lead to owned quarantine, with
+              no reset after the simulated irreversible boundary.
             </p>
           </article>
           <article class="feature-card">
@@ -179,7 +182,7 @@
             <h3>Shared station interface</h3>
             <p>
               Run the same HTML, CSS, controller, and transport in the loopback kiosk and GitHub
-              Pages. Pages traverses a generated mock graph and has no target privilege.
+              Pages. Pages traverses the generated mock graph and has no target privilege.
             </p>
           </article>
         </div>
@@ -189,23 +192,23 @@
         <div class="section-heading section-heading-compact">
           <p class="section-index">02 / Safety contract</p>
           <div>
-            <h2 id="safety-title">A passing preflight is permission to learn more—not to mutate.</h2>
+            <h2 id="safety-title">A completed demo is a reviewed state path—not proof from hardware.</h2>
           </div>
         </div>
 
         <div class="scope-grid">
           <article class="scope-card scope-card-implemented">
             <div class="scope-card-topline">
-              <span>ALWAYS ASSERTED</span>
-              <span class="status-pill status-executable">IMPLEMENTED</span>
+              <span>MODELED BY THE DEMO</span>
+              <span class="status-pill status-executable">SIMULATED</span>
             </div>
-            <h3>What the result can establish</h3>
+            <h3>What the interface rehearses</h3>
             <ul class="feature-list">
-              <li>Evidence correlates to one explicitly selected physical path</li>
-              <li>Observed class fields match or reject the experimental Pi 5 profile</li>
-              <li>Observable baseline facts pass, fail, or remain indeterminate</li>
-              <li>The target may become eligible for further reversible qualification</li>
-              <li>Tool, bundle, profile, and evidence inputs are digest-bound</li>
+              <li>Station admission, one transaction, one lane, and one bound candidate</li>
+              <li>Deferred-baseline closure, a complete manifest, and independent approval</li>
+              <li>Commit-time RPIBOOT re-identification, one-shot commit, and direct readback</li>
+              <li>Owned recovery, repeated readback, and positive, negative, integrity, and rollback tests</li>
+              <li>Final-control approval and intent, one-shot apply, cold restart, direct readback, and retest</li>
             </ul>
           </article>
 
@@ -214,13 +217,13 @@
               <span>NEVER IMPLIED</span>
               <span class="status-pill status-deferred">OUT OF SCOPE</span>
             </div>
-            <h3>What the result cannot establish</h3>
+            <h3>What completion cannot establish</h3>
             <ul class="feature-list">
-              <li>Device authentication, remote attestation, or inventory ownership</li>
-              <li>The full unprovisioned state or absence of every device secret</li>
-              <li>Storage contents, protected key rows, or every debug path</li>
-              <li>Firmware authenticity beyond the pinned acquisition inputs</li>
-              <li>Authorization for OTP, EEPROM, key, boot, or any other persistent change</li>
+              <li>That any physical Pi was inspected, fused, updated, booted, or tested</li>
+              <li>Device authentication, remote attestation, or an inventory ownership change</li>
+              <li>Live signing, mutation, owned-device probing, recovery, or readback authority</li>
+              <li>A device-unique private key, certificate, or active production identity</li>
+              <li>Evidence that can be substituted for a real journal or hardware ceremony</li>
             </ul>
           </article>
         </div>
@@ -228,12 +231,12 @@
 
       <section class="lifecycle section-shell section-block" id="lifecycle" aria-labelledby="lifecycle-title">
         <div class="section-heading">
-          <p class="section-index">03 / Target transaction</p>
+          <p class="section-index">03 / Secure-boot transaction</p>
           <div>
-            <h2 id="lifecycle-title">The production ceremony is a durable transaction.</h2>
+            <h2 id="lifecycle-title">The simulated path ends at <code>enrollment_ready</code>.</h2>
             <p>
-              These stages are the platform-neutral design contract. Except for the preflight
-              observations above, they are not yet implemented by the station.
+              The workflow specializes the platform-neutral security-foundation stage for a Pi 5.
+              Production identity enrollment begins only after this handoff and is outside the demo.
             </p>
           </div>
         </div>
@@ -241,39 +244,39 @@
         <div class="lifecycle-flow lifecycle-six">
           <article class="lifecycle-step">
             <span class="step-number">01</span>
-            <span class="step-status step-design">TARGET DESIGN</span>
-            <h3>Create transaction</h3>
-            <p>Reserve the logical ID and asset; bind the operator, policy, nonce, tools, and claim lease.</p>
+            <span class="step-status step-design">SIMULATED</span>
+            <h3>Admit + bind</h3>
+            <p>Check station posture and services, create the transaction, claim one lane, and bind one candidate.</p>
           </article>
           <article class="lifecycle-step">
             <span class="step-number">02</span>
-            <span class="step-status step-partial">PARTIAL SLICE</span>
-            <h3>Claim + validate</h3>
-            <p>Identify one candidate and establish every observable baseline fact before any write.</p>
+            <span class="step-status step-design">SIMULATED</span>
+            <h3>Close baseline + prepare</h3>
+            <p>Resolve every deferred precondition, signed artifact, recovery bundle, policy, and test plan.</p>
           </article>
           <article class="lifecycle-step">
             <span class="step-number">03</span>
-            <span class="step-status step-design">TARGET DESIGN</span>
-            <h3>Approve commit plan</h3>
-            <p>Bind independent approval to the target, profile, artifacts, ordered operations, and postconditions.</p>
+            <span class="step-status step-design">SIMULATED</span>
+            <h3>Approve + establish trust</h3>
+            <p>Bind independent approval to the exact plan and authenticate both candidate and enrollment domain.</p>
           </article>
           <article class="lifecycle-step">
             <span class="step-number">04</span>
-            <span class="step-status step-design">TARGET DESIGN</span>
-            <h3>Secure + create keys</h3>
-            <p>Establish boot, update, storage, debug, and protected signer posture; keep private material on target.</p>
+            <span class="step-status step-design">SIMULATED</span>
+            <h3>Commit + read back</h3>
+            <p>Re-identify the RPIBOOT target, export intent, execute once, and reconcile authoritative state.</p>
           </article>
           <article class="lifecycle-step">
             <span class="step-number">05</span>
-            <span class="step-status step-design">TARGET DESIGN</span>
-            <h3>Enroll + stage</h3>
-            <p>Bind bootstrap authentication and proof of possession; let the RA assign identity and the CA issue.</p>
+            <span class="step-status step-design">SIMULATED</span>
+            <h3>Prove the owned state</h3>
+            <p>Cold-boot signed code, re-read after recovery, and exercise rejection, integrity, and rollback paths.</p>
           </article>
           <article class="lifecycle-step">
             <span class="step-number">06</span>
-            <span class="step-status step-design">TARGET DESIGN</span>
-            <h3>Verify + activate</h3>
-            <p>Prove the installed key and certificate work, record independent evidence, activate, audit, and release.</p>
+            <span class="step-status step-design">SIMULATED</span>
+            <h3>Finalize + reconcile</h3>
+            <p>Approve and journal final controls, apply once, cold restart, read back, retest, audit, and permit enrollment.</p>
           </article>
         </div>
       </section>
@@ -327,32 +330,32 @@
       <section class="boundary section-shell" id="boundary" aria-labelledby="boundary-title">
         <div class="boundary-label"><span aria-hidden="true">!</span> IMPLEMENTATION BOUNDARY</div>
         <div class="boundary-copy">
-          <h2 id="boundary-title">The interface is shared. The production backend is not here yet.</h2>
+          <h2 id="boundary-title">The ceremony is modeled. The mutation backend is not here yet.</h2>
           <p>
-            The loopback kiosk and Pages demo render deterministic mock station states. They do not
-            access USB, run the probe, handle secrets, authenticate operators or devices, call an
-            RA or CA, or perform a mutation. Interface parity does not imply production workflow
-            authority.
+            The loopback kiosk and Pages demo render deterministic secure-boot states. They do not
+            access USB, run the probe, handle secrets, authenticate operators or devices, contact
+            control services or signers, program OTP, update EEPROM, boot hardware, or reconcile
+            inventory. Interface parity does not imply production workflow authority.
           </p>
           <p class="boundary-deferred">
-            Still required: coordinator and inventory services, signed production bundles,
-            mutating adapters and lane guards, protected key integration, RA and CA enrollment,
-            independent verification, credential activation, durable audit, and sacrificial-board
-            hardware qualification.
+            Still required: a production Pi image and deterministic boot capsule, external signing,
+            approved bundles, a mutating Pi 5 adapter and lane guard, an owned-device probe,
+            persistent-root integrity and anti-rollback enforcement, recovery tooling, control and
+            audit services, and physical positive, negative, power-loss, and quarantine tests.
           </p>
-          <a href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/device-identity.md">
-            Read the device identity lifecycle <span aria-hidden="true">→</span>
+          <a href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/raspberry-pi-5-secure-boot.md">
+            Read the Pi 5 secure-boot guide <span aria-hidden="true">→</span>
           </a>
         </div>
       </section>
 
       <section class="closing section-shell" aria-labelledby="closing-title">
-        <p class="section-index">05 / Explore the current slice</p>
-        <h2 id="closing-title">Walk the workflow, then inspect the safety evidence.</h2>
+        <p class="section-index">05 / Explore the ceremony</p>
+        <h2 id="closing-title">Walk the state machine, then inspect its security contract.</h2>
         <div class="closing-actions">
           <a class="button button-primary" href="../provisioning-demo/">Open the station simulation <span aria-hidden="true">↗</span></a>
-          <a class="button button-secondary" href="../reports/latest/provisioning.json">Read provisioning JSON</a>
-          <a class="button button-secondary" href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/raspberry-pi-5-provisioning-probe.md">Read probe documentation</a>
+          <a class="button button-secondary" href="../reports/latest/provisioning.json">Read current probe JSON</a>
+          <a class="button button-secondary" href="https://github.com/ams-tech/nixos-kaiba-network/blob/main/docs/raspberry-pi-5-secure-boot.md">Read secure-boot documentation</a>
         </div>
       </section>
     </main>
@@ -363,7 +366,7 @@
         <span class="brand-name">KAIBA</span>
         <span class="brand-edition">DEVICE PLATFORM</span>
       </div>
-      <p>Controlled qualification and identity for secure edge devices.</p>
+      <p>Controlled secure-boot ownership and identity for edge devices.</p>
       <div class="footer-links">
         <a href="../">Overview</a>
         <a href="../dns/">DNS</a>

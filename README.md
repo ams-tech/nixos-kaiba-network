@@ -165,10 +165,17 @@ and its SHA-256 checksum in a GitHub release. See the [image release
 procedure](docs/raspberry-pi-5-provisioning-image.md#release-the-image).
 
 The Pages simulation and loopback station use the same HTML, CSS, controller,
-and transport code. Its finite transition graph is generated from the Go mock
-state machine during the build; no second JavaScript workflow is maintained.
-The only runtime difference is explicit configuration: loopback mode calls the
-local HTTP API, while Pages mode traverses the generated graph in memory.
+and transport code. Their synthetic workflow walks the Raspberry Pi 5
+secure-boot ceremony from station admission and deferred-baseline closure
+through commit-time RPIBOOT target re-identification, an approval-gated,
+one-shot OTP/EEPROM commit, post-recovery readback, separately approved and
+journaled final controls with cold-restart readback, and the `enrollment_ready`
+handoff. Owned terminal states have no reset path. Its finite transition graph
+is generated from the Go mock state machine during the build; no second
+JavaScript workflow is maintained. The only runtime difference is explicit
+configuration: loopback mode calls the local HTTP API, while Pages mode
+traverses the generated graph in memory. Neither mode has hardware, signing,
+mutation, or provisioning authority.
 
 Enable the site once in **Settings → Pages → Build and deployment** by selecting
 **GitHub Actions** as the source. Pages can make the homepage, report, and its
@@ -237,8 +244,17 @@ documentation; no OTP or EEPROM mutation path is implemented yet.
 
 `kaiba-provision-station-demo` is an unprivileged, loopback-only interface
 prototype for an HDMI display and USB touchscreen. It renders deterministic
-mock scenarios and deliberately has no USB, probe, authentication, attestation,
-secret-handling, or mutation authority. See the
+mock scenarios for the complete Pi 5 secure-boot ceremony through
+`enrollment_ready`, including deferred-baseline closure, commit-time target
+re-identification, approval, intent, one-shot mutation, authoritative readback,
+positive and negative tests, repeated readback after recovery, and separate
+approval, intent, one-shot application, cold restart, and direct readback for
+final controls before affected retests. Failures after the simulated
+irreversible boundary quarantine the owned target without offering reset. These
+are synthetic display states, not physical evidence; the demo deliberately has
+no USB, probe, authentication, attestation, secret-handling, signing, mutation,
+or inventory authority. Device-identity enrollment remains a later workflow.
+See the
 [provisioning-station interface demo](docs/provisioning-station-kiosk.md) for
 the NixOS module, systemd sandbox, operator-session Chromium example, shared
 Pages build, and parity guarantees.

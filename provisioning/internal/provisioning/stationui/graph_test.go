@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestTransitionGraphCoversAuthoritativeMachine(t *testing.T) {
+func TestTransitionGraphCoversAuthoritativeSecureBootMachine(t *testing.T) {
 	graph, err := GenerateTransitionGraph()
 	if err != nil {
 		t.Fatal(err)
@@ -14,16 +14,19 @@ func TestTransitionGraphCoversAuthoritativeMachine(t *testing.T) {
 	if graph.SchemaVersion != TransitionGraphSchemaVersion || graph.StateSchemaVersion != StateSchemaVersion {
 		t.Fatalf("graph versions = %q, %q", graph.SchemaVersion, graph.StateSchemaVersion)
 	}
-	if len(graph.Nodes) == 0 {
-		t.Fatal("transition graph is empty")
+	if len(graph.Nodes) == 0 || len(graph.Nodes) > 512 {
+		t.Fatalf("transition graph node count = %d", len(graph.Nodes))
 	}
 	root, ok := graph.Nodes[graph.DefaultNode]
-	if !ok || root.State.Scenario != ScenarioHappyPath || root.State.Phase != PhaseReady {
+	if !ok || root.State.Scenario != ScenarioHappyPath || root.State.Phase != PhaseStationAdmission {
 		t.Fatalf("default node = %#v", root.State)
 	}
 
 	seenScenarios := make(map[ScenarioID]bool)
 	seenPhases := make(map[Phase]bool)
+	seenActions := make(map[Action]bool)
+	seenEnrollmentReady := false
+	seenOwnedQuarantine := false
 	for id, node := range graph.Nodes {
 		actualID, err := graphStateID(node.State)
 		if err != nil {
@@ -38,10 +41,13 @@ func TestTransitionGraphCoversAuthoritativeMachine(t *testing.T) {
 		assertSafetyInvariants(t, node.State)
 		seenScenarios[node.State.Scenario] = true
 		seenPhases[node.State.Phase] = true
+		seenEnrollmentReady = seenEnrollmentReady || node.State.Phase == PhaseEnrollmentReady
+		seenOwnedQuarantine = seenOwnedQuarantine || node.State.Phase == PhaseQuarantined
 		if len(node.Transitions) != len(node.State.AllowedActions) {
 			t.Fatalf("node %s has %d transitions for %d allowed actions", id, len(node.Transitions), len(node.State.AllowedActions))
 		}
 		for _, action := range node.State.AllowedActions {
+			seenActions[action] = true
 			targetID, exists := node.Transitions[action]
 			if !exists {
 				t.Fatalf("node %s omits allowed action %q", id, action)
@@ -51,6 +57,7 @@ func TestTransitionGraphCoversAuthoritativeMachine(t *testing.T) {
 			}
 		}
 	}
+
 	seenNodes := map[string]bool{graph.DefaultNode: true}
 	queue := []string{graph.DefaultNode}
 	for len(queue) > 0 {
@@ -72,19 +79,89 @@ func TestTransitionGraphCoversAuthoritativeMachine(t *testing.T) {
 		}
 	}
 	for _, phase := range []Phase{
+		PhaseStationAdmission,
+		PhaseTransactionCreation,
 		PhaseReady,
 		PhaseTargetDetected,
 		PhasePowerCycleRequired,
 		PhaseAwaitingReconnect,
 		PhaseSecondProbeReady,
 		PhaseAwaitingNormalBootConfirmation,
-		PhaseComplete,
+		PhaseQualifiedFreshCandidate,
+		PhaseBaselineClosed,
+		PhasePrepared,
+		PhaseCommitApproved,
+		PhaseTrustEstablished,
+		PhaseCommitTargetReidentified,
+		PhaseCommitIntentRecorded,
+		PhaseCommitInProgress,
+		PhaseCommitReadbackVerified,
+		PhaseAwaitingOwnedColdBoot,
+		PhaseSignedBootVerified,
+		PhaseOwnedReadbackVerified,
+		PhaseRecoveryVerified,
+		PhasePostRecoveryReadbackVerified,
+		PhaseNegativeBootVerified,
+		PhaseRootIntegrityVerified,
+		PhaseRollbackVerified,
+		PhaseFinalizationApproved,
+		PhaseFinalizationIntentRecorded,
+		PhaseFinalControlsApplied,
+		PhaseFinalColdRestartObserved,
+		PhaseFinalControlsReadbackVerified,
+		PhaseFinalRetestVerified,
+		PhaseAuditReconciled,
+		PhaseEnrollmentReady,
 		PhaseStopped,
 		PhaseQuarantined,
 	} {
 		if !seenPhases[phase] {
 			t.Errorf("phase %q is absent", phase)
 		}
+	}
+	for _, action := range []Action{
+		ActionRunStationAdmission,
+		ActionCreateTransaction,
+		ActionAttachTarget,
+		ActionRunFirstProbe,
+		ActionDisconnectTarget,
+		ActionReconnectTarget,
+		ActionRunSecondProbe,
+		ActionConfirmBootOK,
+		ActionConfirmBootFailed,
+		ActionCloseDeferredBaseline,
+		ActionPrepareTransaction,
+		ActionRequestCommitApproval,
+		ActionEstablishInitialTrust,
+		ActionReidentifyCommitTarget,
+		ActionRecordCommitIntent,
+		ActionExecuteCommit,
+		ActionObserveCommitReadback,
+		ActionPowerOffOwnedTarget,
+		ActionConfirmSignedBoot,
+		ActionRunOwnedReadback,
+		ActionTestOwnedRecovery,
+		ActionRerunOwnedReadback,
+		ActionTestNegativeBoot,
+		ActionTestRootIntegrity,
+		ActionTestRollback,
+		ActionRequestFinalizationApproval,
+		ActionRecordFinalizationIntent,
+		ActionApplyFinalControls,
+		ActionColdRestartFinalizedTarget,
+		ActionObserveFinalControlsReadback,
+		ActionRunFinalRetest,
+		ActionReconcileAudit,
+		ActionMarkEnrollmentReady,
+		ActionExportRedacted,
+		ActionReset,
+	} {
+		if !seenActions[action] {
+			t.Errorf("action %q is absent", action)
+		}
+	}
+	if !seenEnrollmentReady || !seenOwnedQuarantine {
+		t.Fatalf("terminal coverage: enrollment_ready=%t owned_quarantine=%t", seenEnrollmentReady, seenOwnedQuarantine)
 	}
 }
 
