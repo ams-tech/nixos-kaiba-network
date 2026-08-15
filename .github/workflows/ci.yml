@@ -29,14 +29,17 @@ jobs:
         uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
         with:
           enable_kvm: false
+          extra_nix_config: |
+            extra-substituters = https://nixos-raspberrypi.cachix.org
+            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
           github_access_token: ${{ github.token }}
 
       - name: Check formatting
-        run: nix fmt -- --ci
+        run: nix --accept-flake-config fmt -- --ci
 
       - name: Evaluate every flake system
         run: |
-          nix flake check --all-systems --no-build -L
+          nix --accept-flake-config flake check --all-systems --no-build -L
           nix flake check ./nix/provisioning --all-systems --no-build -L
           nix flake check ./nix/dns --all-systems --no-build -L
           git diff --exit-code -- \
@@ -46,9 +49,10 @@ jobs:
 
       - name: Run fast checks
         run: |
-          nix build --no-link -L \
+          nix --accept-flake-config build --no-link -L \
             .#checks.x86_64-linux.ci-workflow \
             .#checks.x86_64-linux.module-eval \
+            .#checks.x86_64-linux.rpi5-provisioning-image-eval \
             .#checks.x86_64-linux.unit \
             ./nix/provisioning#checks.x86_64-linux.device-profile-schema \
             ./nix/provisioning#checks.x86_64-linux.module-eval \
@@ -64,7 +68,7 @@ jobs:
     name: ARM64 production packages
     needs: quality
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 60
     outputs:
       provisioning_receipt_sha256: ${{ steps.provisioning_receipt.outputs.sha256 }}
     steps:
@@ -77,6 +81,9 @@ jobs:
         uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
         with:
           enable_kvm: false
+          extra_nix_config: |
+            extra-substituters = https://nixos-raspberrypi.cachix.org
+            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
           github_access_token: ${{ github.token }}
 
       - name: Build and test all production binaries
@@ -92,6 +99,11 @@ jobs:
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-pages
+
+      - name: Build the RPi 5 provisioning station SD image
+        run: |
+          nix --accept-flake-config build --no-link -L \
+            .#packages.aarch64-linux.rpi5-provisioning-sd-image
 
       - name: Build the native provisioning test result
         run: nix build ./nix/provisioning#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L

@@ -23,10 +23,10 @@ depends on Internet access while running.
 The root flake remains the compatibility facade for the complete pilot:
 
 ```console
-nix flake check -L
-nix build .#dns-test-report -L
-nix run .#dns-test-driver
-nix develop
+nix --accept-flake-config flake check -L
+nix --accept-flake-config build .#dns-test-report -L
+nix --accept-flake-config run .#dns-test-driver
+nix --accept-flake-config develop
 ```
 
 The DNS integration report and interactive driver are `x86_64-linux` outputs.
@@ -76,6 +76,13 @@ two private live results and produce a deterministic redacted record. It does
 not automate or prove the required full-power removal or normal-boot check;
 those remain explicit operator confirmations. See the
 [Pi 5 probe runbook](docs/raspberry-pi-5-provisioning-probe.md#sacrificial-device-operator-runbook).
+The root flake also provides a hardened
+[Pi 5 provisioning-station SD image](docs/raspberry-pi-5-provisioning-image.md):
+
+```console
+nix --accept-flake-config build -L \
+  .#packages.aarch64-linux.rpi5-provisioning-sd-image
+```
 
 ## Flake layout and consumption
 
@@ -128,8 +135,8 @@ pushes to `main`, and manual dispatches. It separates the test workload into:
 
 - x86 formatting, flake evaluation, Go tests, report and Pages site tests,
   workflow linting, and NixOS module evaluation;
-- native ARM64 builds and tests for all five packaged binaries, producing a
-  commit-bound provisioning result; and
+- native ARM64 builds and tests for all five packaged binaries, the Pi 5
+  provisioning-station SD image, and a commit-bound provisioning result; and
 - the complete seven-VM DNS topology with KVM acceleration when available,
   followed by deterministic composition of both architectures' provisioning
   results.
