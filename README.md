@@ -135,8 +135,9 @@ pushes to `main`, and manual dispatches. It separates the test workload into:
 
 - x86 formatting, flake evaluation, Go tests, report and Pages site tests,
   workflow linting, and NixOS module evaluation;
-- native ARM64 builds and tests for all five packaged binaries, the Pi 5
-  provisioning-station SD image, and a commit-bound provisioning result; and
+- native ARM64 builds and tests for all five packaged binaries and a
+  commit-bound provisioning result;
+- a dedicated native ARM64 build of the Pi 5 provisioning-station SD image; and
 - the complete seven-VM DNS topology with KVM acceleration when available,
   followed by deterministic composition of both architectures' provisioning
   results.
@@ -156,6 +157,13 @@ topology, evidence, and zone data for diagnosis. Each Pages deployment replaces
 the homepage, canonical report, and station simulation together; the retained
 Actions artifacts provide per-run history.
 
+Pushing a stable `vMAJOR.MINOR.PATCH` tag for a reviewed `main` commit runs
+`.github/workflows/release.yml`. After confirming that the commit's main-branch
+CI run succeeded, the workflow rebuilds the provisioning image from that exact
+tag on native ARM64, verifies the compressed archive, and publishes the image
+and its SHA-256 checksum in a GitHub release. See the [image release
+procedure](docs/raspberry-pi-5-provisioning-image.md#release-the-image).
+
 The Pages simulation and loopback station use the same HTML, CSS, controller,
 and transport code. Its finite transition graph is generated from the Go mock
 state machine during the build; no second JavaScript workflow is maintained.
@@ -167,7 +175,8 @@ Enable the site once in **Settings → Pages → Build and deployment** by selec
 normalized evidence public, including for some private-repository plans. All
 referenced actions are pinned to immutable commit SHAs. Test jobs keep read-only
 repository access; only the main-only deployment job receives Pages write and
-OIDC token permissions.
+OIDC token permissions, and only the isolated release-publication job receives
+repository-contents write permission.
 
 ## Device API
 

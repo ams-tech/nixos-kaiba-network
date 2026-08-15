@@ -159,7 +159,9 @@
                 ];
               }
               ''
-                actionlint ${./.github/workflows/ci.yml}
+                actionlint \
+                  ${./.github/workflows/ci.yml} \
+                  ${./.github/workflows/release.yml}
                 mkdir -p "$out"
                 touch "$out/passed"
               '';

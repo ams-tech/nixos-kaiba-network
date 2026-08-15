@@ -78,6 +78,41 @@ emulation. CI builds it on the native `ubuntu-24.04-arm` runner. Its output is:
 result/sd-image/kaiba-rpi5-provisioning.img.zst
 ```
 
+## Release the image
+
+The release workflow accepts stable `vMAJOR.MINOR.PATCH` tags whose commits are
+reachable from `main`. Wait for that commit's CI run to succeed, then create and
+push an annotated tag from a clean, reviewed `main` checkout:
+
+```console
+git tag --annotate v0.1.0 --message "Kaiba provisioning image v0.1.0"
+git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` rebuilds the exact tagged revision on native
+ARM64 and creates a GitHub release with these assets:
+
+```text
+kaiba-rpi5-provisioning-v0.1.0.img.zst
+kaiba-rpi5-provisioning-v0.1.0.img.zst.sha256
+```
+
+The build validates the Zstandard archive before publication, and the
+publication job independently verifies the downloaded artifact against the
+checksum. Download both files and verify them before flashing:
+
+```console
+sha256sum --check kaiba-rpi5-provisioning-v0.1.0.img.zst.sha256
+zstd --test kaiba-rpi5-provisioning-v0.1.0.img.zst
+```
+
+GitHub requires each release asset to be smaller than 2 GiB, so the workflow
+fails with an explicit error if the compressed image reaches that limit.
+Protect the repository's `v*` tag pattern from updates and deletion with a
+ruleset. The workflow verifies the remote tag against the built commit before
+creating and again before publishing the release, while the ruleset prevents a
+tag update in the remaining publication window.
+
 ## Flash and boot
 
 Raspberry Pi Imager can write the compressed image as a custom image. For a
