@@ -119,6 +119,7 @@ in
     compressImage = true;
     expandOnBoot = false;
     preBuildCommands = ''
+      ${pkgs.coreutils}/bin/chmod u+w "$root_fs"
       ${pkgs.coreutils}/bin/truncate --size=+256M "$root_fs"
       ${pkgs.e2fsprogs}/bin/resize2fs "$root_fs"
       ${pkgs.e2fsprogs}/bin/tune2fs -m 0 "$root_fs"

@@ -33,6 +33,7 @@ let
     && imageConfig.image.baseName == "kaiba-rpi5-provisioning"
     && imageConfig.sdImage.compressImage
     && !imageConfig.sdImage.expandOnBoot
+    && lib.hasInfix "chmod u+w" imageConfig.sdImage.preBuildCommands
     && lib.hasInfix "truncate --size=+256M" imageConfig.sdImage.preBuildCommands
     && lib.hasInfix "resize2fs" imageConfig.sdImage.preBuildCommands
     && lib.hasInfix "tune2fs -m 0" imageConfig.sdImage.preBuildCommands
