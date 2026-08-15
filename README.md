@@ -229,6 +229,12 @@ attestation, or permission to mutate a target. See the
 for the safety boundary, station setup, command contract, and required hardware
 qualification.
 
+The [Raspberry Pi 5 secure-boot guide](docs/raspberry-pi-5-secure-boot.md)
+documents the native BCM2712 chain of trust, its assurance limits, the required
+artifacts and evidence, and the irreversible checklist from a qualified
+candidate through ownership to enrollment readiness. It is design
+documentation; no OTP or EEPROM mutation path is implemented yet.
+
 `kaiba-provision-station-demo` is an unprivileged, loopback-only interface
 prototype for an HDMI display and USB touchscreen. It renders deterministic
 mock scenarios and deliberately has no USB, probe, authentication, attestation,

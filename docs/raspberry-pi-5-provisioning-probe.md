@@ -74,11 +74,12 @@ does not pass `rpiboot`'s `-j` file-output option. Do not substitute an
 operator-created `-j` directory: it would move private metadata to an
 additional serial-derived file outside the wrapper's bounded capture path.
 
-This unsigned recovery program is usable only before a customer secure-boot
-key is fused. BCM2712 requires recovery firmware to be counter-signed by that
-customer key afterward. Owned-device reconciliation consequently requires a
-separate, fleet-signed probe bundle and is outside this version. See the
-[official Pi 5 secure-boot procedure].
+This Raspberry Pi-signed recovery program lacks a customer counter-signature
+and is usable only before a customer secure-boot key is fused. BCM2712 requires
+recovery firmware to be counter-signed by that customer key afterward.
+Owned-device reconciliation consequently requires a separate, fleet-signed
+probe bundle and is outside this version. See the
+[Kaiba Pi 5 secure-boot guide] and the [official Pi 5 secure-boot procedure].
 
 ## Station configuration
 
@@ -439,6 +440,7 @@ GitHub Pages; never add raw results or an `incomplete` preflight record.
 [Raspberry Pi recovery documentation]: https://github.com/raspberrypi/usbboot/blob/master/recovery5/README.md
 [Raspberry Pi maintainer]: https://github.com/raspberrypi/rpi-eeprom/issues/735
 [official Pi 5 secure-boot procedure]: https://github.com/raspberrypi/usbboot/blob/master/secure-boot-recovery5/README.md
+[Kaiba Pi 5 secure-boot guide]: raspberry-pi-5-secure-boot.md
 [stdout-output commit]: https://github.com/raspberrypi/usbboot/commit/163cc6e5e69c92f39666ad40c496bcd917c1a0d8
 [stdout-default commit]: https://github.com/raspberrypi/usbboot/commit/f64fa310afd45eb7c5b46ec4f9319e5404a48e6a
 [Pi 5 provisioning-station image]: raspberry-pi-5-provisioning-image.md

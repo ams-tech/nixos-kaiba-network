@@ -334,7 +334,9 @@ the following stages once for every device:
    signer posture in its declared order. Durably record intent immediately
    before each irreversible operation and read back its effective state; a
    successful command return is not a sufficient postcondition. Controls that
-   must remain open until identity installation are finalized in stage 9.
+   must remain open until identity installation are finalized in stage 9. The
+   [Raspberry Pi 5 secure-boot guide](raspberry-pi-5-secure-boot.md) specializes
+   this stage through the enrollment-ready boundary for that device class.
 7. **Establish device-unique material.** Prefer generating or deriving each
    root and private key inside its final protection boundary. Use distinct keys
    or explicitly domain-separated derivations for bootstrap, operational

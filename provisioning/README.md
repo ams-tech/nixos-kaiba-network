@@ -38,6 +38,7 @@ nix flake check ../nix/provisioning -L
 nix build ../nix/provisioning#kaiba-provision -L
 ```
 
-See the [Raspberry Pi 5 probe](../docs/raspberry-pi-5-provisioning-probe.md)
-and [station kiosk](../docs/provisioning-station-kiosk.md) documentation for
-the safety and operator boundaries.
+See the [Raspberry Pi 5 probe](../docs/raspberry-pi-5-provisioning-probe.md),
+[Raspberry Pi 5 secure-boot guide](../docs/raspberry-pi-5-secure-boot.md), and
+[station kiosk](../docs/provisioning-station-kiosk.md) documentation for the
+safety, lifecycle, and operator boundaries.
