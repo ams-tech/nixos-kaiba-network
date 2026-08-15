@@ -322,8 +322,11 @@ performed by repository CI.
 Use a fresh, unfused Pi 5 Model B, a labelled data-capable cable and lane, and a
 station installed from the frozen revision. Confirm that exactly one
 `0a5c:2712` RPIBOOT device is present at the selected sysfs path. Keep private
-results on encrypted station storage outside the repository; the commands
-below use placeholders which the operator must set from the approved station
+results outside the repository on encrypted station storage or on a bounded
+volatile volume. The dedicated [Pi 5 provisioning-station image] supplies the
+latter as a no-swap `tmpfs`; keep that station powered throughout the ceremony
+and restart from probe 1 if it reboots. On another approved station, the
+commands below use placeholders which the operator must set from its frozen
 record:
 
 ```console
@@ -334,6 +337,16 @@ SOURCE_REVISION=<frozen-lowercase-40-or-64-hex-revision>
 SYSTEM_CLOSURE=$(readlink -f /run/current-system)
 PROFILE=/run/current-system/sw/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json
 PRIVATE=/var/lib/kaiba-hardware-qual/private
+```
+
+On the dedicated image, replace that setup block with the readiness command,
+which validates the image provenance, closure, private volume, and operator
+group before exporting all five variables:
+
+```console
+READY_ENV="$(kaiba-qualification-ready)" &&
+eval "$READY_ENV" &&
+unset READY_ENV
 ```
 
 The operator must already have permission to create that private directory, or
@@ -428,3 +441,4 @@ GitHub Pages; never add raw results or an `incomplete` preflight record.
 [official Pi 5 secure-boot procedure]: https://github.com/raspberrypi/usbboot/blob/master/secure-boot-recovery5/README.md
 [stdout-output commit]: https://github.com/raspberrypi/usbboot/commit/163cc6e5e69c92f39666ad40c496bcd917c1a0d8
 [stdout-default commit]: https://github.com/raspberrypi/usbboot/commit/f64fa310afd45eb7c5b46ec4f9319e5404a48e6a
+[Pi 5 provisioning-station image]: raspberry-pi-5-provisioning-image.md

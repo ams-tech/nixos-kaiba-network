@@ -1,8 +1,19 @@
 {
   description = "Kaiba secure-device dynamic DNS pilot";
 
+  nixConfig = {
+    extra-substituters = [
+      "https://nixos-raspberrypi.cachix.org"
+    ];
+    extra-trusted-public-keys = [
+      "nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI="
+    ];
+    connect-timeout = 5;
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/70ce234312134a463ba7728e94da2486a1d237ac";
+    nixos-raspberrypi.url = "github:ams-tech/nixos-raspberrypi/24b786fc4750abcce26eb8fc5e9e58632e358ad2";
     provisioning = {
       url = "path:./nix/provisioning";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -18,6 +29,7 @@
     {
       self,
       nixpkgs,
+      nixos-raspberrypi,
       provisioning,
       dns,
     }:
@@ -28,6 +40,28 @@
         "aarch64-linux"
       ];
       forAllSystems = lib.genAttrs systems;
+
+      sourceRevision =
+        if self ? rev then
+          self.rev
+        else if self ? dirtyRev then
+          self.dirtyRev
+        else
+          "uncommitted";
+
+      rpi5ProvisioningSystem = nixos-raspberrypi.lib.nixosSystem {
+        trustCaches = false;
+        modules = [
+          nixos-raspberrypi.nixosModules.sd-image
+          nixos-raspberrypi.nixosModules.raspberry-pi-5.base
+          nixos-raspberrypi.nixosModules.raspberry-pi-5.page-size-16k
+          provisioning.nixosModules.provisioning-probe
+          (import ./nix/images/rpi5-provisioning-station.nix {
+            kaibaProvisionPackage = provisioning.packages.aarch64-linux.kaiba-provision;
+            inherit sourceRevision;
+          })
+        ];
+      };
 
       compatibilitySuiteFor =
         system:
@@ -91,6 +125,9 @@
             report-unit
             ;
         }
+        // lib.optionalAttrs (system == "aarch64-linux") {
+          rpi5-provisioning-sd-image = rpi5ProvisioningSystem.config.system.build.sdImage;
+        }
       );
 
       checks = forAllSystems (
@@ -122,7 +159,9 @@
                 ];
               }
               ''
-                actionlint ${./.github/workflows/ci.yml}
+                actionlint \
+                  ${./.github/workflows/ci.yml} \
+                  ${./.github/workflows/release.yml}
                 mkdir -p "$out"
                 touch "$out/passed"
               '';
@@ -132,8 +171,19 @@
           dns-schema = dns.checks.${system}.dns-schema;
           dns-topology = dns.checks.${system}.dns-topology;
           dns-security = dns.checks.${system}.dns-security;
+          rpi5-provisioning-image-eval = import ./tests/rpi5-provisioning-image-eval.nix {
+            inherit
+              lib
+              pkgs
+              sourceRevision
+              ;
+            imageConfig = rpi5ProvisioningSystem.config;
+            kaibaProvisionPackage = provisioning.packages.aarch64-linux.kaiba-provision;
+          };
         }
       );
+
+      nixosConfigurations.rpi5-provisioning-station = rpi5ProvisioningSystem;
 
       apps.x86_64-linux.dns-test-driver = dns.apps.x86_64-linux.dns-test-driver;
 
