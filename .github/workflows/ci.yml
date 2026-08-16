@@ -53,14 +53,21 @@ jobs:
             .#checks.x86_64-linux.ci-workflow \
             .#checks.x86_64-linux.module-eval \
             .#checks.x86_64-linux.rpi5-provisioning-image-eval \
+            .#checks.x86_64-linux.rpi5-secure-boot-target-eval \
             .#checks.x86_64-linux.unit \
+            ./nix/provisioning#checks.x86_64-linux.development-yubikey-signing \
             ./nix/provisioning#checks.x86_64-linux.device-profile-schema \
             ./nix/provisioning#checks.x86_64-linux.module-eval \
             ./nix/provisioning#checks.x86_64-linux.provisioning-test-result \
             ./nix/provisioning#checks.x86_64-linux.rpi5-probe-bundle \
             ./nix/provisioning#checks.x86_64-linux.rpiboot-metadata-stdout \
+            ./nix/provisioning#checks.x86_64-linux.secure-boot-artifacts \
             ./nix/provisioning#checks.x86_64-linux.station-ui \
+            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-audit \
+            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-control \
+            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-lane-guard \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision \
+            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-station \
             ./nix/dns#checks.x86_64-linux.module-eval \
             ./nix/dns#checks.x86_64-linux.report-unit
 
@@ -96,7 +103,12 @@ jobs:
             ./nix/provisioning#checks.aarch64-linux.unit \
             ./nix/provisioning#checks.aarch64-linux.rpi5-probe-bundle \
             ./nix/provisioning#checks.aarch64-linux.rpiboot-metadata-stdout \
+            ./nix/provisioning#checks.aarch64-linux.secure-boot-artifacts \
+            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-audit \
+            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-control \
+            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-lane-guard \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision \
+            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-pages
 

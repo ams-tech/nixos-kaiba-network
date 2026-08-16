@@ -84,6 +84,15 @@ nix --accept-flake-config build -L \
   .#packages.aarch64-linux.rpi5-provisioning-sd-image
 ```
 
+The first hardware-facing secure-boot foundation is intentionally a
+development-cohort reference, not a complete deployment or production
+enrollment path. It provides a deterministic Pi 5 target and dm-verity
+artifact builder, external
+approval-gated YubiKey PIV signing, independent control/audit services, and a
+root-only physical lane guard. It stops at `security_applied`; native Pi secure
+boot has no anti-rollback primitive, so `enrollment_ready` remains blocked.
+See the [live implementation runbook](docs/raspberry-pi-5-live-provisioning.md).
+
 ## Flake layout and consumption
 
 The repository has two independently consumable leaf flakes:
@@ -225,7 +234,13 @@ DNS leaf provides:
 The provisioning leaf provides:
 
 - `kaiba-provision`
+- `kaiba-provision-audit`
+- `kaiba-provision-control`
+- `kaiba-provision-lane-guard`
+- `kaiba-provision-station`
 - `kaiba-provision-station-demo`
+- fail-closed signer, signing-client, signing-gate, and YubiKey-wrapper
+  foundations, configured only through the Nix library factories
 
 `kaiba-provision probe` is an experimental, non-persistent Raspberry Pi 5
 preflight slice. It can normalize imported OTP metadata or acquire it from one
@@ -239,8 +254,10 @@ qualification.
 The [Raspberry Pi 5 secure-boot guide](docs/raspberry-pi-5-secure-boot.md)
 documents the native BCM2712 chain of trust, its assurance limits, the required
 artifacts and evidence, and the irreversible checklist from a qualified
-candidate through ownership to enrollment readiness. It is design
-documentation; no OTP or EEPROM mutation path is implemented yet.
+candidate through ownership to enrollment readiness. The separate
+[development live implementation](docs/raspberry-pi-5-live-provisioning.md)
+provides the real fail-closed component boundaries but remains unqualified on
+hardware and cannot reach `enrollment_ready`.
 
 `kaiba-provision-station-demo` is an unprivileged, loopback-only interface
 prototype for an HDMI display and USB touchscreen. It renders deterministic
@@ -261,9 +278,10 @@ Pages build, and parity guarantees.
 
 Reusable NixOS modules in the DNS leaf cover the device agent, update services,
 hidden P0, hidden P1, and public-secondary role. The provisioning leaf provides
-the probe and local station-interface demo modules. The root facade re-exports
-all of them and retains a combined default module. The seven-VM QEMU topology
-and interactive lab are `x86_64-linux` DNS outputs.
+the probe, simulation, control, audit, signing-gate, physical-lane, and secure
+target modules. The root facade re-exports all of them and retains a combined
+default module. The seven-VM QEMU topology and interactive lab are
+`x86_64-linux` DNS outputs.
 
 See [the architecture notes](docs/architecture.md), the
 [device identity lifecycle](docs/device-identity.md), and the

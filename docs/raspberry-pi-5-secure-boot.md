@@ -7,23 +7,26 @@ firmware and OS boot images. It ends immediately before device-identity
 enrollment. “Factory fresh” is convenient operator shorthand here, not a claim
 of supply-chain provenance or complete absence of earlier state.
 
-This is design and ceremony documentation. The repository does not yet build
-a production device image, sign boot artifacts, program OTP, update EEPROM, or
-reconcile an owned device. Do not translate this checklist into ad hoc shell
-commands. The irreversible operation must eventually be implemented as a
-target-bound, approved, journaled provisioning transaction.
+This is the production security design and ceremony specification. The
+repository now contains a separate, fail-closed development-cohort reference
+implementation for building the target and unsigned artifacts, external
+approval-gated signing, transaction/audit state, and a one-shot physical lane
+guard. See the [live implementation runbook]. It has not been qualified on the
+physical rig and deliberately does not claim production enrollment. Do not
+translate this checklist into ad hoc shell commands.
 
 The primary sources were checked on 2026-08-15. Raspberry Pi's maintained
 documentation and repositories are authoritative for the hardware mechanism;
 the implementation must additionally pin the exact `usbboot`, EEPROM firmware,
 signing-tool, and boot-image inputs used for a device transaction.
 
-## Intended outcome
+## Intended production outcome and current stop
 
 Raspberry Pi documentation uses *customer* for the owner whose key authorizes
 firmware and OS images. In this document that customer is Kaiba.
 
-The terminal state described here is **ready for enrollment**, which means:
+The production terminal state described here is **ready for enrollment**,
+which means:
 
 - the expected Kaiba public-key hash is irreversibly programmed in OTP;
 - the installed EEPROM firmware and configuration are authorized by that key;
@@ -53,6 +56,14 @@ qualified_fresh_candidate -> prepared -> commit_in_progress
                                       -> security_applied -> enrollment_ready
                                       -> owned_quarantined
 ```
+
+The implemented development milestone terminates at `security_applied`.
+Because native Pi secure boot will accept an older correctly signed image and
+this milestone has no independent monotonic state, every attempt to enter
+`enrollment_ready` is rejected. The development boot key is one external,
+non-exportable YubiKey PIV cohort key; the Pi stores only its public-key hash in
+OTP and has no boot-signing private key to export. Per-device identity and
+storage keys are separate future operations.
 
 `qualified_fresh_candidate` means only that the board passed the current
 profile's observable baseline: the customer-key hash is exactly zero and
@@ -103,8 +114,8 @@ The stages have distinct responsibilities:
    recovery, and unexpected fallback behavior.
 
 The maintained [boot ramdisk documentation] currently specifies `boot.img`
-as a raw FAT image without an MBR and limits the ramdisk to 180 MB on Raspberry
-Pi 4 and later. The production builder must enforce both an exact file allowlist
+as a raw FAT image without an MBR and currently limits the ramdisk to 96 MiB.
+The production builder must enforce both an exact file allowlist
 and the limit applicable to its pinned firmware, rather than discover either at
 the irreversible ceremony.
 
@@ -267,10 +278,10 @@ operation, authoritative readback, and a secret-free result.
   boot-order controls only after the first positive and negative tests pass;
   cold restart, read them back, and repeat every boot, recovery, and rollback
   acceptance test affected by the final posture.
-- [ ] Export and reconcile the complete audit record, mark the transaction
-  `security_applied` and the device `enrollment_ready` in inventory, and only
-  then release the enrollment workflow to generate and prove a device-unique
-  operational key.
+- [ ] Export and reconcile the complete audit record and mark the transaction
+  `security_applied`. Mark the device `enrollment_ready` only when the
+  independently monotonic rollback gate is implemented and its rejection test
+  passed; the current reference implementation always blocks that transition.
 
 There is no successful “mostly complete” result after the OTP boundary. An
 unknown key hash, changed target, unexpected EEPROM, missing audit evidence,
@@ -329,18 +340,19 @@ logical identity across board replacement, or activate a device credential.
 
 ## Kaiba implementation boundary
 
-The current qualification profile and probe remain the authoritative
-fresh-board observation path. They must not be widened to accept an owned key
-hash. Implementation of this document requires separate components:
+The qualification profile and probe remain the authoritative fresh-board
+observation path and are not widened to accept an owned key hash. The current
+development reference now supplies the deterministic Pi 5 target and
+`boot.img`/dm-verity builder, external approval-gated signing chain, durable
+control and independent audit services, and journaled target-bound physical
+adapter. Generic binaries and modules stay non-mutating until instantiated
+with fixed store paths, digests, lane devices, and an explicit mutation flag.
 
-- a production Pi 5 NixOS image and deterministic `boot.img` builder;
-- an external, approval-gated signing service and artifact manifest;
-- a mutation-capable Pi 5 adapter with journaled, target-bound OTP and EEPROM
-  operations;
-- a distinct owned-device profile and customer-counter-signed metadata probe;
-- persistent-root integrity, encrypted mutable state, recovery, and update
-  designs; and
-- physical positive, negative, power-loss, recovery, and quarantine tests.
+Production still requires hardware execution and evidence on the qualified
+rig, a distinct owned-device profile and signed probe bundle, independently
+monotonic anti-rollback, encrypted mutable state, device identity enrollment,
+production key backup/rotation, final debug/write-protection policy, and the
+complete positive, negative, power-loss, recovery, and quarantine campaign.
 
 The official [Raspberry Pi Secure Boot Provisioner] is a useful maintained
 reference for the vendor-supported provisioning flow, HSM signing, encrypted
@@ -389,3 +401,4 @@ than assumed.
 [Official BCM2712 chain-of-trust diagram]: https://github.com/raspberrypi/usbboot/blob/master/docs/secure-boot-chain-of-trust-2712.pdf
 [BCM2712 EEPROM release notes]: https://github.com/raspberrypi/rpi-eeprom/blob/master/firmware-2712/release-notes.md
 [Raspberry Pi Secure Boot Provisioner]: https://github.com/raspberrypi/rpi-sb-provisioner
+[live implementation runbook]: ./raspberry-pi-5-live-provisioning.md

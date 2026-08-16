@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.invalid/schemas/yubikey-signing-policy-v1alpha1.schema.json",
+  "title": "Kaiba development YubiKey signing policy v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "signer_id",
+    "cohort_id",
+    "provider",
+    "piv_slot",
+    "pkcs11_uri",
+    "public_key_fingerprint",
+    "key_algorithm",
+    "pin_required",
+    "touch_required",
+    "private_key_exportable"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.yubikey-signing-policy/v1alpha1"
+    },
+    "signer_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "cohort_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "provider": {
+      "const": "yubikey-piv"
+    },
+    "piv_slot": {
+      "const": "9c"
+    },
+    "pkcs11_uri": {
+      "type": "string",
+      "minLength": 9,
+      "maxLength": 512,
+      "pattern": "^pkcs11:[!-~]+$",
+      "allOf": [
+        {
+          "pattern": "^pkcs11:(?:[^;]+;)*id=%02(?:;[^;]+)*$"
+        },
+        {
+          "pattern": "^pkcs11:(?:[^;]+;)*type=private(?:;[^;]+)*$"
+        }
+      ]
+    },
+    "public_key_fingerprint": {
+      "$ref": "#/$defs/digest"
+    },
+    "key_algorithm": {
+      "const": "rsa-2048"
+    },
+    "pin_required": {
+      "const": true
+    },
+    "touch_required": {
+      "const": true
+    },
+    "private_key_exportable": {
+      "const": false
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

@@ -1,0 +1,455 @@
+package laneguard
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+type fakeClock struct{ now time.Time }
+
+func (clock fakeClock) Now() time.Time { return clock.now }
+
+type fakeHardware struct {
+	mu            sync.Mutex
+	observation   Observation
+	observeErr    error
+	executeErr    error
+	executeCount  int
+	after         map[Operation]DirectState
+	beforeExecute func(Operation)
+	replaceTarget bool
+}
+
+func (hardware *fakeHardware) Observe(context.Context, Config) (Observation, error) {
+	hardware.mu.Lock()
+	defer hardware.mu.Unlock()
+	return hardware.observation, hardware.observeErr
+}
+
+func (hardware *fakeHardware) Execute(_ context.Context, _ Config, operation Operation) (OperationResult, error) {
+	hardware.mu.Lock()
+	hardware.executeCount++
+	callback := hardware.beforeExecute
+	if state, ok := hardware.after[operation]; ok {
+		hardware.observation.State = state
+	}
+	if hardware.replaceTarget {
+		hardware.observation.TargetFingerprint = "replacement-target"
+	}
+	err := hardware.executeErr
+	hardware.mu.Unlock()
+	if callback != nil {
+		callback(operation)
+	}
+	return OperationResult{OutputDigest: digest("f"), Detail: "fake result"}, err
+}
+
+func TestGuardExecutesApprovedOperationsOnceAndInOrder(t *testing.T) {
+	guard, hardware, _, plan, now := newTestGuard(t)
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	attempt, err := guard.Execute(context.Background(), request)
+	if err != nil {
+		t.Fatalf("execute commit: %v", err)
+	}
+	if attempt.Status != AttemptVerified || attempt.ObservedState != plan.Operations[0].ExpectedPoststate {
+		t.Fatalf("commit attempt = %#v", attempt)
+	}
+	if !strings.HasPrefix(attempt.Result.BindingDigest, "sha256:") || len(attempt.Result.BindingDigest) != 71 {
+		t.Fatalf("transaction-bound result = %#v", attempt.Result)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("hardware executions = %d, want 1", hardware.executeCount)
+	}
+
+	// An identical delivery is idempotent and returns the durable result. It
+	// never invokes hardware a second time.
+	replayed, err := guard.Execute(context.Background(), request)
+	if err != nil || replayed.Status != AttemptVerified {
+		t.Fatalf("replay = %#v, %v", replayed, err)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("hardware executions after replay = %d, want 1", hardware.executeCount)
+	}
+
+	second := requestFor(plan, 2, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), second); err != nil {
+		t.Fatalf("execute ordered second operation: %v", err)
+	}
+	if hardware.executeCount != 2 {
+		t.Fatalf("hardware executions = %d, want 2", hardware.executeCount)
+	}
+}
+
+func TestOperationResultBindingChangesWithApprovedTransaction(t *testing.T) {
+	plan := testPlan()
+	result := OperationResult{OutputDigest: digest("f"), Detail: "same device evidence"}
+	first := bindOperationResult(plan, plan.Operations[0], result)
+	plan.TransactionID = "transaction-2"
+	second := bindOperationResult(plan, plan.Operations[0], result)
+	if first.OutputDigest != second.OutputDigest || first.BindingDigest == second.BindingDigest {
+		t.Fatalf("bindings do not isolate transactions: first=%#v second=%#v", first, second)
+	}
+}
+
+func TestGuardRecordsIntentBeforeCallingHardware(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	hardware.beforeExecute = func(Operation) {
+		record, ok, err := store.Get(attemptKey(plan, 1))
+		if err != nil || !ok || record.Status != AttemptStarted {
+			t.Errorf("journal at hardware boundary = %#v, %t, %v", record, ok, err)
+		}
+	}
+	if _, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute))); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+}
+
+func TestGuardNeverRepeatsUncertainIrreversibleOperation(t *testing.T) {
+	guard, hardware, _, plan, now := newTestGuard(t)
+	hardware.executeErr = errors.New("USB response lost")
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	attempt, err := guard.Execute(context.Background(), request)
+	if !errors.Is(err, ErrReconciliationRequired) || attempt.Status != AttemptUncertain {
+		t.Fatalf("uncertain execute = %#v, %v", attempt, err)
+	}
+	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("second execute error = %v", err)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("uncertain operation executed %d times", hardware.executeCount)
+	}
+
+	// The fake changed to the approved poststate before losing its response;
+	// direct reconciliation can therefore verify the attempt without replay.
+	hardware.executeErr = nil
+	reconciled, err := guard.Reconcile(context.Background(), request)
+	if err != nil || reconciled.Status != AttemptVerified {
+		t.Fatalf("reconcile = %#v, %v", reconciled, err)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("reconciliation executed hardware; count = %d", hardware.executeCount)
+	}
+}
+
+func TestRestartLoadsUncertainAttemptForObservationOnly(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	hardware.executeErr = errors.New("response lost after command")
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("first execute = %v", err)
+	}
+
+	restartedHardware := &fakeHardware{observation: Observation{
+		EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath,
+		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
+	}}
+	restarted, err := NewWithClock(testConfig(), restartedHardware, store, fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatalf("reload uncertain plan: %v", err)
+	}
+	if _, err := restarted.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("restart execute error = %v", err)
+	}
+	attempt, err := restarted.Reconcile(context.Background(), request)
+	if err != nil || attempt.Status != AttemptVerified {
+		t.Fatalf("restart reconcile = %#v, %v", attempt, err)
+	}
+	if restartedHardware.executeCount != 0 {
+		t.Fatalf("restart replayed hardware %d times", restartedHardware.executeCount)
+	}
+}
+
+func TestReconcileKeepsIndistinguishableOperationUncertain(t *testing.T) {
+	config := testConfig()
+	plan := testPlan()
+	plan.Operations[1].ExpectedPoststate = plan.Operations[1].ExpectedPrestate
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	hardware := &fakeHardware{
+		observation: Observation{EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate},
+		after: map[Operation]DirectState{
+			plan.Operations[0].Operation: plan.Operations[0].ExpectedPoststate,
+			plan.Operations[1].Operation: plan.Operations[1].ExpectedPoststate,
+		},
+	}
+	store := NewMemoryStore()
+	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute))); err != nil {
+		t.Fatalf("execute prerequisite: %v", err)
+	}
+	hardware.executeErr = errors.New("response lost")
+	request := requestFor(plan, 2, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("execute indistinguishable operation: %v", err)
+	}
+	attempt, err := guard.Reconcile(context.Background(), request)
+	if !errors.Is(err, ErrReconciliationRequired) || attempt.Status != AttemptUncertain || !strings.Contains(attempt.Detail, "cannot distinguish") {
+		t.Fatalf("indistinguishable reconcile = %#v, %v", attempt, err)
+	}
+	if hardware.executeCount != 2 {
+		t.Fatalf("reconciliation replayed hardware; count = %d", hardware.executeCount)
+	}
+}
+
+func TestRestartFailsClosedForUnknownOrQuarantinedState(t *testing.T) {
+	t.Run("unknown uncertain state", func(t *testing.T) {
+		guard, hardware, store, plan, now := newTestGuard(t)
+		hardware.executeErr = errors.New("response lost")
+		if _, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute))); !errors.Is(err, ErrReconciliationRequired) {
+			t.Fatal(err)
+		}
+		unknown := plan.Operations[0].ExpectedPoststate
+		unknown.SecurityState = "unknown"
+		restartedHardware := &fakeHardware{observation: Observation{EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint, State: unknown}}
+		restarted, err := NewWithClock(testConfig(), restartedHardware, store, fakeClock{now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := restarted.LoadPlan(context.Background(), plan); !errors.Is(err, ErrPrestateMismatch) {
+			t.Fatalf("unknown state load error = %v", err)
+		}
+	})
+
+	t.Run("quarantine remains terminal", func(t *testing.T) {
+		guard, hardware, store, plan, now := newTestGuard(t)
+		bad := plan.Operations[0].ExpectedPoststate
+		bad.SecurityState = "mismatch"
+		hardware.after[OperationProgramCustomerKeyAndEEPROM] = bad
+		request := requestFor(plan, 1, now.Add(10*time.Minute))
+		if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrQuarantined) {
+			t.Fatal(err)
+		}
+		restartedHardware := &fakeHardware{observation: Observation{EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint, State: bad}}
+		restarted, err := NewWithClock(testConfig(), restartedHardware, store, fakeClock{now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := restarted.LoadPlan(context.Background(), plan); err != nil {
+			t.Fatalf("reload quarantine: %v", err)
+		}
+		if _, err := restarted.Execute(context.Background(), request); !errors.Is(err, ErrQuarantined) {
+			t.Fatalf("execute after quarantine = %v", err)
+		}
+		if _, err := restarted.Reconcile(context.Background(), request); !errors.Is(err, ErrQuarantined) {
+			t.Fatalf("reconcile after quarantine = %v", err)
+		}
+		if restartedHardware.executeCount != 0 {
+			t.Fatal("quarantined journal reopened execution")
+		}
+	})
+}
+
+func TestGuardQuarantinesConclusiveBadPoststateAndReplacement(t *testing.T) {
+	t.Run("bad poststate", func(t *testing.T) {
+		guard, hardware, _, plan, now := newTestGuard(t)
+		hardware.after[OperationProgramCustomerKeyAndEEPROM] = DirectState{CustomerKeyHash: "unexpected", SecurityState: "unknown", PowerState: "rpiboot"}
+		attempt, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute)))
+		if !errors.Is(err, ErrQuarantined) || !errors.Is(err, ErrPoststateMismatch) || attempt.Status != AttemptQuarantined {
+			t.Fatalf("bad poststate = %#v, %v", attempt, err)
+		}
+	})
+	t.Run("replacement", func(t *testing.T) {
+		guard, hardware, _, plan, now := newTestGuard(t)
+		hardware.replaceTarget = true
+		attempt, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute)))
+		if !errors.Is(err, ErrQuarantined) || !errors.Is(err, ErrTargetContinuity) || attempt.Status != AttemptQuarantined {
+			t.Fatalf("replacement = %#v, %v", attempt, err)
+		}
+	})
+}
+
+func TestGuardRejectsStaleBindingsBeforeHardware(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*ExecuteRequest)
+	}{
+		{"station", func(request *ExecuteRequest) { request.StationID = "other-station" }},
+		{"lane", func(request *ExecuteRequest) { request.LaneID = "other-lane" }},
+		{"transaction", func(request *ExecuteRequest) { request.TransactionID = "other-transaction" }},
+		{"plan", func(request *ExecuteRequest) { request.PlanDigest = digest("9") }},
+		{"target", func(request *ExecuteRequest) { request.TargetFingerprint = "other-target" }},
+		{"fence", func(request *ExecuteRequest) { request.FenceEpoch++ }},
+		{"approval", func(request *ExecuteRequest) { request.ApprovalID = "other-approval" }},
+		{"intent", func(request *ExecuteRequest) { request.IntentReceipt = "other-receipt" }},
+		{"operation", func(request *ExecuteRequest) { request.OperationDigest = digest("8") }},
+		{"authorization", func(request *ExecuteRequest) { request.AuthorizationID = "other-authorization" }},
+		{"prestate", func(request *ExecuteRequest) { request.ExpectedPrestate.SecurityState = "changed" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			guard, hardware, _, plan, now := newTestGuard(t)
+			request := requestFor(plan, 1, now.Add(10*time.Minute))
+			test.change(&request)
+			if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrPlanMismatch) {
+				t.Fatalf("error = %v, want plan mismatch", err)
+			}
+			if hardware.executeCount != 0 {
+				t.Fatalf("stale request reached hardware")
+			}
+		})
+	}
+}
+
+func TestGuardRejectsOutOfOrderAndShortLease(t *testing.T) {
+	guard, hardware, _, plan, now := newTestGuard(t)
+	if _, err := guard.Execute(context.Background(), requestFor(plan, 2, now.Add(10*time.Minute))); !errors.Is(err, ErrOutOfOrder) {
+		t.Fatalf("out-of-order error = %v", err)
+	}
+	if _, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(89*time.Second))); !errors.Is(err, ErrLeaseInvalid) {
+		t.Fatalf("short-lease error = %v", err)
+	}
+	if hardware.executeCount != 0 {
+		t.Fatalf("rejected work reached hardware")
+	}
+}
+
+func TestLoadPlanRequiresExactLaneAndFreshTarget(t *testing.T) {
+	config := testConfig()
+	plan := testPlan()
+	for _, test := range []struct {
+		name string
+		obs  Observation
+	}{
+		{"no target", Observation{EligibleTargets: 0, RPIBootSysfsPath: config.RPIBootSysfsPath}},
+		{"multiple targets", Observation{EligibleTargets: 2, RPIBootSysfsPath: config.RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint}},
+		{"wrong path", Observation{EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-2", TargetFingerprint: plan.TargetFingerprint}},
+		{"wrong target", Observation{EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath, TargetFingerprint: "replacement-target"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hardware := &fakeHardware{observation: test.obs}
+			guard, err := New(config, hardware, NewMemoryStore())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := guard.LoadPlan(context.Background(), plan); !errors.Is(err, ErrTargetContinuity) {
+				t.Fatalf("load error = %v", err)
+			}
+		})
+	}
+}
+
+func TestPlanRejectsDeprecatedStandaloneSignedBootOperation(t *testing.T) {
+	plan := testPlan()
+	plan.Operations[1] = OperationSpec{
+		Sequence: 2, Operation: OperationVerifySignedBoot, Classification: ClassReadOnly,
+		OperationDigest: digest("c"), AuthorizationID: "authorization-2",
+		ExpectedPrestate:  plan.Operations[0].ExpectedPoststate,
+		ExpectedPoststate: plan.Operations[0].ExpectedPoststate, MaximumDuration: time.Minute,
+	}
+	if err := plan.Validate(testConfig()); err == nil || !strings.Contains(err.Error(), "unknown") {
+		t.Fatalf("deprecated standalone signed-boot operation was accepted: %v", err)
+	}
+}
+
+func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attempts.json")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	attempt := Attempt{
+		SchemaVersion: ContractSchemaVersion, Key: "transaction/plan/1/1",
+		TransactionID: "transaction", PlanDigest: digest("a"), TargetFingerprint: "target",
+		FenceEpoch: 1, Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM,
+		OperationDigest: digest("b"), Status: AttemptStarted, StartedAt: now, UpdatedAt: now,
+		ObservedState: DirectState{SecurityState: "fresh"}, Detail: "started",
+	}
+	if err := store.Put(attempt); err != nil {
+		t.Fatalf("put started: %v", err)
+	}
+	attempt.Status = AttemptVerified
+	attempt.ObservedState = DirectState{SecurityState: "owned"}
+	attempt.Detail = "verified"
+	if err := store.Put(attempt); err != nil {
+		t.Fatalf("put verified: %v", err)
+	}
+	reopened, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, ok, err := reopened.Get(attempt.Key)
+	if err != nil || !ok || actual != attempt {
+		t.Fatalf("reopened = %#v, %t, %v", actual, ok, err)
+	}
+	changed := attempt
+	changed.Detail = "rewritten"
+	if err := reopened.Put(changed); err == nil {
+		t.Fatal("terminal record rewrite succeeded")
+	}
+}
+
+func newTestGuard(t *testing.T) (*Guard, *fakeHardware, *MemoryStore, Plan, time.Time) {
+	t.Helper()
+	config := testConfig()
+	plan := testPlan()
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	hardware := &fakeHardware{
+		observation: Observation{EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate},
+		after: map[Operation]DirectState{
+			plan.Operations[0].Operation: plan.Operations[0].ExpectedPoststate,
+			plan.Operations[1].Operation: plan.Operations[1].ExpectedPoststate,
+		},
+	}
+	store := NewMemoryStore()
+	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	return guard, hardware, store, plan, now
+}
+
+func testConfig() Config {
+	return Config{
+		SchemaVersion: ContractSchemaVersion, StationID: "station-1", LaneID: "lane-1",
+		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", UARTPath: "/dev/serial/by-id/kaiba-uart-1",
+		PowerGPIO: GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17}, LeaseSafetyMargin: 30 * time.Second,
+	}
+}
+
+func testPlan() Plan {
+	zero := DirectState{CustomerKeyHash: strings.Repeat("0", 64), EEPROMHash: "sha256:factory", SecurityState: "fresh", PowerState: "rpiboot"}
+	owned := DirectState{CustomerKeyHash: strings.Repeat("1", 64), EEPROMHash: digest("e"), SecurityState: "owned", PowerState: "rpiboot"}
+	booted := owned
+	booted.PowerState = "signed_os"
+	return Plan{
+		SchemaVersion: ContractSchemaVersion, StationID: "station-1", LaneID: "lane-1",
+		TransactionID: "transaction-1", PlanDigest: digest("a"), TargetFingerprint: "target-1",
+		FenceEpoch: 7, ApprovalID: "approval-1", IntentReceipt: "receipt-1",
+		Operations: []OperationSpec{
+			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, OperationDigest: digest("b"), AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: owned, MaximumDuration: time.Minute},
+			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, OperationDigest: digest("c"), AuthorizationID: "authorization-2", ExpectedPrestate: owned, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+		},
+	}
+}
+
+func requestFor(plan Plan, sequence uint32, expiry time.Time) ExecuteRequest {
+	operation := plan.Operations[sequence-1]
+	return ExecuteRequest{
+		SchemaVersion: ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
+		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest,
+		TargetFingerprint: plan.TargetFingerprint, FenceEpoch: plan.FenceEpoch,
+		ApprovalID: plan.ApprovalID, IntentReceipt: plan.IntentReceipt,
+		Sequence: sequence, OperationDigest: operation.OperationDigest,
+		AuthorizationID: operation.AuthorizationID, ExpectedPrestate: operation.ExpectedPrestate,
+		ClaimExpiresAt: expiry,
+	}
+}
+
+func digest(character string) string { return "sha256:" + strings.Repeat(character, 64) }

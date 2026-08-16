@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Kaiba Live Provisioning Station</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">Hardware-backed station</p>
+        <h1>Kaiba Live Provisioning</h1>
+      </div>
+      <div class="live-marker" aria-label="Live, non-simulated interface">
+        <span aria-hidden="true"></span>
+        Live authority
+      </div>
+    </header>
+
+    <main>
+      <section class="safety-banner" aria-labelledby="safety-title">
+        <div>
+          <p class="eyebrow">Development security boundary</p>
+          <h2 id="safety-title">Rollback protection is not implemented</h2>
+        </div>
+        <p>
+          This station can finish only at <code>security_applied</code>. It cannot
+          enroll a device or classify one as production-ready.
+        </p>
+      </section>
+
+      <section class="phase-card" aria-labelledby="phase-title">
+        <div class="phase-heading">
+          <div>
+            <p class="eyebrow">Authoritative workflow phase</p>
+            <h2 id="phase-title">Loading live state…</h2>
+          </div>
+          <button id="refresh" class="secondary" type="button">Refresh state</button>
+        </div>
+        <p id="instruction" class="instruction">Waiting for the local orchestrator.</p>
+        <p id="connection-status" class="connection" role="status" aria-live="polite"></p>
+      </section>
+
+      <div class="facts-grid">
+        <section class="panel" aria-labelledby="target-title">
+          <p class="eyebrow">Direct observation</p>
+          <h2 id="target-title">Target</h2>
+          <dl id="target-facts" class="facts"></dl>
+        </section>
+
+        <section class="panel" aria-labelledby="transaction-title">
+          <p class="eyebrow">Coordinator binding</p>
+          <h2 id="transaction-title">Transaction</h2>
+          <dl id="transaction-facts" class="facts"></dl>
+        </section>
+      </div>
+
+      <section class="panel" aria-labelledby="evidence-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Durable receipts</p>
+            <h2 id="evidence-title">Authoritative evidence</h2>
+          </div>
+          <strong id="evidence-count">0 records</strong>
+        </div>
+        <ol id="evidence-list" class="evidence-list"></ol>
+      </section>
+
+      <section class="panel action-panel" aria-labelledby="actions-title">
+        <p class="eyebrow">Current revision only</p>
+        <h2 id="actions-title">Allowed actions</h2>
+        <p class="action-guidance">
+          Actions are supplied by the authoritative orchestrator. A stale browser
+          revision is rejected, and one-shot work is never automatically repeated.
+        </p>
+        <div id="actions" class="actions"></div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Secret-free interface</span>
+      <span>Enrollment disabled</span>
+      <span id="revision">Revision —</span>
+    </footer>
+  </body>
+</html>
+

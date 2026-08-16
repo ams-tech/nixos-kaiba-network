@@ -2,6 +2,9 @@
   pkgs,
   lib,
   kaibaPackage,
+  kaibaAuditPackage,
+  kaibaControlPackage,
+  kaibaLaneGuardPackage,
   kaibaProvisionPackage,
   kaibaStationDemoPackage,
   kaibaModules,
@@ -20,6 +23,9 @@ let
     inherit
       pkgs
       lib
+      kaibaAuditPackage
+      kaibaControlPackage
+      kaibaLaneGuardPackage
       kaibaProvisionPackage
       kaibaStationDemoPackage
       kaibaModules

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.invalid/schemas/signing-request-v1alpha1.schema.json",
+  "title": "Kaiba approval-bound signing request v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "algorithm",
+    "role",
+    "artifact_digest",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.signing-request/v1alpha1"
+    },
+    "request_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "algorithm": {
+      "const": "rsa2048-sha256"
+    },
+    "role": {
+      "$ref": "#/$defs/signable_role"
+    },
+    "artifact_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id",
+        "approval_digest",
+        "transaction_id",
+        "transaction_digest",
+        "manifest_digest",
+        "plan_digest",
+        "target_fingerprint",
+        "fence_epoch",
+        "role",
+        "artifact_digest"
+      ],
+      "properties": {
+        "approval_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "approval_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "transaction_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "target_fingerprint": {
+          "$ref": "#/$defs/digest"
+        },
+        "fence_epoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "role": {
+          "$ref": "#/$defs/signable_role"
+        },
+        "artifact_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "signable_role": {
+      "type": "string",
+      "enum": [
+        "rpi5.boot_image",
+        "rpi5.eeprom_bootsys",
+        "rpi5.eeprom_config",
+        "rpi5.owned_recovery_bootcode"
+      ]
+    }
+  }
+}

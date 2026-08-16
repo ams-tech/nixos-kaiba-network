@@ -1,8 +1,9 @@
 # Provisioning Go module
 
-This module implements the experimental Raspberry Pi provisioning probe and
-the provisioning-station interface simulation. It has no Go dependency on the
-DNS module and currently uses only the Go standard library.
+This module implements the non-mutating Raspberry Pi probe, the browser
+simulation, and the fail-closed reference services for the hardware-facing Pi
+5 secure-boot development-lane foundation. It has no Go dependency on the DNS
+module and uses only the Go standard library.
 
 ## Commands
 
@@ -11,6 +12,21 @@ DNS module and currently uses only the Go standard library.
   and emits deterministic whitelist-redacted hardware evidence.
 - `kaiba-provision-station-demo` serves the loopback-only station simulation.
 - `kaiba-provision-station-graph` generates the browser simulation graph.
+- `kaiba-provision-control` owns transactions, claims, fence epochs,
+  approvals, quarantine, and the terminal `security_applied` record.
+- `kaiba-provision-audit` persists an independent, secret-free hash chain.
+- `kaiba-provision-lane-guard` is the root-only, one-shot physical adapter.
+- `kaiba-provision-signer`, `kaiba-provision-signing-client`, and
+  `kaiba-provision-signing-gate` enforce the immutable approval boundary.
+- `kaiba-provision-yubikey-wrapper` performs the fixed RSA-2048/SHA-256 PIV 9c
+  operation through the pinned OpenSSL PKCS#11 provider chain.
+- `kaiba-provision-station` serves the separate live, loopback-only operator
+  interface. It never falls back to the browser simulation.
+
+The generic lane and signer binaries are deliberately unconfigured and fail
+closed. A deployment must instantiate `lib.mkRpi5PhysicalLaneGuard` and
+`lib.mkDevelopmentYubiKeySigning`, then use the corresponding NixOS modules.
+The YubiKey PIN is a runtime systemd credential; it is never a Nix value.
 
 Command entry points live under `cmd/`. Implementation packages and embedded
 station assets live under `internal/`. Device-class profiles and their schema
@@ -40,5 +56,7 @@ nix build ../nix/provisioning#kaiba-provision -L
 
 See the [Raspberry Pi 5 probe](../docs/raspberry-pi-5-provisioning-probe.md),
 [Raspberry Pi 5 secure-boot guide](../docs/raspberry-pi-5-secure-boot.md), and
+[live secure-boot foundation](../docs/raspberry-pi-5-live-provisioning.md),
+as well as the
 [station kiosk](../docs/provisioning-station-kiosk.md) documentation for the
 safety, lifecycle, and operator boundaries.

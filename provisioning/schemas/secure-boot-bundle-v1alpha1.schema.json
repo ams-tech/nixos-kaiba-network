@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.invalid/schemas/secure-boot-bundle-v1alpha1.schema.json",
+  "title": "Kaiba secure-boot artifact bundle v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "device_class",
+    "signing_policy_digest",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.secure-boot-bundle/v1alpha1"
+    },
+    "manifest_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "device_class": {
+      "$ref": "#/$defs/identifier"
+    },
+    "signing_policy_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "digest", "size_bytes"],
+        "properties": {
+          "role": {
+            "$ref": "#/$defs/artifact_role"
+          },
+          "digest": {
+            "$ref": "#/$defs/digest"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "artifact_role": {
+      "type": "string",
+      "enum": [
+        "boot_public_key",
+        "device_profile",
+        "platform_adapter",
+        "root_integrity",
+        "rpi5.boot_image",
+        "rpi5.boot_signature",
+        "rpi5.eeprom_bootsys",
+        "rpi5.eeprom_config",
+        "rpi5.fresh_commit_bundle",
+        "rpi5.owned_recovery_bootcode",
+        "rpi5.owned_recovery_bundle",
+        "rpi5.signed_eeprom_image"
+      ]
+    }
+  }
+}

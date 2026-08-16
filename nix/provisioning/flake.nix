@@ -26,8 +26,13 @@
 
       modules = {
         default = import ./modules;
+        provisioning-audit = import ./modules/provisioning-audit.nix;
+        provisioning-control = import ./modules/provisioning-control.nix;
+        provisioning-lane-guard = import ./modules/provisioning-lane-guard.nix;
         provisioning-probe = import ./modules/provisioning-probe.nix;
+        provisioning-signing-gate = import ./modules/provisioning-signing-gate.nix;
         provisioning-station-demo = import ./modules/provisioning-station-demo.nix;
+        secure-boot-target = import ./modules/secure-boot-target.nix;
       };
 
       provisioningFor =
@@ -44,6 +49,24 @@
     {
       nixosModules = modules;
 
+      lib = {
+        mkRpi5SecureBootArtifacts =
+          { system, ... }@args:
+          let
+            pkgs = import nixpkgs { inherit system; };
+            builder = import ./secure-boot-artifacts.nix { inherit pkgs lib; };
+          in
+          builder (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5PhysicalLaneGuard =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5PhysicalLaneGuard (builtins.removeAttrs args [ "system" ]);
+
+        mkDevelopmentYubiKeySigning =
+          { system, ... }@args:
+          (packagesFor system).mkDevelopmentYubiKeySigning (builtins.removeAttrs args [ "system" ]);
+      };
+
       packages = forAllSystems (
         system:
         let
@@ -52,12 +75,21 @@
         in
         {
           default = built.provision;
+          kaiba-provision-audit = built.audit;
+          kaiba-provision-control = built.control;
+          kaiba-provision-lane-guard = built.laneGuard;
           kaiba-provision = built.provision;
+          kaiba-provision-signer-foundation = built.signerFoundation;
+          kaiba-provision-signing-client-foundation = built.signingClientFoundation;
+          kaiba-provision-signing-gate-foundation = built.signingGateFoundation;
+          kaiba-provision-station = built.liveStation;
           kaiba-provision-station-demo = built.stationDemo;
           kaiba-provision-station-pages = built.stationPages;
           provisioning-suite = built.suite;
+          provisioning-services = built.serviceSuite;
           provisioning-test-result = provisioning.provisioningTestResult;
           rpi5-probe-bundle = built.rpi5ProbeBundle;
+          kaiba-provision-yubikey-wrapper-foundation = built.yubiKeyWrapperFoundation;
         }
       );
 
@@ -70,11 +102,13 @@
         in
         {
           unit = built.suite;
+          development-yubikey-signing = provisioning.developmentYubiKeySigningContract;
           device-profile-schema = provisioning.deviceProfileSchema;
           module-eval = provisioning.moduleEval;
           provisioning-test-result = provisioning.provisioningTestResult;
           rpi5-probe-bundle = provisioning.probeBundleIntegrity;
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
+          secure-boot-artifacts = provisioning.secureBootArtifactContract;
           station-ui =
             pkgs.runCommand "kaiba-provisioning-station-ui-check"
               {
@@ -89,6 +123,8 @@
                 cd ${repositoryRoot}
                 node --check provisioning/internal/provisioning/stationui/web/app.js
                 node --check provisioning/internal/provisioning/stationui/web/transport.js
+                node --check provisioning/internal/provisioning/livestation/web/app.js
+                node provisioning/internal/provisioning/livestation/web/app.test.cjs
                 export KAIBA_STATION_PAGES=${built.stationPages}
                 node --test tests/station-ui/transport.test.mjs
                 python3 -m unittest discover -s tests/station-ui -p 'test_*.py' -v

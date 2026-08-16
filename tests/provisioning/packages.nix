@@ -6,6 +6,119 @@
 }:
 
 let
+  secureBootArtifactBuilder = import ../../nix/provisioning/secure-boot-artifacts.nix {
+    inherit lib pkgs;
+  };
+  secureBootFixtureFirmware = pkgs.runCommand "kaiba-secure-boot-fixture-firmware" { } ''
+    mkdir -p "$out/overlays"
+    printf '%s\n' 'console=serial0,115200' > "$out/cmdline.txt"
+    printf '%s\n' 'fixture-kernel' > "$out/kernel_2712.img"
+    printf '%s\n' 'fixture-initramfs' > "$out/initramfs_2712"
+    printf '%s\n' 'fixture-device-tree' > "$out/bcm2712-rpi-5-b.dtb"
+    printf '%s\n' 'fixture-overlay' > "$out/overlays/README"
+  '';
+  secureBootFixtureRoot =
+    pkgs.runCommand "kaiba-secure-boot-fixture-root.img" { nativeBuildInputs = [ pkgs.e2fsprogs ]; }
+      ''
+        mkdir root
+        printf '%s\n' 'kaiba dm-verity fixture' > root/README
+        truncate --size=16M "$out"
+        mkfs.ext4 \
+          -F \
+          -L KAIBA_ROOT \
+          -U 4b414942-4152-4f4f-9400-000000000001 \
+          -d root \
+          "$out" \
+          > /dev/null
+      '';
+  mkSecureBootFixture =
+    name:
+    secureBootArtifactBuilder {
+      inherit name;
+      expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      firmwareAllowlist = [
+        "bcm2712-rpi-5-b.dtb"
+        "cmdline.txt"
+        "initramfs_2712"
+        "kernel_2712.img"
+        "overlays/README"
+      ];
+      firmwareTree = secureBootFixtureFirmware;
+      rootImage = secureBootFixtureRoot;
+      sourceRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    };
+  secureBootFixtureA = mkSecureBootFixture "kaiba-secure-boot-artifacts-fixture-a";
+  secureBootFixtureB = mkSecureBootFixture "kaiba-secure-boot-artifacts-fixture-b";
+  signingGrantFixture = pkgs.writeText "kaiba-signing-grant-registry-fixture.json" (
+    builtins.toJSON {
+      schema_version = "kaiba.provisioning.signing-grant-registry/v1alpha1";
+      grants = [
+        {
+          schema_version = "kaiba.provisioning.signing-grant/v1alpha1";
+          grant_id = "grant:boot-image:1";
+          expires_at = "2099-01-01T00:00:00Z";
+          request = {
+            schema_version = "kaiba.provisioning.signing-request/v1alpha1";
+            request_id = "request:boot-image:1";
+            algorithm = "rsa2048-sha256";
+            role = "rpi5.boot_image";
+            artifact_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            approval = {
+              approval_id = "approval:development:1";
+              approval_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+              transaction_id = "transaction:development:1";
+              transaction_digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+              manifest_digest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+              plan_digest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+              target_fingerprint = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+              fence_epoch = 1;
+              role = "rpi5.boot_image";
+              artifact_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            };
+          };
+        }
+      ];
+    }
+  );
+  developmentYubiKeyCustomerKeyHash = "f06d7ff084a6c69d60d7ca5a7554afa199132c31b54f9366d2852711053fa7de";
+  developmentYubiKeyPublicKeyFingerprint = "sha256:21bfca39f5db869c81f1fdab5f1d2569bdd5e67ef07ccfe0e3b6ddd792a6cfe1";
+  developmentYubiKeyPublicKeyPEM = pkgs.writeText "kaiba-development-boot-public-key.pem" (
+    builtins.readFile ./fixtures/development-boot-public.pem
+  );
+  developmentYubiKeySigning = built.mkDevelopmentYubiKeySigning {
+    name = "kaiba-development-yubikey-signing-fixture";
+    signerID = "signer:development-fixture";
+    cohortID = "cohort:development-fixture";
+    tokenSerial = "12345678";
+    publicKeyPEM = developmentYubiKeyPublicKeyPEM;
+    publicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
+    expectedCustomerKeyHash = developmentYubiKeyCustomerKeyHash;
+    grantRegistryPath = "/etc/kaiba-provisioning/signing-grants.json";
+  };
+  expectedDevelopmentYubiKeyOpenSSLConfiguration = pkgs.writeText "kaiba-development-yubikey-openssl-expected.cnf" ''
+    config_diagnostics = 1
+    openssl_conf = kaiba_openssl_init
+
+    [kaiba_openssl_init]
+    providers = kaiba_provider_sect
+
+    [kaiba_provider_sect]
+    default = kaiba_default_sect
+    pkcs11 = kaiba_pkcs11_sect
+
+    [kaiba_default_sect]
+    activate = 1
+
+    [kaiba_pkcs11_sect]
+    module = ${pkgs.pkcs11-provider}/lib/ossl-modules/pkcs11.so
+    pkcs11-module-path = ${pkgs.yubico-piv-tool}/lib/libykcs11.so.${pkgs.yubico-piv-tool.version}
+    pkcs11-module-token-pin = file:/run/credentials/kaiba-provision-signing-gate.service/yubikey-pin
+    pkcs11-module-cache-keys = false
+    pkcs11-module-cache-sessions = 0
+    pkcs11-module-login-behavior = always
+    activate = 1
+  '';
+
   qualificationProfileName = "raspberry-pi-5-model-b-v1alpha1.json";
   qualificationEvidenceName = "sacrificial-pi-5.json";
   qualificationProfilePath = built.goSource + "/profiles/device-classes/${qualificationProfileName}";
@@ -97,6 +210,15 @@ let
           ${qualificationProfilePath}
         check-jsonschema --check-metaschema \
           ${built.goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json
+        check-jsonschema --check-metaschema \
+          ${built.goSource}/schemas/secure-boot-bundle-v1alpha1.schema.json \
+          ${built.goSource}/schemas/signing-grant-registry-v1alpha1.schema.json \
+          ${built.goSource}/schemas/signing-request-v1alpha1.schema.json \
+          ${built.goSource}/schemas/unsigned-artifact-set-v1alpha1.schema.json \
+          ${built.goSource}/schemas/yubikey-signing-policy-v1alpha1.schema.json
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/signing-grant-registry-v1alpha1.schema.json \
+          ${signingGrantFixture}
 
         ${built.provision}/bin/kaiba-provision probe \
           --profile ${qualificationProfilePath} \
@@ -367,8 +489,24 @@ let
         touch "$out/passed"
       '';
 
+  physicalLaneGuardFixture = built.mkRpi5PhysicalLaneGuard {
+    name = "kaiba-rpi5-physical-lane-guard-module-fixture";
+    expectedBootImageDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    expectedEEPROMHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    freshCommitBundle = "${built.rpi5ProbeBundle}/bundle";
+    freshReadbackBundle = "${built.rpi5ProbeBundle}/bundle";
+    negativeBootBundle = "${built.rpi5ProbeBundle}/bundle";
+    ownedReadbackBundle = "${built.rpi5ProbeBundle}/bundle";
+    ownedRecoveryBundle = "${built.rpi5ProbeBundle}/bundle";
+    rootIntegrityBundle = "${built.rpi5ProbeBundle}/bundle";
+  };
+
   moduleEval = import ./module-eval.nix {
     inherit pkgs lib kaibaModules;
+    kaibaAuditPackage = built.audit;
+    kaibaControlPackage = built.control;
+    kaibaLaneGuardPackage = physicalLaneGuardFixture;
     kaibaProvisionPackage = built.provision;
     kaibaStationDemoPackage = built.stationDemo;
   };
@@ -515,6 +653,163 @@ let
         jq --sort-keys . ${reportInputJSON} > "$out/report-input.json"
       '';
 
+  secureBootArtifactContract =
+    pkgs.runCommand "kaiba-secure-boot-artifact-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.check-jsonschema
+          pkgs.cryptsetup
+          pkgs.jq
+          pkgs.mtools
+        ];
+      }
+      ''
+        set -euo pipefail
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/unsigned-artifact-set-v1alpha1.schema.json \
+          ${secureBootFixtureA}/manifest.json
+        test "$(jq -r .signing_status ${secureBootFixtureA}/manifest.json)" = unsigned
+        test "$(jq -r .rollback_policy ${secureBootFixtureA}/manifest.json)" = \
+          unimplemented-block-enrollment-ready
+        test "$(jq -r .persistent_mutable_state ${secureBootFixtureA}/manifest.json)" = tmpfs-only
+        test "$(jq -r .expected_customer_key_hash ${secureBootFixtureA}/manifest.json)" = \
+          sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        jq -e '
+          .boot_image_size_bytes == 100663296
+          and .firmware_allowlist == [
+            "bcm2712-rpi-5-b.dtb",
+            "cmdline.txt",
+            "initramfs_2712",
+            "kaiba-root-integrity.json",
+            "kernel_2712.img",
+            "overlays/README"
+          ]
+          and .verity.data_device == "/dev/nvme0n1p2"
+          and .verity.hash_device == "/dev/nvme0n1p3"
+          and .verity.mapper == "/dev/mapper/root"
+          and .verity.algorithm == "sha256"
+          and .boot_command_line_path == "cmdline.txt"
+        ' ${secureBootFixtureA}/manifest.json > /dev/null
+        jq --compact-output --sort-keys 'del(.bundle_digest)' \
+          ${secureBootFixtureA}/manifest.json > "$TMPDIR/canonical-manifest"
+        expected_bundle_digest="sha256:$({
+          printf '%s\0' 'kaiba.rpi5.unsigned-artifacts.v1'
+          cat "$TMPDIR/canonical-manifest"
+        } | sha256sum | cut -d ' ' -f 1)"
+        test "$(jq -r .bundle_digest ${secureBootFixtureA}/manifest.json)" = \
+          "$expected_bundle_digest"
+
+        root_hash="$(jq -r .root_integrity_digest ${secureBootFixtureA}/manifest.json | cut -d: -f2)"
+        veritysetup verify \
+          ${secureBootFixtureA}/nvme/root-data.img \
+          ${secureBootFixtureA}/nvme/root-hash.img \
+          "$root_hash"
+        mtype -i ${secureBootFixtureA}/unsigned/boot.img ::cmdline.txt \
+          | grep -F "root=/dev/mapper/root rootfstype=ext4 rd.systemd.verity=1 roothash=$root_hash"
+        mtype -i ${secureBootFixtureA}/unsigned/boot.img ::kaiba-root-integrity.json \
+          | jq -e --arg root_hash "$root_hash" \
+            '.root_hash == $root_hash and .no_superblock == false' \
+          > /dev/null
+
+        cmp ${secureBootFixtureA}/unsigned/boot.img ${secureBootFixtureB}/unsigned/boot.img
+        cmp ${secureBootFixtureA}/nvme/root-data.img ${secureBootFixtureB}/nvme/root-data.img
+        cmp ${secureBootFixtureA}/nvme/root-hash.img ${secureBootFixtureB}/nvme/root-hash.img
+        test "$(jq -r .bundle_digest ${secureBootFixtureA}/manifest.json)" = \
+          "$(jq -r .bundle_digest ${secureBootFixtureB}/manifest.json)"
+
+        mkdir -p "$out"
+        touch "$out/passed"
+      '';
+
+  developmentYubiKeySigningContract =
+    pkgs.runCommand "kaiba-development-yubikey-signing-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.gnugrep
+          pkgs.openssl
+        ];
+      }
+      ''
+        set -euo pipefail
+
+        expected_binaries="$(${pkgs.coreutils}/bin/printf '%s\n' \
+          kaiba-provision-signer \
+          kaiba-provision-signing-client \
+          kaiba-provision-signing-gate \
+          kaiba-provision-yubikey-wrapper)"
+        actual_binaries="$(
+          find -L ${developmentYubiKeySigning}/bin \
+            -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+            | sort
+        )"
+        test "$actual_binaries" = "$expected_binaries"
+        for binary in $expected_binaries; do
+          test -x ${developmentYubiKeySigning}/bin/"$binary"
+        done
+
+        test '${developmentYubiKeySigning.kaibaSigning.signerID}' = \
+          'signer:development-fixture'
+        test '${developmentYubiKeySigning.kaibaSigning.cohortID}' = \
+          'cohort:development-fixture'
+        test '${developmentYubiKeySigning.kaibaSigning.grantRegistryPath}' = \
+          '/etc/kaiba-provisioning/signing-grants.json'
+        test '${developmentYubiKeySigning.kaibaSigning.pkcs11URI}' = \
+          'pkcs11:serial=12345678;id=%02;type=private'
+        test '${developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint}' = \
+          '${developmentYubiKeyPublicKeyFingerprint}'
+        test '${developmentYubiKeySigning.kaibaSigning.expectedCustomerKeyHash}' = \
+          '${developmentYubiKeyCustomerKeyHash}'
+        test "$(cat ${developmentYubiKeySigning.kaibaSigning.customerKeyHashFile})" = \
+          '${developmentYubiKeyCustomerKeyHash}'
+        test "$(stat --format=%s \
+          ${developmentYubiKeySigning.kaibaSigning.customerPublicKeyBinary})" -eq 264
+        test "$(sha256sum \
+          ${developmentYubiKeySigning.kaibaSigning.customerPublicKeyBinary} \
+          | cut -d ' ' -f 1)" = '${developmentYubiKeyCustomerKeyHash}'
+        test '${developmentYubiKeySigning.kaibaSigning.pinCredentialPath}' = \
+          '/run/credentials/kaiba-provision-signing-gate.service/yubikey-pin'
+        test '${developmentYubiKeySigning.kaibaSigning.socketPath}' = \
+          '/run/kaiba-provision-signing/signing.sock'
+        test '${developmentYubiKeySigning.kaibaSigning.stateDirectoryPath}' = \
+          '/var/lib/kaiba-provision-signing'
+        test '${developmentYubiKeySigning.kaibaSigning.pkcs11ProviderModule}' = \
+          '${pkgs.pkcs11-provider}/lib/ossl-modules/pkcs11.so'
+        test '${developmentYubiKeySigning.kaibaSigning.ykcs11Module}' = \
+          '${pkgs.yubico-piv-tool}/lib/libykcs11.so.${pkgs.yubico-piv-tool.version}'
+        cmp \
+          ${developmentYubiKeySigning.kaibaSigning.opensslConfiguration} \
+          ${expectedDevelopmentYubiKeyOpenSSLConfiguration}
+
+        openssl pkey \
+          -pubin \
+          -in ${developmentYubiKeyPublicKeyPEM} \
+          -outform DER \
+          -out "$TMPDIR/development-boot-public.der"
+        test "sha256:$(sha256sum "$TMPDIR/development-boot-public.der" | cut -d ' ' -f 1)" = \
+          '${developmentYubiKeyPublicKeyFingerprint}'
+
+        # Argument validation must happen without a token or credential. The
+        # configured binary still validates all immutable public dependencies.
+        test ! -e '${developmentYubiKeySigning.kaibaSigning.pinCredentialPath}'
+        set +e
+        ${developmentYubiKeySigning}/bin/kaiba-provision-yubikey-wrapper \
+          > "$TMPDIR/wrapper.stdout" \
+          2> "$TMPDIR/wrapper.stderr"
+        wrapper_status="$?"
+        set -e
+        test "$wrapper_status" -eq 2
+        test ! -s "$TMPDIR/wrapper.stdout"
+        grep -Fx \
+          'usage: kaiba-provision-yubikey-wrapper -a rsa2048-sha256 INPUT_FILE' \
+          "$TMPDIR/wrapper.stderr"
+        test "$(wc -l < "$TMPDIR/wrapper.stderr")" -eq 1
+
+        mkdir -p "$out"
+        touch "$out/passed"
+      '';
+
   provisioningTestResult =
     pkgs.runCommand "kaiba-provisioning-test-result-${pkgs.stdenv.hostPlatform.system}"
       {
@@ -525,10 +820,20 @@ let
       }
       ''
         test -x ${built.suite}/bin/kaiba-provision
+        test -x ${built.serviceSuite}/bin/kaiba-provision-audit
+        test -x ${built.serviceSuite}/bin/kaiba-provision-control
+        test -x ${built.serviceSuite}/bin/kaiba-provision-lane-guard
+        test -x ${built.serviceSuite}/bin/kaiba-provision-signer
+        test -x ${built.serviceSuite}/bin/kaiba-provision-signing-client
+        test -x ${built.serviceSuite}/bin/kaiba-provision-signing-gate
+        test -x ${built.serviceSuite}/bin/kaiba-provision-station
+        test -x ${built.serviceSuite}/bin/kaiba-provision-yubikey-wrapper
         test -x ${built.provision}/bin/kaiba-provision
         test -f ${deviceProfileSchema}/passed
         test -f ${probeBundleIntegrity}/passed
         test -f ${rpibootMetadataStdoutCompatibility}/passed
+        test -f ${secureBootArtifactContract}/passed
+        test -f ${developmentYubiKeySigningContract}/passed
         test -f ${moduleEval}/results.txt
 
         mkdir -p "$out/evidence/provisioning/hardware-qualification"
@@ -567,10 +872,12 @@ let
 in
 {
   inherit
+    developmentYubiKeySigningContract
     deviceProfileSchema
     moduleEval
     probeBundleIntegrity
     provisioningTestResult
     rpibootMetadataStdoutCompatibility
+    secureBootArtifactContract
     ;
 }

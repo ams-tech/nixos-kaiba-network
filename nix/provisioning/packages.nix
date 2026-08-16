@@ -121,6 +121,349 @@ let
     '';
   };
 
+  serviceSuite = pkgs.buildGoModule {
+    pname = "kaiba-provisioning-services";
+    inherit version;
+    src = goSource;
+
+    subPackages = [
+      "cmd/kaiba-provision-audit"
+      "cmd/kaiba-provision-control"
+      "cmd/kaiba-provision-lane-guard"
+      "cmd/kaiba-provision-signer"
+      "cmd/kaiba-provision-signing-client"
+      "cmd/kaiba-provision-signing-gate"
+      "cmd/kaiba-provision-station"
+      "cmd/kaiba-provision-yubikey-wrapper"
+    ];
+
+    vendorHash = null;
+
+    # The primary suite already runs every package test.  Keeping the service
+    # link step separate prevents probe-only build-time paths from becoming
+    # ambient configuration for the control and station processes.
+    doCheck = false;
+  };
+
+  servicePackage =
+    {
+      binary,
+      description,
+      name ? binary,
+    }:
+    pkgs.runCommand name
+      {
+        meta = {
+          mainProgram = binary;
+          inherit description;
+          platforms = lib.platforms.linux;
+        };
+      }
+      ''
+        mkdir -p "$out/bin"
+        ln -s ${serviceSuite}/bin/${binary} "$out/bin/${binary}"
+      '';
+
+  audit = servicePackage {
+    binary = "kaiba-provision-audit";
+    description = "Kaiba append-only provisioning audit reference service";
+  };
+
+  control = servicePackage {
+    binary = "kaiba-provision-control";
+    description = "Kaiba provisioning transaction and inventory reference service";
+  };
+
+  laneGuard = servicePackage {
+    binary = "kaiba-provision-lane-guard";
+    description = "Kaiba one-lane privileged Raspberry Pi 5 provisioning guard";
+  };
+
+  liveStation = servicePackage {
+    binary = "kaiba-provision-station";
+    description = "Kaiba live secure-boot provisioning station interface";
+  };
+
+  signerFoundation = servicePackage {
+    binary = "kaiba-provision-signer";
+    description = "Fail-closed Kaiba Raspberry Pi signing-wrapper foundation";
+  };
+
+  signingClientFoundation = servicePackage {
+    binary = "kaiba-provision-signing-client";
+    description = "Fail-closed Kaiba approval-gate signing client foundation";
+  };
+
+  signingGateFoundation = servicePackage {
+    binary = "kaiba-provision-signing-gate";
+    description = "Fail-closed Kaiba approval-gated signing service foundation";
+  };
+
+  yubiKeyWrapperFoundation = servicePackage {
+    binary = "kaiba-provision-yubikey-wrapper";
+    description = "Fail-closed Kaiba YubiKey PKCS#11 wrapper foundation";
+  };
+
+  canonicalDigest = value: builtins.match "sha256:[0-9a-f]{64}" value != null;
+  canonicalRawDigest = value: builtins.match "[0-9a-f]{64}" value != null;
+  canonicalIdentifier = value: builtins.match "[a-z0-9][a-z0-9._:-]{0,127}" value != null;
+  cleanAbsolute =
+    value: builtins.isString value && lib.hasPrefix "/" value && !(lib.hasInfix "/../" value);
+  storeBacked =
+    value: cleanAbsolute (toString value) && lib.hasPrefix "${builtins.storeDir}/" (toString value);
+
+  # Produces the only lane-guard build that can cross the mutation boundary.
+  # Every executable, payload, and expected digest is fixed into the binary;
+  # runtime JSON can select only a typed operation already present in its
+  # approved plan.
+  mkRpi5PhysicalLaneGuard =
+    {
+      expectedBootImageDigest,
+      expectedCustomerKeyHash,
+      expectedEEPROMHash,
+      freshCommitBundle,
+      freshReadbackBundle,
+      negativeBootBundle,
+      ownedReadbackBundle,
+      ownedRecoveryBundle,
+      rootIntegrityBundle,
+      name ? "kaiba-rpi5-physical-lane-guard",
+    }:
+    assert lib.assertMsg (canonicalDigest expectedBootImageDigest)
+      "expectedBootImageDigest must use canonical sha256:<64 lowercase hex> form";
+    assert lib.assertMsg (canonicalRawDigest expectedCustomerKeyHash)
+      "expectedCustomerKeyHash must contain 64 lowercase hexadecimal characters";
+    assert lib.assertMsg (canonicalRawDigest expectedEEPROMHash)
+      "expectedEEPROMHash must contain 64 lowercase hexadecimal characters";
+    assert lib.assertMsg (lib.all storeBacked [
+      freshCommitBundle
+      freshReadbackBundle
+      negativeBootBundle
+      ownedReadbackBundle
+      ownedRecoveryBundle
+      rootIntegrityBundle
+    ]) "every physical lane bundle must be a fixed Nix-store path";
+    pkgs.buildGoModule {
+      pname = name;
+      inherit version;
+      src = goSource;
+      subPackages = [ "cmd/kaiba-provision-lane-guard" ];
+      vendorHash = null;
+      doCheck = false;
+      ldflags = [
+        "-X=main.rpibootBinary=${rpiboot}/bin/rpiboot"
+        "-X=main.gpioSetBinary=${pkgs.libgpiod}/bin/gpioset"
+        "-X=main.freshReadbackBundle=${toString freshReadbackBundle}"
+        "-X=main.freshCommitBundle=${toString freshCommitBundle}"
+        "-X=main.ownedReadbackBundle=${toString ownedReadbackBundle}"
+        "-X=main.ownedRecoveryBundle=${toString ownedRecoveryBundle}"
+        "-X=main.negativeBootBundle=${toString negativeBootBundle}"
+        "-X=main.rootIntegrityBundle=${toString rootIntegrityBundle}"
+        "-X=main.expectedCustomerKeyHash=${expectedCustomerKeyHash}"
+        "-X=main.expectedEEPROMHash=${expectedEEPROMHash}"
+        "-X=main.expectedBootImageDigest=${expectedBootImageDigest}"
+      ];
+      passthru.kaibaPhysicalLaneGuard = {
+        inherit
+          expectedBootImageDigest
+          expectedCustomerKeyHash
+          expectedEEPROMHash
+          ;
+        gpioSet = pkgs.libgpiod;
+        inherit rpiboot;
+      };
+      meta = {
+        mainProgram = "kaiba-provision-lane-guard";
+        description = "Immutable one-lane Raspberry Pi 5 secure-boot mutation guard";
+        platforms = lib.platforms.linux;
+      };
+    };
+
+  # Builds the complete external-wrapper -> approval gate -> immutable
+  # OpenSSL-provider -> YKCS11 chain.  Only public metadata enters the Nix
+  # store; the PIN is read at runtime from the fixed systemd credential path.
+  mkDevelopmentYubiKeySigning =
+    {
+      cohortID,
+      expectedCustomerKeyHash,
+      grantRegistryPath ? "/etc/kaiba-provisioning/signing-grants.json",
+      publicKeyFingerprint,
+      publicKeyPEM,
+      signerID,
+      tokenSerial,
+      name ? "kaiba-development-yubikey-signing",
+    }:
+    assert lib.assertMsg (canonicalIdentifier cohortID) "cohortID must be a canonical identifier";
+    assert lib.assertMsg (canonicalIdentifier signerID) "signerID must be a canonical identifier";
+    assert lib.assertMsg (
+      builtins.match "[0-9]{1,16}" tokenSerial != null
+    ) "tokenSerial must contain 1 to 16 decimal digits";
+    assert lib.assertMsg (canonicalDigest publicKeyFingerprint)
+      "publicKeyFingerprint must use canonical sha256:<64 lowercase hex> form";
+    assert lib.assertMsg (canonicalRawDigest expectedCustomerKeyHash)
+      "expectedCustomerKeyHash must contain 64 lowercase hexadecimal characters";
+    assert lib.assertMsg (storeBacked publicKeyPEM) "publicKeyPEM must be a fixed Nix-store path";
+    assert lib.assertMsg (
+      cleanAbsolute grantRegistryPath && !lib.hasPrefix "${builtins.storeDir}/" grantRegistryPath
+    ) "grantRegistryPath must be an absolute mutable root-managed path outside the Nix store";
+    let
+      socketPath = "/run/kaiba-provision-signing/signing.sock";
+      stateDirectoryPath = "/var/lib/kaiba-provision-signing";
+      pinCredentialPath = "/run/credentials/kaiba-provision-signing-gate.service/yubikey-pin";
+      pkcs11URI = "pkcs11:serial=${tokenSerial};id=%02;type=private";
+      ykcs11Module = "${pkgs.yubico-piv-tool}/lib/libykcs11.so.${pkgs.yubico-piv-tool.version}";
+      pkcs11ProviderModule = "${pkgs.pkcs11-provider}/lib/ossl-modules/pkcs11.so";
+      customerKeyPython = pkgs.python3.withPackages (pythonPackages: [ pythonPackages.pycryptodomex ]);
+      customerKeyContract =
+        pkgs.runCommand "${name}-customer-key-contract"
+          {
+            nativeBuildInputs = [
+              customerKeyPython
+              pkgs.coreutils
+            ];
+          }
+          ''
+            set -euo pipefail
+
+            ${customerKeyPython}/bin/python3 \
+              ${pkgs.raspberrypi-eeprom.src}/tools/rpi-bootloader-key-convert \
+              ${publicKeyPEM} \
+              --output "$TMPDIR/customer-public-key.bin"
+            test "$(stat --format=%s "$TMPDIR/customer-public-key.bin")" -eq 264
+
+            actual_customer_key_hash="$(
+              sha256sum "$TMPDIR/customer-public-key.bin" | cut -d ' ' -f 1
+            )"
+            if test "$actual_customer_key_hash" != '${expectedCustomerKeyHash}'; then
+              echo "configured Raspberry Pi customer-key hash does not match publicKeyPEM" >&2
+              exit 1
+            fi
+
+            mkdir -p "$out/share/kaiba"
+            install -m 0444 \
+              "$TMPDIR/customer-public-key.bin" \
+              "$out/share/kaiba/customer-public-key.bin"
+            printf '%s\n' "$actual_customer_key_hash" \
+              > "$out/share/kaiba/customer-key-hash"
+          '';
+      opensslConfiguration = pkgs.writeText "kaiba-yubikey-openssl.cnf" ''
+        config_diagnostics = 1
+        openssl_conf = kaiba_openssl_init
+
+        [kaiba_openssl_init]
+        providers = kaiba_provider_sect
+
+        [kaiba_provider_sect]
+        default = kaiba_default_sect
+        pkcs11 = kaiba_pkcs11_sect
+
+        [kaiba_default_sect]
+        activate = 1
+
+        [kaiba_pkcs11_sect]
+        module = ${pkcs11ProviderModule}
+        pkcs11-module-path = ${ykcs11Module}
+        pkcs11-module-token-pin = file:${pinCredentialPath}
+        pkcs11-module-cache-keys = false
+        pkcs11-module-cache-sessions = 0
+        pkcs11-module-login-behavior = always
+        activate = 1
+      '';
+      buildCommand =
+        {
+          pname,
+          subPackage,
+          ldflags,
+        }:
+        pkgs.buildGoModule {
+          inherit pname version ldflags;
+          src = goSource;
+          subPackages = [ subPackage ];
+          vendorHash = null;
+          doCheck = false;
+        };
+      yubiKeyWrapper = buildCommand {
+        pname = "${name}-yubikey-wrapper";
+        subPackage = "cmd/kaiba-provision-yubikey-wrapper";
+        ldflags = [
+          "-X=main.opensslExecutablePath=${pkgs.openssl}/bin/openssl"
+          "-X=main.opensslConfigurationPath=${opensslConfiguration}"
+          "-X=main.pkcs11ProviderModulePath=${pkcs11ProviderModule}"
+          "-X=main.ykcs11ModulePath=${ykcs11Module}"
+          "-X=main.yubiKeyPKCS11URI=${pkcs11URI}"
+          "-X=main.yubiKeyPINCredentialPath=${pinCredentialPath}"
+          "-X=main.yubiKeyPublicKeyPEMPath=${toString publicKeyPEM}"
+          "-X=main.yubiKeyExpectedPublicKeyFingerprint=${publicKeyFingerprint}"
+        ];
+      };
+      signingGate = buildCommand {
+        pname = "${name}-gate";
+        subPackage = "cmd/kaiba-provision-signing-gate";
+        ldflags = [
+          "-X=main.signingGateSocketPath=${socketPath}"
+          "-X=main.signingGrantRegistryPath=${grantRegistryPath}"
+          "-X=main.signingStateDirectoryPath=${stateDirectoryPath}"
+          "-X=main.signingBackendID=backend:${signerID}"
+          "-X=main.signingBackendExecutablePath=${yubiKeyWrapper}/bin/kaiba-provision-yubikey-wrapper"
+          "-X=main.signingBackendArgumentsJSON=[]"
+        ];
+      };
+      signingClient = buildCommand {
+        pname = "${name}-client";
+        subPackage = "cmd/kaiba-provision-signing-client";
+        ldflags = [ "-X=main.signingGateSocketPath=${socketPath}" ];
+      };
+      signer = buildCommand {
+        pname = "${name}-rpi-wrapper";
+        subPackage = "cmd/kaiba-provision-signer";
+        ldflags = [
+          "-X=main.approvalGatedSignerPath=${signingClient}/bin/kaiba-provision-signing-client"
+          "-X=main.approvalGatedSignerArgumentsJSON=[]"
+          "-X=main.developmentSignerID=${signerID}"
+          "-X=main.developmentCohortID=${cohortID}"
+          "-X=main.developmentPKCS11URI=${pkcs11URI}"
+          "-X=main.developmentPublicKeyFingerprint=${publicKeyFingerprint}"
+        ];
+      };
+    in
+    pkgs.symlinkJoin {
+      inherit name;
+      paths = [
+        customerKeyContract
+        signer
+        signingClient
+        signingGate
+        yubiKeyWrapper
+      ];
+      passthru.kaibaSigning = {
+        inherit
+          cohortID
+          customerKeyContract
+          expectedCustomerKeyHash
+          grantRegistryPath
+          opensslConfiguration
+          pkcs11ProviderModule
+          pinCredentialPath
+          pkcs11URI
+          publicKeyFingerprint
+          signerID
+          signingClient
+          signingGate
+          socketPath
+          stateDirectoryPath
+          ykcs11Module
+          yubiKeyWrapper
+          ;
+        customerKeyHashFile = "${customerKeyContract}/share/kaiba/customer-key-hash";
+        customerPublicKeyBinary = "${customerKeyContract}/share/kaiba/customer-public-key.bin";
+      };
+      meta = {
+        mainProgram = "kaiba-provision-signer";
+        description = "Approval-gated development YubiKey Raspberry Pi signing chain";
+        platforms = lib.platforms.linux;
+      };
+    };
+
   stationGraphGenerator = pkgs.buildGoModule {
     pname = "kaiba-provision-station-graph";
     inherit version;
@@ -196,7 +539,13 @@ let
 in
 {
   inherit
+    audit
+    control
     goSource
+    laneGuard
+    liveStation
+    mkDevelopmentYubiKeySigning
+    mkRpi5PhysicalLaneGuard
     provision
     rpiboot
     rpibootSource
@@ -204,6 +553,11 @@ in
     stationDemo
     stationGraphGenerator
     stationPages
+    serviceSuite
+    signerFoundation
+    signingClientFoundation
+    signingGateFoundation
     suite
+    yubiKeyWrapperFoundation
     ;
 }
