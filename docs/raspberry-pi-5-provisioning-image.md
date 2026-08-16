@@ -147,7 +147,36 @@ access; inspect or remove that key before reusing the station card.
 
 ## Enter the qualification environment
 
-At the station console, run:
+Before invoking the ceremony, complete the physical first-boot smoke test on
+the station Pi 5: confirm the console returns after logout, the readiness
+sequence succeeds, `/run/current-system` resolves to one store path, the
+private path reports `tmpfs`, SSH host keys generate without errors, and a test
+`0a5c:2712` device is visible to the operator. Also confirm the frozen revision
+passed the required x86 and native AArch64 checks. CI builds and inspects the
+image but cannot prove the board, bootloader, or USB behaviors. The guided
+command requires an explicit `STATION-QUALIFIED` confirmation for these
+prerequisites.
+
+The preferred path is the image-integrated guided ceremony. It performs the
+readiness checks, creates an isolated private session, discovers and binds the
+RPIBOOT topology path only after observing an empty bus, runs both probes and
+qualifier phases, and validates candidate records against the full schema. It
+pauses for the physical operations and their operator confirmations:
+
+```console
+kaiba-qualification-ceremony --lane-id lane-1
+```
+
+The lane ID is a permanent label for the physical cable/port, not a USB device
+number. Physically label the known-good target boot medium with a short opaque
+identifier; the command records it in the private operator context and repeats
+the exact criterion before and after probing. The command prints the path to
+the only final record that may be transferred. Raw probe results, diagnostics,
+state, operator context, and the incomplete preflight remain in the volatile
+private session.
+
+For readiness diagnosis or the auditable manual fallback, initialize the
+environment directly:
 
 ```console
 READY_ENV="$(kaiba-qualification-ready)" &&
@@ -167,18 +196,33 @@ closure is noncanonical, the private directory is not volatile and mode
 also exports
 `QUALIFICATION_SCHEMA` and sets `umask 077`.
 
-Before attaching the sacrificial target, complete a physical first-boot smoke
-test on the station Pi 5: confirm the console returns after logout, the
-readiness sequence succeeds, `/run/current-system` resolves to one store path,
-the private path reports `tmpfs`, SSH host keys generate without errors, and a
-test `0a5c:2712` device is visible to the operator. CI builds and inspects the
-image but cannot prove these board, bootloader, or USB behaviors.
+Continue with the [sacrificial-device operator runbook] when using the manual
+fallback.
 
-Continue with the [sacrificial-device operator runbook]. Transfer only
-`hardware-qualification.json` for independent schema validation on the clean
-review workstation. Never copy `probe-1.json`,
-`probe-2.json`, or the preflight record to unencrypted media or into the
-repository.
+### After either workflow
+
+Before powering the station off, transfer only the final
+`hardware-qualification.json` path reported by the guided command. Treat it as
+schema-valid, whitelist-redacted evidence, not as anonymous data: its stable
+pseudonymous digests still require publication review. Never transfer the raw
+probe results, diagnostics, operator context, state, incomplete preflight, or
+an orphan `.partial` file.
+
+On a clean review-workstation checkout of the exact frozen revision, validate
+the transferred record independently:
+
+```console
+nix develop ./nix/provisioning --command check-jsonschema \
+  --schemafile provisioning/schemas/rpi5-hardware-qualification-v1alpha1.schema.json \
+  /path/to/hardware-qualification.json
+```
+
+Verify that its `source_revision` equals that frozen revision. For a reviewed
+closeout, copy only this final record to
+`tests/provisioning/evidence/sacrificial-pi-5.json` and update
+`tests/provisioning/report-input.json` as described in the runbook. After a
+successful transfer, reboot the station to clear all volatile evidence before
+starting another ceremony.
 
 [`ams-tech/nixos-raspberrypi` fork]: https://github.com/ams-tech/nixos-raspberrypi/tree/kaiba
 [sacrificial-device operator runbook]: raspberry-pi-5-provisioning-probe.md#sacrificial-device-operator-runbook

@@ -330,6 +330,22 @@ and restart from probe 1 if it reboots. On another approved station, the
 commands below use placeholders which the operator must set from its frozen
 record:
 
+On the dedicated image, the preferred entry point guides this complete state
+machine while retaining the same CLI and evidence boundaries:
+
+```console
+kaiba-qualification-ceremony --lane-id lane-1
+```
+
+Only short physical confirmations remain interactive. The command requires a
+real terminal, refuses concurrent or stale-final sessions, preserves partial
+private diagnostics after a session starts, and never retries or deletes probe
+or qualifier artifacts. It first requires the frozen-revision and physical
+station checks, an empty RPIBOOT bus, a physically labelled known-good boot
+medium, and an explicit lane-to-topology binding. Transfer a stale final, then
+reboot the station to clear volatile evidence before starting over. The manual
+sequence below remains the normative auditable fallback.
+
 ```console
 umask 077
 install -d -m 0700 /var/lib/kaiba-hardware-qual/private
@@ -342,7 +358,7 @@ PRIVATE=/var/lib/kaiba-hardware-qual/private
 
 On the dedicated image, replace that setup block with the readiness command,
 which validates the image provenance, closure, private volume, and operator
-group before exporting all five variables:
+group before exporting the six ceremony variables:
 
 ```console
 READY_ENV="$(kaiba-qualification-ready)" &&
@@ -395,10 +411,14 @@ kaiba-provision qualify \
   > "$PRIVATE/comparison-preflight.json"
 ```
 
-The expected preflight exit is `7` and its status is `incomplete`. Exit `6` or
-any validation error means stop and quarantine. After a clean preflight, boot
-normally from the original media and apply the same success criterion. Produce
-the final public-safe record with exactly one of these outcomes:
+The expected preflight exit is `7` and its status is `incomplete`. A valid
+failed record with exit `6` means stop and quarantine. Exit `2` or `3`, malformed
+output, or schema-invalid output means abort, retain the private diagnostics,
+investigate the input or provenance failure, and decide quarantine from the
+evidence rather than from the tooling error alone. After a clean preflight,
+boot normally from the original media and apply the same success criterion.
+Produce the final schema-valid, whitelist-redacted record with exactly one of
+these outcomes:
 
 ```console
 kaiba-provision qualify \
@@ -416,7 +436,8 @@ kaiba-provision qualify \
 Use `--normal-boot-confirmation failed` instead if the criterion fails. That
 emits a redacted failed/quarantine record and exits `6`. A passed record exits
 `0`. On a review workstation with a clean checkout of the same revision,
-validate the transferred public-safe record before review:
+validate the transferred schema-valid, whitelist-redacted record before
+review:
 
 ```console
 nix develop ./nix/provisioning --command check-jsonschema \

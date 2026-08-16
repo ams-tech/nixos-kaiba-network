@@ -75,6 +75,36 @@ let
       printf 'export PRIVATE=%q\n' "$private_directory"
     '';
   };
+  listRPIBootPaths = pkgs.writeShellApplication {
+    name = "kaiba-list-rpiboot-paths";
+    text = ''
+      shopt -s nullglob
+      for device in /sys/bus/usb/devices/*; do
+        [[ -f "$device/idVendor" && -f "$device/idProduct" ]] || continue
+        if ! IFS= read -r vendor < "$device/idVendor"; then
+          [[ -e "$device/idVendor" ]] || continue
+          exit 1
+        fi
+        if ! IFS= read -r product < "$device/idProduct"; then
+          [[ -e "$device/idProduct" ]] || continue
+          exit 1
+        fi
+        [[ "''${vendor,,}" == 0a5c && "''${product,,}" == 2712 ]] || continue
+        usb_path="''${device##*/}"
+        [[ "$usb_path" =~ ^[0-9]+-[0-9]+(\.[0-9]+)*$ ]] || exit 1
+        printf '%s\n' "$usb_path"
+      done
+    '';
+  };
+  qualificationCeremony = import ./rpi5-qualification-ceremony.nix {
+    inherit
+      kaibaProvisionPackage
+      lib
+      pkgs
+      ;
+    listRPIBootPathsCommand = "${listRPIBootPaths}/bin/kaiba-list-rpiboot-paths";
+    qualificationReadyPackage = qualificationReady;
+  };
 in
 {
   # The generic SD-image module imports the broad recovery-oriented base and
@@ -232,6 +262,7 @@ in
         kaibaProvisionPackage
         less
         openssh
+        qualificationCeremony
         qualificationReady
         usbutils
       ])
@@ -253,7 +284,8 @@ in
       "NIXOS".text = "";
       "issue".text = ''
         Kaiba Raspberry Pi 5 hardware-qualification station
-        Run: READY_ENV="$(kaiba-qualification-ready)" && eval "$READY_ENV" && unset READY_ENV
+        Run: kaiba-qualification-ceremony --lane-id lane-1
+        Diagnostic readiness: READY_ENV="$(kaiba-qualification-ready)" && eval "$READY_ENV" && unset READY_ENV
         Runbook: /etc/kaiba-provisioning/operator-runbook.md
 
       '';

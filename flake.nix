@@ -353,6 +353,9 @@
             imageConfig = rpi5ProvisioningSystem.config;
             kaibaProvisionPackage = provisioning.packages.aarch64-linux.kaiba-provision;
           };
+          rpi5-qualification-ceremony = import ./tests/rpi5-qualification-ceremony.nix {
+            inherit lib pkgs;
+          };
           rpi5-secure-boot-target-eval = import ./tests/rpi5-secure-boot-target-eval.nix {
             inherit lib pkgs;
             target = mkRpi5SecureBootTarget {

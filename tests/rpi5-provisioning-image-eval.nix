@@ -115,6 +115,10 @@ let
         imageConfig.system.configurationRevision == null
     );
 
+  guidedCeremonyContract =
+    builtins.elem "kaiba-qualification-ceremony" systemPackageNames
+    && lib.hasInfix "Run: kaiba-qualification-ceremony --lane-id lane-1" imageConfig.environment.etc.issue.text;
+
   applianceContract =
     !imageConfig.nix.enable
     && imageConfig.system.disableInstallerTools
@@ -132,6 +136,8 @@ assert lib.assertMsg privateEvidenceContract
   "the RPi 5 provisioning image private-evidence boundary changed";
 assert lib.assertMsg provenanceContract
   "the RPi 5 provisioning image source-provenance contract changed";
+assert lib.assertMsg guidedCeremonyContract
+  "the RPi 5 provisioning image guided-ceremony contract changed";
 assert lib.assertMsg applianceContract
   "the RPi 5 provisioning image appliance or no-mutation-tools contract changed";
 pkgs.runCommand "kaiba-rpi5-provisioning-image-evaluation" { } ''
@@ -158,6 +164,7 @@ pkgs.runCommand "kaiba-rpi5-provisioning-image-evaluation" { } ''
     'wired-networkd-dhcp: pass' \
     'volatile-private-evidence: pass' \
     'clean-source-readiness: pass' \
+    'guided-qualification-ceremony: pass' \
     'fail-closed-readiness-evaluation: pass' \
     'no-installer-mutation-tools: pass' \
     > "$out/results.txt"
