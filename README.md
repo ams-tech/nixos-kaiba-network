@@ -63,9 +63,10 @@ canonical DNS and provisioning JSON, topology diagrams, normalized evidence
 and zone snapshots, and a SHA-256 manifest. The local report records native
 x86 provisioning checks and explicitly marks ARM64 as not observed. CI composes
 the native ARM64 result only after binding it to the checked-out source
-revision. Physical Pi 5 qualification remains a separate pending manual gate;
-the automated result never implies authentication, attestation, or permission
-to mutate a device. On `x86_64-linux`, `nix flake check -L` independently
+revision. Physical Pi 5 qualification remains a separate manual gate;
+the checked redacted record now reports that gate as passed, while the
+automated result never implies authentication, attestation, or permission to
+mutate a device. On `x86_64-linux`, `nix flake check -L` independently
 enforces the report schemas, required functional and security assertions, Go tests, report tests,
 and both flakes' NixOS module evaluation. The equivalent leaf command is
 `nix build ./nix/dns#dns-test-report -L`. The interactive driver is for
@@ -256,8 +257,12 @@ documents the native BCM2712 chain of trust, its assurance limits, the required
 artifacts and evidence, and the irreversible checklist from a qualified
 candidate through ownership to enrollment readiness. The separate
 [development live implementation](docs/raspberry-pi-5-live-provisioning.md)
-provides the real fail-closed component boundaries but remains unqualified on
-hardware and cannot reach `enrollment_ready`.
+provides the real fail-closed component boundaries. Its non-mutating probe has
+passed hardware qualification, but the irreversible path remains unqualified
+and cannot reach `enrollment_ready`. The
+[secure-boot execution plan](docs/raspberry-pi-5-secure-boot-execution-plan.md)
+tracks the remaining release, media-staging, enforcement, physical-lane,
+rehearsal, and ceremony gates for one sacrificial development board.
 
 `kaiba-provision-station-demo` is an unprivileged, loopback-only interface
 prototype for an HDMI display and USB touchscreen. It renders deterministic
