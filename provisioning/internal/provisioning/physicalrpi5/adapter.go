@@ -355,7 +355,7 @@ func (adapter *Adapter) waitForDisappearance(ctx context.Context, expectedPath s
 	for {
 		candidates, err := adapter.eligibleTargets(waitCtx, expectedPath)
 		if err != nil {
-			return err
+			return fmt.Errorf("wait for RPIBOOT target disappearance: %w", err)
 		}
 		if len(candidates) == 0 {
 			return nil

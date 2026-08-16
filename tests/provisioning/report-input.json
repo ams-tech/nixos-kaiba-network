@@ -91,9 +91,11 @@
     ]
   },
   "hardware_qualification": {
-    "status": "pending",
-    "description": "The required two-probe, full-power-cycle qualification on a sacrificial fresh Raspberry Pi 5 Model B has not been completed.",
-    "evidence": []
+    "status": "passed",
+    "description": "A sacrificial fresh Raspberry Pi 5 Model B passed the reviewed two-probe, full-power-cycle qualification.",
+    "evidence": [
+      "evidence/provisioning/hardware-qualification/sacrificial-pi-5.json"
+    ]
   },
   "mutation_eligible": false
 }

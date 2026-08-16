@@ -313,7 +313,18 @@ func TestColdPowerCycleFailsIfUSBNeverDisappears(t *testing.T) {
 	}
 	gpio.off = nil
 	filesystem.set("1-1", [2]string{broadcomVendorID, bcm2712ProductID})
-	if _, err := adapter.Execute(context.Background(), lane, laneguard.OperationColdPowerCycle); err == nil || !strings.Contains(err.Error(), "disappearance") {
+	_, err := adapter.Execute(context.Background(), lane, laneguard.OperationColdPowerCycle)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "disappearance") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWaitForDisappearanceContextErrorHasPhase(t *testing.T) {
+	adapter, _, _, _, _, lane := fixture(t, ModeOwned)
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	err := adapter.waitForDisappearance(ctx, lane.RPIBootSysfsPath)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "disappearance") {
 		t.Fatalf("error = %v", err)
 	}
 }

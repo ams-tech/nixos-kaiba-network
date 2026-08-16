@@ -1,0 +1,159 @@
+{
+  "schema_version": "provisioning.kaiba.network/rpi5-hardware-qualification/v1alpha1",
+  "source_revision": "5f6484158506a3be26ba7789564e7080eaa622bd",
+  "station_system": "aarch64-linux",
+  "nix_system_closure_digest": "sha256:3e72001d074e0fe93f14106c894c7abe41ad2ff09f45f24c4dd17bd9bd97181e",
+  "profile": {
+    "id": "raspberry-pi-5-model-b-v1alpha1",
+    "status": "experimental",
+    "digest": "sha256:36b4389240d2c3d881bc4729798bbb777a38101bea39e19cfee4fee278f7dcb4",
+    "policy_digest": "sha256:40c1502e1a40e8d65ab71d2388c9f7f336a6dc1f8c3ce698b271d37629dc88f3"
+  },
+  "adapter": {
+    "id": "raspberrypi.rpi5.otp-metadata",
+    "version": "v1alpha1"
+  },
+  "source": {
+    "kind": "live-rpiboot",
+    "tool_version": "20250908-162618-bookworm+kaiba-stdout-metadata.1",
+    "tool_digest": "sha256:80b920af68ae4f8ff08f39119d5e2d2778f376fc1df351242e950d7c7c8cd088",
+    "bundle_digest": "sha256:6567a1e76cff4a7145ae800f0c0939f651d58a476930683ae25be2ae0cefab50",
+    "firmware_digest": "sha256:7993e58a2f1a6200cf4c556f6fe14c268048109d6be3241d2e54dc1549e2218c",
+    "config_digest": "sha256:6be94949bbbf6ce798a6e25782cfdf2523b5d1bc8938223143dd9b3008f79d27",
+    "lane_continuity": "match",
+    "usb_path_continuity": "match"
+  },
+  "probes": [
+    {
+      "sequence": 1,
+      "evidence_digest": "sha256:5101071c7bec08555b6992aa533cdfd70c3dd4fb83eda45dd3bcd682d6027556",
+      "target_fingerprint": "sha256:4d7642855f4dd2354dd8216746179de23d0f21cb99e48d68f6956f33a0aa81d1",
+      "board_revision": {
+        "raw": "a04171",
+        "new_style": true,
+        "memory_code": 2,
+        "manufacturer_code": 0,
+        "processor_code": 4,
+        "model_code": 23,
+        "pcb_revision": 1
+      },
+      "board_attributes": "00000000",
+      "boot_rom": "0000000a",
+      "eeprom_hash": null,
+      "customer_key_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "customer_key_state": "unset",
+      "videocore_jtag_locked": false,
+      "assessment": {
+        "device_class_status": "pass",
+        "observable_baseline_status": "pass",
+        "eligible_for_reversible_qualification": true,
+        "mutation_eligible": false,
+        "full_unprovisioned_state": "not_established"
+      },
+      "mutation_audit": {
+        "success_reported": false
+      }
+    },
+    {
+      "sequence": 2,
+      "evidence_digest": "sha256:5101071c7bec08555b6992aa533cdfd70c3dd4fb83eda45dd3bcd682d6027556",
+      "target_fingerprint": "sha256:4d7642855f4dd2354dd8216746179de23d0f21cb99e48d68f6956f33a0aa81d1",
+      "board_revision": {
+        "raw": "a04171",
+        "new_style": true,
+        "memory_code": 2,
+        "manufacturer_code": 0,
+        "processor_code": 4,
+        "model_code": 23,
+        "pcb_revision": 1
+      },
+      "board_attributes": "00000000",
+      "boot_rom": "0000000a",
+      "eeprom_hash": null,
+      "customer_key_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "customer_key_state": "unset",
+      "videocore_jtag_locked": false,
+      "assessment": {
+        "device_class_status": "pass",
+        "observable_baseline_status": "pass",
+        "eligible_for_reversible_qualification": true,
+        "mutation_eligible": false,
+        "full_unprovisioned_state": "not_established"
+      },
+      "mutation_audit": {
+        "success_reported": false
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "field": "target_fingerprint",
+      "status": "match"
+    },
+    {
+      "field": "user_serial",
+      "status": "match"
+    },
+    {
+      "field": "factory_uuid",
+      "status": "match"
+    },
+    {
+      "field": "board_revision",
+      "status": "match"
+    },
+    {
+      "field": "board_attributes",
+      "status": "match"
+    },
+    {
+      "field": "ethernet_mac",
+      "status": "match"
+    },
+    {
+      "field": "wifi_mac",
+      "status": "match"
+    },
+    {
+      "field": "bluetooth_mac",
+      "status": "match"
+    },
+    {
+      "field": "boot_rom",
+      "status": "match"
+    },
+    {
+      "field": "eeprom_hash",
+      "status": "not_observed"
+    },
+    {
+      "field": "customer_key_hash",
+      "status": "match"
+    },
+    {
+      "field": "customer_key_state",
+      "status": "match"
+    },
+    {
+      "field": "videocore_jtag_locked",
+      "status": "match"
+    },
+    {
+      "field": "signature_mode",
+      "status": "not_observed"
+    },
+    {
+      "field": "advanced_boot",
+      "status": "not_observed"
+    }
+  ],
+  "power_cycle_confirmation": "operator_confirmed_complete",
+  "pre_probe_normal_boot_confirmation": "operator_confirmed_normal",
+  "normal_boot_confirmation": "operator_confirmed_unchanged",
+  "status": "passed",
+  "quarantine_required": false,
+  "findings": [],
+  "mutation_eligible": false,
+  "full_unprovisioned_state": "not_established",
+  "disclaimer": "This observation is correlation and partial preflight evidence; it is not device authentication or attestation and does not authorize irreversible provisioning."
+}
