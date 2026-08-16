@@ -8,6 +8,8 @@
 
 let
   privateDirectory = "/var/lib/kaiba-hardware-qual/private";
+  expectedProfilePath = "${kaibaProvisionPackage}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json";
+  expectedQualificationSchemaPath = "${kaibaProvisionPackage}/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json";
   systemPackageNames = map lib.getName imageConfig.environment.systemPackages;
   forbiddenMutationPackages = [
     "cryptsetup"
@@ -119,6 +121,10 @@ let
     builtins.elem "kaiba-qualification-ceremony" systemPackageNames
     && lib.hasInfix "Run: kaiba-qualification-ceremony --lane-id lane-1" imageConfig.environment.etc.issue.text;
 
+  qualificationDataContract =
+    imageConfig.environment.sessionVariables.PROFILE == expectedProfilePath
+    && imageConfig.environment.sessionVariables.QUALIFICATION_SCHEMA == expectedQualificationSchemaPath;
+
   applianceContract =
     !imageConfig.nix.enable
     && imageConfig.system.disableInstallerTools
@@ -138,6 +144,8 @@ assert lib.assertMsg provenanceContract
   "the RPi 5 provisioning image source-provenance contract changed";
 assert lib.assertMsg guidedCeremonyContract
   "the RPi 5 provisioning image guided-ceremony contract changed";
+assert lib.assertMsg qualificationDataContract
+  "the RPi 5 provisioning image qualification-data contract changed";
 assert lib.assertMsg applianceContract
   "the RPi 5 provisioning image appliance or no-mutation-tools contract changed";
 pkgs.runCommand "kaiba-rpi5-provisioning-image-evaluation" { } ''
@@ -165,6 +173,7 @@ pkgs.runCommand "kaiba-rpi5-provisioning-image-evaluation" { } ''
     'volatile-private-evidence: pass' \
     'clean-source-readiness: pass' \
     'guided-qualification-ceremony: pass' \
+    'immutable-qualification-data: pass' \
     'fail-closed-readiness-evaluation: pass' \
     'no-installer-mutation-tools: pass' \
     > "$out/results.txt"

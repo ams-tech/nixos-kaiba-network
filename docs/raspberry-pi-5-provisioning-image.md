@@ -193,8 +193,10 @@ The readiness sequence remains nonzero and does not evaluate an empty
 environment when the image is dirty, the NixOS marker is absent, the system
 closure is noncanonical, the private directory is not volatile and mode
 `0700`, swap is active, or the operator lacks the exact probe USB group. It
-also exports
-`QUALIFICATION_SCHEMA` and sets `umask 077`.
+also exports `QUALIFICATION_SCHEMA` and sets `umask 077`. `PROFILE` and
+`QUALIFICATION_SCHEMA` resolve directly into the pinned `kaiba-provision`
+package, so readiness does not depend on generic `/run/current-system/sw/share`
+linking.
 
 Continue with the [sacrificial-device operator runbook] when using the manual
 fallback.

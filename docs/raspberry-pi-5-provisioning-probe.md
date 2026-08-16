@@ -136,11 +136,22 @@ nix build ./nix/provisioning#kaiba-provision -L
 
 ## Running the probe
 
-Live mode requires the profile, permanent lane label, and exact USB path:
+On the dedicated image, initialize the station environment first:
+
+```console
+READY_ENV="$(kaiba-qualification-ready)" &&
+eval "$READY_ENV" &&
+unset READY_ENV
+```
+
+This exports `PROFILE` as the immutable profile path inside the pinned
+`kaiba-provision` package. On another station, set it to the reviewed profile
+from the frozen source revision. Live mode then requires that profile, a
+permanent lane label, and the exact USB path:
 
 ```console
 kaiba-provision probe \
-  --profile /run/current-system/sw/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json \
+  --profile "$PROFILE" \
   --lane-id lane-1 \
   --usb-path 1-2.3
 ```
@@ -352,7 +363,8 @@ install -d -m 0700 /var/lib/kaiba-hardware-qual/private
 
 SOURCE_REVISION=<frozen-lowercase-40-or-64-hex-revision>
 SYSTEM_CLOSURE=$(readlink -f /run/current-system)
-PROFILE=/run/current-system/sw/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json
+PROFILE=<reviewed-immutable-device-profile-path>
+QUALIFICATION_SCHEMA=<reviewed-immutable-qualification-schema-path>
 PRIVATE=/var/lib/kaiba-hardware-qual/private
 ```
 

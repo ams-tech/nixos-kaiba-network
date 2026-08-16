@@ -829,6 +829,8 @@ let
         test -x ${built.serviceSuite}/bin/kaiba-provision-station
         test -x ${built.serviceSuite}/bin/kaiba-provision-yubikey-wrapper
         test -x ${built.provision}/bin/kaiba-provision
+        test -r ${built.provision}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json
+        test -r ${built.provision}/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json
         test -f ${deviceProfileSchema}/passed
         test -f ${probeBundleIntegrity}/passed
         test -f ${rpibootMetadataStdoutCompatibility}/passed

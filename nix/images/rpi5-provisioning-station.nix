@@ -14,8 +14,10 @@
 let
   operatorName = "provisioner";
   privateDirectory = "/var/lib/kaiba-hardware-qual/private";
-  profilePath = "/run/current-system/sw/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json";
-  qualificationSchemaPath = "/run/current-system/sw/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json";
+  # Custom share trees are not guaranteed to appear in the NixOS system path.
+  # Keep qualification inputs bound to the same immutable package as the tool.
+  profilePath = "${kaibaProvisionPackage}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json";
+  qualificationSchemaPath = "${kaibaProvisionPackage}/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json";
   sourceRevisionIsCanonical = builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" sourceRevision != null;
 
   qualificationReady = pkgs.writeShellApplication {
