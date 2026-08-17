@@ -218,6 +218,7 @@ let
   # approved plan.
   mkRpi5PhysicalLaneGuard =
     {
+      compiledArtifactSetDigest,
       expectedBootImageDigest,
       expectedCustomerKeyHash,
       expectedEEPROMHash,
@@ -227,8 +228,16 @@ let
       ownedReadbackBundle,
       ownedRecoveryBundle,
       rootIntegrityBundle,
+      signedReleaseManifestDigest,
+      laneGuardPackageDigest,
       name ? "kaiba-rpi5-physical-lane-guard",
     }:
+    assert lib.assertMsg (canonicalDigest signedReleaseManifestDigest)
+      "signedReleaseManifestDigest must use canonical sha256:<64 lowercase hex> form";
+    assert lib.assertMsg (canonicalDigest laneGuardPackageDigest)
+      "laneGuardPackageDigest must use canonical sha256:<64 lowercase hex> form";
+    assert lib.assertMsg (canonicalDigest compiledArtifactSetDigest)
+      "compiledArtifactSetDigest must use canonical sha256:<64 lowercase hex> form";
     assert lib.assertMsg (canonicalDigest expectedBootImageDigest)
       "expectedBootImageDigest must use canonical sha256:<64 lowercase hex> form";
     assert lib.assertMsg (canonicalRawDigest expectedCustomerKeyHash)
@@ -259,15 +268,21 @@ let
         "-X=main.ownedRecoveryBundle=${toString ownedRecoveryBundle}"
         "-X=main.negativeBootBundle=${toString negativeBootBundle}"
         "-X=main.rootIntegrityBundle=${toString rootIntegrityBundle}"
+        "-X=main.signedReleaseManifestDigest=${signedReleaseManifestDigest}"
+        "-X=main.laneGuardPackageDigest=${laneGuardPackageDigest}"
+        "-X=main.compiledArtifactSetDigest=${compiledArtifactSetDigest}"
         "-X=main.expectedCustomerKeyHash=${expectedCustomerKeyHash}"
         "-X=main.expectedEEPROMHash=${expectedEEPROMHash}"
         "-X=main.expectedBootImageDigest=${expectedBootImageDigest}"
       ];
       passthru.kaibaPhysicalLaneGuard = {
         inherit
+          compiledArtifactSetDigest
           expectedBootImageDigest
           expectedCustomerKeyHash
           expectedEEPROMHash
+          laneGuardPackageDigest
+          signedReleaseManifestDigest
           ;
         gpioSet = pkgs.libgpiod;
         inherit rpiboot;

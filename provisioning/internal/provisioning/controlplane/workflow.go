@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
 func (s *Service) BindTarget(_ context.Context, request BindTargetRequest) (Transaction, error) {
@@ -51,28 +53,40 @@ func (s *Service) RecordApproval(_ context.Context, request RecordApprovalReques
 		if transaction.Target == nil || transaction.Target.FenceEpoch != claim.FenceEpoch {
 			return fmt.Errorf("%w: target must be directly reidentified in the current fence epoch", ErrStaleFence)
 		}
-		if request.TransactionDigest != transaction.TransactionDigest || request.TargetFingerprint != transaction.Target.Fingerprint || request.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash {
+		if request.TransactionDigest != transaction.TransactionDigest || request.TargetFingerprint != transaction.Target.Fingerprint ||
+			request.Release.SignedReleaseManifestDigest != transaction.BundleDigest ||
+			request.Release.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash {
 			return fmt.Errorf("%w: approval binding does not match the transaction and target", ErrConflict)
 		}
 		if !request.ExpiresAt.After(now) {
 			return fmt.Errorf("%w: approval already expired", ErrIllegalTransition)
+		}
+		if previous := transaction.Approval; previous != nil && request.PlanDigest == previous.PlanDigest &&
+			(request.Release != previous.Release || !request.ExpiresAt.Equal(previous.ExpiresAt)) {
+			return fmt.Errorf("%w: reapproval changed release binding or expiry without changing the plan digest", ErrConflict)
 		}
 		for _, operation := range request.AllowedOperations {
 			if !contains(claim.AllowedStages, operation) {
 				return fmt.Errorf("%w: claim does not authorize approved operation %q", ErrIllegalTransition, operation)
 			}
 		}
-		if err := validatePriorOperationsAgainstPlan(transaction.Operations, request.PlanDigest, request.AllowedOperations); err != nil {
+		if err := validatePriorOperationsAgainstPlan(
+			transaction.Operations,
+			request.PlanDigest,
+			request.Release,
+			request.ExpiresAt,
+			request.AllowedOperations,
+		); err != nil {
 			return err
 		}
 		transaction.Approval = &Approval{
 			ID: request.ApprovalID, ApproverID: request.ApproverID,
 			TransactionDigest: request.TransactionDigest, PlanDigest: request.PlanDigest,
 			StationID: claim.StationID, LaneID: claim.LaneID, FenceEpoch: claim.FenceEpoch,
-			TargetFingerprint:       request.TargetFingerprint,
-			ExpectedCustomerKeyHash: request.ExpectedCustomerKeyHash,
-			AllowedOperations:       append([]string(nil), request.AllowedOperations...),
-			AuditReceiptID:          request.AuditReceiptID, ApprovedAt: now, ExpiresAt: request.ExpiresAt.UTC(),
+			TargetFingerprint: request.TargetFingerprint,
+			Release:           request.Release,
+			AllowedOperations: append([]string(nil), request.AllowedOperations...),
+			AuditReceiptID:    request.AuditReceiptID, ApprovedAt: now, ExpiresAt: request.ExpiresAt.UTC(),
 		}
 		transaction.Status = StatusCommitApproved
 		return nil
@@ -116,7 +130,8 @@ func (s *Service) RecordIntent(_ context.Context, request RecordIntentRequest) (
 		}
 		transaction.Operations = append(transaction.Operations, OperationRecord{
 			ID: request.OperationID, Operation: request.Operation, Status: OperationIntentRecorded,
-			PlanDigest: request.PlanDigest, InputDigest: request.InputDigest,
+			PlanDigest: request.PlanDigest, Release: approval.Release, ApprovalExpiresAt: approval.ExpiresAt,
+			InputDigest:    request.InputDigest,
 			PrestateDigest: request.PrestateDigest, IntentAuditReceiptID: request.AuditReceiptID,
 			IntentAt: now, IntentFenceEpoch: claim.FenceEpoch,
 		})
@@ -297,7 +312,8 @@ func requireCurrentApproval(transaction *Transaction, claim *Claim, approvalID, 
 		approval.TransactionDigest != transaction.TransactionDigest || approval.FenceEpoch != claim.FenceEpoch ||
 		approval.StationID != claim.StationID || approval.LaneID != claim.LaneID ||
 		transaction.Target == nil || approval.TargetFingerprint != transaction.Target.Fingerprint ||
-		approval.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash {
+		approval.Release.SignedReleaseManifestDigest != transaction.BundleDigest ||
+		approval.Release.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash {
 		return nil, fmt.Errorf("%w: approval does not match current transaction, target, claim, and plan", ErrConflict)
 	}
 	if !approval.ExpiresAt.After(now) {
@@ -332,6 +348,9 @@ func validateCompletedDevelopmentCampaign(operations []OperationRecord, approval
 		if operation.PlanDigest != approval.PlanDigest {
 			return fmt.Errorf("%w: operation record %d has a different plan digest", ErrIllegalTransition, index+1)
 		}
+		if operation.Release != approval.Release || !operation.ApprovalExpiresAt.Equal(approval.ExpiresAt) {
+			return fmt.Errorf("%w: operation record %d has a different release binding or approval expiry", ErrIllegalTransition, index+1)
+		}
 		if operation.Operation != approval.AllowedOperations[next] {
 			return fmt.Errorf("%w: operation record %d is out of campaign order", ErrIllegalTransition, index+1)
 		}
@@ -361,11 +380,20 @@ func findOperation(operations []OperationRecord, id string) *OperationRecord {
 	return nil
 }
 
-func validatePriorOperationsAgainstPlan(operations []OperationRecord, planDigest string, approved []string) error {
+func validatePriorOperationsAgainstPlan(
+	operations []OperationRecord,
+	planDigest string,
+	release releasebinding.Binding,
+	approvalExpiresAt time.Time,
+	approved []string,
+) error {
 	next := 0
 	for _, operation := range operations {
 		if operation.PlanDigest != planDigest {
 			return fmt.Errorf("%w: fresh approval changed the plan digest after an intent was recorded", ErrConflict)
+		}
+		if operation.Release != release || !operation.ApprovalExpiresAt.Equal(approvalExpiresAt) {
+			return fmt.Errorf("%w: fresh approval changed the release binding or expiry after an intent was recorded", ErrConflict)
 		}
 		if next >= len(approved) || approved[next] != operation.Operation {
 			return fmt.Errorf("%w: prior operations do not match the newly approved ordered plan", ErrConflict)

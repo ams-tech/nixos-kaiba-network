@@ -49,7 +49,14 @@
         else
           "uncommitted";
 
-      defaultTargetSourceRevision = sourceRevision;
+      defaultTargetSourceRevision =
+        if
+          builtins.isString sourceRevision
+          && builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" sourceRevision != null
+        then
+          sourceRevision
+        else
+          throw "mkRpi5SecureBootTarget requires a clean Git source or an explicit canonical sourceRevision";
 
       # Keep this list deliberately small and literal.  The target module
       # filters the kernel DTBs to the single supported Pi 5 Model B file, and
@@ -292,6 +299,7 @@
           laneGuardFixture = provisioning.lib.mkRpi5PhysicalLaneGuard {
             inherit system;
             name = "kaiba-rpi5-physical-lane-guard-module-fixture";
+            compiledArtifactSetDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
             expectedBootImageDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
             expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
             expectedEEPROMHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
@@ -301,6 +309,8 @@
             ownedReadbackBundle = laneGuardFixtureBundle;
             ownedRecoveryBundle = laneGuardFixtureBundle;
             rootIntegrityBundle = laneGuardFixtureBundle;
+            laneGuardPackageDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+            signedReleaseManifestDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
           };
           moduleEval = import ./tests/module-eval.nix {
             inherit pkgs lib;

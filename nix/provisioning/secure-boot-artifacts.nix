@@ -61,8 +61,9 @@ assert lib.assertMsg (
   builtins.match "[a-z][a-z0-9-]{0,63}" bootOrderPolicy != null
 ) "bootOrderPolicy must be a lowercase policy identifier";
 assert lib.assertMsg (
-  builtins.isString sourceRevision && sourceRevision != ""
-) "sourceRevision must be non-empty";
+  builtins.isString sourceRevision
+  && builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" sourceRevision != null
+) "sourceRevision must be one canonical lowercase 40- or 64-hex Git revision";
 
 let
   generatedBootFiles = [ "kaiba-root-integrity.json" ];

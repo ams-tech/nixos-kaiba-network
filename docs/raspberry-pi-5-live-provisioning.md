@@ -153,8 +153,9 @@ The public construction boundaries are:
   converter and refuses to produce the signer package unless the SHA-256 of
   the resulting 264-byte key representation matches that expected hash;
 - provisioning-leaf `lib.mkRpi5PhysicalLaneGuard`, which requires immutable
-  store paths for every recovery/test bundle plus the expected customer-key,
-  EEPROM, and boot-image digests; and
+  store paths for every recovery/test bundle plus linker-fixed signed-release,
+  guard-package, compiled-artifact-set, customer-key, EEPROM, and boot-image
+  digests; and
 - the `provisioning-signing-gate`, `provisioning-control`,
   `provisioning-audit`, and `provisioning-lane-guard` NixOS modules.
 
@@ -211,9 +212,15 @@ foundation, not a mutation-capable orchestrator. It deliberately rejects
 started one-shot service whose approved plan and request must be installed by
 root below `/var/lib/kaiba-provision-lane-guard` before each invocation. It
 recomputes the domain-separated digest of every operation and of the ordered
-plan before observing a target, so stale or forged digest claims fail closed.
-That consistency check does not make a root-authored plan authoritative: root
-can also construct a different plan and derive matching digests.
+plan, and requires the plan's signed-release, guard-package,
+compiled-artifact-set, key, EEPROM, and boot-image digests to match the
+linker-fixed physical build before constructing the hardware adapter. The
+physical package can report those public linker values for a build-time wiring
+check. A value mismatch therefore fails closed, but the pending release adapter
+must still derive the guard-package and artifact-set values from actual
+path-and-content material. Those
+consistency checks do not make a root-authored plan authoritative: root can
+also construct a different plan and binary with matching digests.
 
 Do not run the HTTP station process as root or give it direct access to the
 lane-guard state directory or device nodes. Completing that bridge requires a
@@ -280,7 +287,8 @@ guard must observe target disappearance and the configured cold interval.
    secure-boot provisioning result, EEPROM update result, and EEPROM digest.
 10. Remove all power through the lane relay and cold-boot the signed NVMe image.
    Capture UART and verify customer-key bit 3 of the bootloader `signed`
-   property plus `boot_img_sha256` when supported by the pinned firmware.
+   property plus the mandatory, manifest-matching `boot_img_sha256` value.
+   Absence of that property is a preflight failure for this milestone.
 11. Run the separately signed owned-device readback, prove authorized recovery,
     reject stock recovery, rerun owned readback, and test altered, unsigned,
     wrong-key, alternate-media, and dm-verity-tampered inputs.

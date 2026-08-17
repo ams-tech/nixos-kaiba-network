@@ -5,15 +5,17 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
 const (
 	goldenOperationMaterial  = `{"sequence":3,"operation":"owned_readback","classification":"read_only","authorization_id":"authorization-golden","expected_prestate":{"customer_key_hash":"customer-before","eeprom_hash":"eeprom-before","security_state":"owned","power_state":"signed_os"},"expected_poststate":{"customer_key_hash":"customer-after","eeprom_hash":"eeprom-after","security_state":"owned_verified","power_state":"signed_os"},"maximum_duration_nanoseconds":90000000000}`
-	goldenOperationDigest    = "sha256:dd2c209f0d68640b74ea1be1cb6ce1efa7990751d443fcf950db37bb0c6e33a7"
-	goldenPlanMaterial       = `{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha1","station_id":"golden-station","lane_id":"golden-lane","transaction_id":"golden-transaction","target_fingerprint":"golden-target","fence_epoch":42,"operation_digests":["sha256:dd2c209f0d68640b74ea1be1cb6ce1efa7990751d443fcf950db37bb0c6e33a7"]}`
-	goldenPlanDigest         = "sha256:3f773c7f1cf8dc70230e981a162a7aa2b441ec3814e671e73a2c1dea95752187"
+	goldenOperationDigest    = "sha256:222415d361388db01f8af8f9637c3abdff0773e25968037ee2f6054dae9f5313"
+	goldenPlanMaterial       = `{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha2","station_id":"golden-station","lane_id":"golden-lane","transaction_id":"golden-transaction","release":{"signed_release_manifest_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","lane_guard_package_digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","compiled_artifact_set_digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","expected_customer_key_hash":"sha256:4444444444444444444444444444444444444444444444444444444444444444","expected_eeprom_digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555","expected_boot_image_digest":"sha256:6666666666666666666666666666666666666666666666666666666666666666"},"target_fingerprint":"golden-target","fence_epoch":42,"approval_expires_at":"2026-08-15T12:34:56.123456789Z","operation_digests":["sha256:222415d361388db01f8af8f9637c3abdff0773e25968037ee2f6054dae9f5313"]}`
+	goldenPlanDigest         = "sha256:b030f7df881ad7c8949a1377dae8f626c01b2d72d10f11f3620be88a49023b81"
 	escapedOperationMaterial = `{"sequence":4,"operation":"test_owned_recovery","classification":"reversible","authorization_id":"auth\u003c\u003e\u0026\"\\雪\u2028","expected_prestate":{"customer_key_hash":"line\nbreak","eeprom_hash":"tab\tvalue","security_state":"café","power_state":"slash/ok"},"expected_poststate":{"customer_key_hash":"quote\"value","eeprom_hash":"backslash\\value","security_state":"owned","power_state":"signed_os"},"maximum_duration_nanoseconds":1}`
-	escapedOperationDigest   = "sha256:9d485c7d3d4354208165b143dfaac57a56afb35550a6e1bdfd44600269b76942"
+	escapedOperationDigest   = "sha256:2840168db77994fbeb17da9f29f1c3e3aa556ecad482f550bba04ef14d865068"
 )
 
 func TestOperationDigestGoldenVector(t *testing.T) {
@@ -144,8 +146,15 @@ func TestPlanDigestCoversEveryBodyField(t *testing.T) {
 		{"station", func(value *Plan) { value.StationID = "changed-station" }},
 		{"lane", func(value *Plan) { value.LaneID = "changed-lane" }},
 		{"transaction", func(value *Plan) { value.TransactionID = "changed-transaction" }},
+		{"signed release manifest", func(value *Plan) { value.Release.SignedReleaseManifestDigest = digest("9") }},
+		{"lane guard package", func(value *Plan) { value.Release.LaneGuardPackageDigest = digest("9") }},
+		{"compiled artifact set", func(value *Plan) { value.Release.CompiledArtifactSetDigest = digest("9") }},
+		{"expected customer key", func(value *Plan) { value.Release.ExpectedCustomerKeyHash = digest("9") }},
+		{"expected EEPROM", func(value *Plan) { value.Release.ExpectedEEPROMDigest = digest("9") }},
+		{"expected boot image", func(value *Plan) { value.Release.ExpectedBootImageDigest = digest("9") }},
 		{"target", func(value *Plan) { value.TargetFingerprint = "changed-target" }},
 		{"fence", func(value *Plan) { value.FenceEpoch++ }},
+		{"approval expiry", func(value *Plan) { value.ApprovalExpiresAt = value.ApprovalExpiresAt.Add(time.Nanosecond) }},
 		{"operation body", func(value *Plan) { value.Operations[0].AuthorizationID = "changed-authorization" }},
 		{"operation appended", func(value *Plan) { value.Operations = append(value.Operations, goldenOperation()) }},
 		{"operation removed", func(value *Plan) { value.Operations = value.Operations[:0] }},
@@ -184,6 +193,22 @@ func TestPlanDigestCoversEveryBodyField(t *testing.T) {
 				t.Fatalf("%s changed the canonical plan digest", test.name)
 			}
 		})
+	}
+}
+
+func TestPlanDigestCanonicalizesApprovalExpiryToUTC(t *testing.T) {
+	plan := goldenPlan()
+	baseline, err := plan.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.ApprovalExpiresAt = plan.ApprovalExpiresAt.In(time.FixedZone("other-offset", 9*60*60))
+	actual, err := plan.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual != baseline {
+		t.Fatal("equivalent approval expiry instant changed the canonical plan digest")
 	}
 }
 
@@ -289,6 +314,24 @@ func TestPlanValidateRejectsStaleAndForgedDigests(t *testing.T) {
 	}
 }
 
+func TestPlanValidateRequiresReleaseBindingAndApprovalExpiry(t *testing.T) {
+	t.Run("release binding", func(t *testing.T) {
+		plan := testPlan()
+		plan.Release.ExpectedBootImageDigest = ""
+		if err := plan.Validate(testConfig()); err == nil {
+			t.Fatal("plan with incomplete release binding was accepted")
+		}
+	})
+
+	t.Run("approval expiry", func(t *testing.T) {
+		plan := testPlan()
+		plan.ApprovalExpiresAt = time.Time{}
+		if err := plan.Validate(testConfig()); err == nil {
+			t.Fatal("plan without approval expiry was accepted")
+		}
+	})
+}
+
 func TestLoadPlanRejectsDigestMismatchBeforeTargetObservation(t *testing.T) {
 	config := testConfig()
 	plan := testPlan()
@@ -356,8 +399,14 @@ func goldenOperation() OperationSpec {
 func goldenPlan() Plan {
 	return Plan{
 		SchemaVersion: ContractSchemaVersion, StationID: "golden-station", LaneID: "golden-lane",
-		TransactionID: "golden-transaction", PlanDigest: digest("f"), TargetFingerprint: "golden-target",
-		FenceEpoch: 42, ApprovalID: "golden-approval", IntentReceipt: "golden-intent",
-		Operations: []OperationSpec{goldenOperation()},
+		TransactionID: "golden-transaction", PlanDigest: digest("f"), Release: releasebinding.Binding{
+			SignedReleaseManifestDigest: digest("1"), LaneGuardPackageDigest: digest("2"),
+			CompiledArtifactSetDigest: digest("3"), ExpectedCustomerKeyHash: digest("4"),
+			ExpectedEEPROMDigest: digest("5"), ExpectedBootImageDigest: digest("6"),
+		}, TargetFingerprint: "golden-target",
+		FenceEpoch: 42, ApprovalID: "golden-approval",
+		ApprovalExpiresAt: time.Date(2026, 8, 15, 8, 34, 56, 123456789, time.FixedZone("golden-offset", -4*60*60)),
+		IntentReceipt:     "golden-intent",
+		Operations:        []OperationSpec{goldenOperation()},
 	}
 }

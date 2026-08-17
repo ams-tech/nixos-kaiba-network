@@ -117,10 +117,13 @@ func validateRecordApprovalRequest(request RecordApprovalRequest, now time.Time)
 	if !validIdentifier(request.ApprovalID) || !validIdentifier(request.ApproverID) {
 		return invalid("approval_id or approver_id is invalid")
 	}
-	for _, digest := range []string{request.TransactionDigest, request.PlanDigest, request.TargetFingerprint, request.ExpectedCustomerKeyHash, request.AuditReceiptID} {
+	for _, digest := range []string{request.TransactionDigest, request.PlanDigest, request.TargetFingerprint, request.AuditReceiptID} {
 		if !validDigest(digest) {
 			return invalid("approval digest or audit receipt is invalid")
 		}
+	}
+	if err := request.Release.Validate(); err != nil {
+		return invalid("release binding is invalid: " + err.Error())
 	}
 	if err := validateStringSet("allowed_operations", request.AllowedOperations, 1, 32); err != nil {
 		return err

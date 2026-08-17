@@ -76,13 +76,20 @@ func validateTransaction(transaction Transaction, fenceEpochs map[string]uint64)
 		}
 	}
 	operationIDs := make(map[string]struct{}, len(transaction.Operations))
-	for _, operation := range transaction.Operations {
+	for index, operation := range transaction.Operations {
 		if _, duplicate := operationIDs[operation.ID]; duplicate {
 			return corrupt("duplicate operation ID")
 		}
 		operationIDs[operation.ID] = struct{}{}
-		if err := validateStoredOperation(operation, transaction.FenceEpoch); err != nil {
+		if err := validateStoredOperation(operation, transaction); err != nil {
 			return err
+		}
+		if index > 0 {
+			first := transaction.Operations[0]
+			if operation.PlanDigest != first.PlanDigest || operation.Release != first.Release ||
+				!operation.ApprovalExpiresAt.Equal(first.ApprovalExpiresAt) {
+				return corrupt("operation plan bindings are inconsistent")
+			}
 		}
 	}
 	if (transaction.Status == StatusQuarantined) != (transaction.Quarantine != nil) {
@@ -150,9 +157,15 @@ func validateStoredApproval(approval Approval, transaction Transaction) error {
 	if !validIdentifier(approval.ID) || !validIdentifier(approval.ApproverID) || approval.TransactionDigest != transaction.TransactionDigest ||
 		!validDigest(approval.PlanDigest) || !validIdentifier(approval.StationID) || !validIdentifier(approval.LaneID) ||
 		approval.FenceEpoch != transaction.FenceEpoch || transaction.Target == nil ||
-		approval.TargetFingerprint != transaction.Target.Fingerprint || approval.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash ||
-		!validDigest(approval.AuditReceiptID) || approval.ApprovedAt.IsZero() || !approval.ExpiresAt.After(approval.ApprovedAt) {
+		approval.TargetFingerprint != transaction.Target.Fingerprint ||
+		approval.Release.SignedReleaseManifestDigest != transaction.BundleDigest ||
+		approval.Release.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash ||
+		!validDigest(approval.AuditReceiptID) || approval.ApprovedAt.IsZero() || !approval.ExpiresAt.After(approval.ApprovedAt) ||
+		approval.ExpiresAt.After(approval.ApprovedAt.Add(maximumApprovalLifetime)) {
 		return corrupt("invalid approval")
+	}
+	if err := approval.Release.Validate(); err != nil {
+		return corrupt("invalid approval release binding")
 	}
 	if err := validateStringSet("allowed_operations", approval.AllowedOperations, 1, 32); err != nil {
 		return corrupt("invalid approval operations")
@@ -163,11 +176,18 @@ func validateStoredApproval(approval Approval, transaction Transaction) error {
 	return nil
 }
 
-func validateStoredOperation(operation OperationRecord, maximumEpoch uint64) error {
+func validateStoredOperation(operation OperationRecord, transaction Transaction) error {
 	if !validIdentifier(operation.ID) || !validIdentifier(operation.Operation) || !validDigest(operation.PlanDigest) ||
 		!validDigest(operation.InputDigest) || !validDigest(operation.PrestateDigest) || !validDigest(operation.IntentAuditReceiptID) ||
-		operation.IntentAt.IsZero() || operation.IntentFenceEpoch == 0 || operation.IntentFenceEpoch > maximumEpoch {
+		operation.IntentAt.IsZero() || operation.IntentFenceEpoch == 0 || operation.IntentFenceEpoch > transaction.FenceEpoch ||
+		!operation.ApprovalExpiresAt.After(operation.IntentAt) ||
+		operation.ApprovalExpiresAt.After(operation.IntentAt.Add(maximumApprovalLifetime)) ||
+		operation.Release.SignedReleaseManifestDigest != transaction.BundleDigest ||
+		operation.Release.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash {
 		return corrupt("invalid operation intent")
+	}
+	if err := operation.Release.Validate(); err != nil {
+		return corrupt("invalid operation release binding")
 	}
 	switch operation.Status {
 	case OperationIntentRecorded:

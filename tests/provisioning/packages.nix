@@ -31,8 +31,13 @@ let
           "$out" \
           > /dev/null
       '';
+  canonicalSourceRevision40 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  canonicalSourceRevision64 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   mkSecureBootFixture =
-    name:
+    {
+      name,
+      sourceRevision ? canonicalSourceRevision40,
+    }:
     secureBootArtifactBuilder {
       inherit name;
       expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -45,10 +50,31 @@ let
       ];
       firmwareTree = secureBootFixtureFirmware;
       rootImage = secureBootFixtureRoot;
-      sourceRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      inherit sourceRevision;
     };
-  secureBootFixtureA = mkSecureBootFixture "kaiba-secure-boot-artifacts-fixture-a";
-  secureBootFixtureB = mkSecureBootFixture "kaiba-secure-boot-artifacts-fixture-b";
+  secureBootFixtureA = mkSecureBootFixture { name = "kaiba-secure-boot-artifacts-fixture-a"; };
+  secureBootFixtureB = mkSecureBootFixture { name = "kaiba-secure-boot-artifacts-fixture-b"; };
+  sourceRevisionAccepted =
+    sourceRevision:
+    (builtins.tryEval (
+      (mkSecureBootFixture {
+        name = "kaiba-secure-boot-artifacts-source-revision-evaluation";
+        inherit sourceRevision;
+      }).drvPath
+    )).success;
+  validSourceRevisions = [
+    canonicalSourceRevision40
+    canonicalSourceRevision64
+  ];
+  invalidSourceRevisions = [
+    ""
+    "uncommitted"
+    "release-candidate"
+    "${canonicalSourceRevision40}-dirty"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    (builtins.substring 0 39 canonicalSourceRevision40)
+    "${canonicalSourceRevision40}a"
+  ];
   signingGrantFixture = pkgs.writeText "kaiba-signing-grant-registry-fixture.json" (
     builtins.toJSON {
       schema_version = "kaiba.provisioning.signing-grant-registry/v1alpha1";
@@ -493,6 +519,7 @@ let
 
   physicalLaneGuardFixture = built.mkRpi5PhysicalLaneGuard {
     name = "kaiba-rpi5-physical-lane-guard-module-fixture";
+    compiledArtifactSetDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     expectedBootImageDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     expectedEEPROMHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
@@ -502,6 +529,8 @@ let
     ownedReadbackBundle = "${built.rpi5ProbeBundle}/bundle";
     ownedRecoveryBundle = "${built.rpi5ProbeBundle}/bundle";
     rootIntegrityBundle = "${built.rpi5ProbeBundle}/bundle";
+    laneGuardPackageDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    signedReleaseManifestDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
   };
 
   moduleEval = import ./module-eval.nix {
@@ -656,6 +685,11 @@ let
       '';
 
   secureBootArtifactContract =
+    assert lib.assertMsg (lib.all sourceRevisionAccepted validSourceRevisions)
+      "the secure-boot artifact builder rejected a canonical Git source revision";
+    assert lib.assertMsg (lib.all (sourceRevision: !(sourceRevisionAccepted sourceRevision))
+      invalidSourceRevisions
+    ) "the secure-boot artifact builder accepted a non-canonical source revision";
     pkgs.runCommand "kaiba-secure-boot-artifact-contract"
       {
         nativeBuildInputs = [
@@ -676,6 +710,8 @@ let
         test "$(jq -r .persistent_mutable_state ${secureBootFixtureA}/manifest.json)" = tmpfs-only
         test "$(jq -r .expected_customer_key_hash ${secureBootFixtureA}/manifest.json)" = \
           sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        test "$(jq -r .source_revision ${secureBootFixtureA}/manifest.json)" = \
+          ${canonicalSourceRevision40}
         jq -e '
           .boot_image_size_bytes == 100663296
           and .firmware_allowlist == [
@@ -831,6 +867,25 @@ let
         test -x ${built.serviceSuite}/bin/kaiba-provision-station
         test -x ${built.serviceSuite}/bin/kaiba-provision-yubikey-wrapper
         test -x ${built.provision}/bin/kaiba-provision
+        test -x ${physicalLaneGuardFixture}/bin/kaiba-provision-lane-guard
+        ${physicalLaneGuardFixture}/bin/kaiba-provision-lane-guard \
+          --print-release-binding > "$TMPDIR/physical-lane-release-binding.json"
+        jq -e '
+          . == {
+            "signed_release_manifest_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "lane_guard_package_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "compiled_artifact_set_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "expected_customer_key_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "expected_eeprom_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "expected_boot_image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ' "$TMPDIR/physical-lane-release-binding.json"
+        test '${physicalLaneGuardFixture.kaibaPhysicalLaneGuard.signedReleaseManifestDigest}' = \
+          'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+        test '${physicalLaneGuardFixture.kaibaPhysicalLaneGuard.laneGuardPackageDigest}' = \
+          'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+        test '${physicalLaneGuardFixture.kaibaPhysicalLaneGuard.compiledArtifactSetDigest}' = \
+          'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
         test -r ${built.provision}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json
         test -r ${built.provision}/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json
         test -f ${deviceProfileSchema}/passed

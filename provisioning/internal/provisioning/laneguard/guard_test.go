@@ -10,11 +10,27 @@ import (
 	"time"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/campaign"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
 type fakeClock struct{ now time.Time }
 
 func (clock fakeClock) Now() time.Time { return clock.now }
+
+type countingStore struct {
+	gets int
+	puts int
+}
+
+func (store *countingStore) Get(string) (Attempt, bool, error) {
+	store.gets++
+	return Attempt{}, false, nil
+}
+
+func (store *countingStore) Put(Attempt) error {
+	store.puts++
+	return nil
+}
 
 type fakeHardware struct {
 	mu            sync.Mutex
@@ -142,6 +158,43 @@ func TestGuardNeverRepeatsUncertainIrreversibleOperation(t *testing.T) {
 	}
 	if hardware.executeCount != 1 {
 		t.Fatalf("reconciliation executed hardware; count = %d", hardware.executeCount)
+	}
+}
+
+func TestGuardRejectsExpiredApprovalBeforeObservationHardwareOrJournal(t *testing.T) {
+	guard, hardware, _, plan, _ := newTestGuard(t)
+	journal := &countingStore{}
+	guard.store = journal
+	guard.clock = fakeClock{now: plan.ApprovalExpiresAt}
+	observationsBefore := hardware.observeCount
+
+	request := requestFor(plan, 1, plan.ApprovalExpiresAt.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrApprovalExpired) {
+		t.Fatalf("expired execute error = %v, want approval expired", err)
+	}
+	if hardware.observeCount != observationsBefore || hardware.executeCount != 0 {
+		t.Fatalf("expired approval reached hardware: observations %d -> %d, executions %d", observationsBefore, hardware.observeCount, hardware.executeCount)
+	}
+	if journal.gets != 0 || journal.puts != 0 {
+		t.Fatalf("expired approval reached journal: gets=%d puts=%d", journal.gets, journal.puts)
+	}
+}
+
+func TestGuardAllowsReconciliationAfterApprovalExpiry(t *testing.T) {
+	guard, hardware, _, plan, now := newTestGuard(t)
+	hardware.executeErr = errors.New("response lost after command")
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("uncertain execute error = %v", err)
+	}
+
+	guard.clock = fakeClock{now: plan.ApprovalExpiresAt.Add(time.Second)}
+	reconciled, err := guard.Reconcile(context.Background(), request)
+	if err != nil || reconciled.Status != AttemptVerified {
+		t.Fatalf("expired reconciliation = %#v, %v", reconciled, err)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("expired reconciliation executed hardware; count = %d", hardware.executeCount)
 	}
 }
 
@@ -294,9 +347,16 @@ func TestGuardRejectsStaleBindingsBeforeHardware(t *testing.T) {
 		{"lane", func(request *ExecuteRequest) { request.LaneID = "other-lane" }},
 		{"transaction", func(request *ExecuteRequest) { request.TransactionID = "other-transaction" }},
 		{"plan", func(request *ExecuteRequest) { request.PlanDigest = digest("9") }},
+		{"signed release manifest", func(request *ExecuteRequest) { request.Release.SignedReleaseManifestDigest = digest("9") }},
+		{"lane guard package", func(request *ExecuteRequest) { request.Release.LaneGuardPackageDigest = digest("9") }},
+		{"compiled artifact set", func(request *ExecuteRequest) { request.Release.CompiledArtifactSetDigest = digest("9") }},
+		{"expected customer key", func(request *ExecuteRequest) { request.Release.ExpectedCustomerKeyHash = digest("9") }},
+		{"expected EEPROM", func(request *ExecuteRequest) { request.Release.ExpectedEEPROMDigest = digest("9") }},
+		{"expected boot image", func(request *ExecuteRequest) { request.Release.ExpectedBootImageDigest = digest("9") }},
 		{"target", func(request *ExecuteRequest) { request.TargetFingerprint = "other-target" }},
 		{"fence", func(request *ExecuteRequest) { request.FenceEpoch++ }},
 		{"approval", func(request *ExecuteRequest) { request.ApprovalID = "other-approval" }},
+		{"approval expiry", func(request *ExecuteRequest) { request.ApprovalExpiresAt = request.ApprovalExpiresAt.Add(time.Second) }},
 		{"intent", func(request *ExecuteRequest) { request.IntentReceipt = "other-receipt" }},
 		{"operation", func(request *ExecuteRequest) { request.OperationDigest = digest("8") }},
 		{"authorization", func(request *ExecuteRequest) { request.AuthorizationID = "other-authorization" }},
@@ -307,11 +367,36 @@ func TestGuardRejectsStaleBindingsBeforeHardware(t *testing.T) {
 			guard, hardware, _, plan, now := newTestGuard(t)
 			request := requestFor(plan, 1, now.Add(10*time.Minute))
 			test.change(&request)
+			observationsBefore := hardware.observeCount
 			if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrPlanMismatch) {
 				t.Fatalf("error = %v, want plan mismatch", err)
 			}
-			if hardware.executeCount != 0 {
-				t.Fatalf("stale request reached hardware")
+			if hardware.observeCount != observationsBefore || hardware.executeCount != 0 {
+				t.Fatalf("stale request reached hardware: observations %d -> %d, executions %d", observationsBefore, hardware.observeCount, hardware.executeCount)
+			}
+		})
+	}
+}
+
+func TestSamePlanIncludesReleaseAndApprovalExpiry(t *testing.T) {
+	plan := testPlan()
+	equivalent := clonePlan(plan)
+	equivalent.ApprovalExpiresAt = equivalent.ApprovalExpiresAt.In(time.FixedZone("equivalent-offset", -7*60*60))
+	if !samePlan(plan, equivalent) {
+		t.Fatal("plans with the same canonical approval-expiry instant compare different")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Plan)
+	}{
+		{"release", func(value *Plan) { value.Release.ExpectedEEPROMDigest = digest("9") }},
+		{"approval expiry", func(value *Plan) { value.ApprovalExpiresAt = value.ApprovalExpiresAt.Add(time.Second) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changed := clonePlan(plan)
+			test.mutate(&changed)
+			if samePlan(plan, changed) {
+				t.Fatalf("plans compare equal after mutating %s", test.name)
 			}
 		})
 	}
@@ -521,8 +606,9 @@ func testPlanBody() Plan {
 	booted.PowerState = "signed_os"
 	return Plan{
 		SchemaVersion: ContractSchemaVersion, StationID: "station-1", LaneID: "lane-1",
-		TransactionID: "transaction-1", TargetFingerprint: "target-1",
-		FenceEpoch: 7, ApprovalID: "approval-1", IntentReceipt: "receipt-1",
+		TransactionID: "transaction-1", Release: testReleaseBinding(), TargetFingerprint: "target-1",
+		FenceEpoch: 7, ApprovalID: "approval-1",
+		ApprovalExpiresAt: time.Date(2026, 8, 16, 12, 0, 0, 123456789, time.UTC), IntentReceipt: "receipt-1",
 		Operations: []OperationSpec{
 			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: owned, MaximumDuration: time.Minute},
 			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, AuthorizationID: "authorization-2", ExpectedPrestate: owned, ExpectedPoststate: booted, MaximumDuration: time.Minute},
@@ -540,11 +626,23 @@ func requestFor(plan Plan, sequence uint32, expiry time.Time) ExecuteRequest {
 	return ExecuteRequest{
 		SchemaVersion: ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
 		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest,
+		Release:           plan.Release,
 		TargetFingerprint: plan.TargetFingerprint, FenceEpoch: plan.FenceEpoch,
-		ApprovalID: plan.ApprovalID, IntentReceipt: plan.IntentReceipt,
+		ApprovalID: plan.ApprovalID, ApprovalExpiresAt: plan.ApprovalExpiresAt, IntentReceipt: plan.IntentReceipt,
 		Sequence: sequence, OperationDigest: operation.OperationDigest,
 		AuthorizationID: operation.AuthorizationID, ExpectedPrestate: operation.ExpectedPrestate,
 		ClaimExpiresAt: expiry,
+	}
+}
+
+func testReleaseBinding() releasebinding.Binding {
+	return releasebinding.Binding{
+		SignedReleaseManifestDigest: digest("1"),
+		LaneGuardPackageDigest:      digest("2"),
+		CompiledArtifactSetDigest:   digest("3"),
+		ExpectedCustomerKeyHash:     digest("4"),
+		ExpectedEEPROMDigest:        digest("5"),
+		ExpectedBootImageDigest:     digest("6"),
 	}
 }
 

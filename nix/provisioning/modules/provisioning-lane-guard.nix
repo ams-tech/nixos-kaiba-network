@@ -75,14 +75,15 @@ in
       example = lib.literalExpression ''
         inputs.kaiba-provisioning.lib.mkRpi5PhysicalLaneGuard {
           system = pkgs.system;
-          # Supply the six immutable RPIBOOT bundles and three expected digests.
+          # Supply the six immutable RPIBOOT bundles, release/build bindings,
+          # and three expected target digests.
         }
       '';
       description = ''
         Explicit immutable package containing bin/kaiba-provision-lane-guard.
-        Its linker-fixed rpiboot, gpioset, bundle, and expected-digest inputs
-        must describe this station. There is deliberately no inferred or
-        source-tree default.
+        Its linker-fixed rpiboot, gpioset, bundle, signed-release, build, and
+        expected-target digest inputs must describe this station. There is
+        deliberately no inferred or source-tree default.
       '';
     };
 

@@ -4,12 +4,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
 const (
-	operationDigestDomain = "kaiba.provisioning.lane-guard.operation-digest.v1alpha1"
-	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha1"
+	operationDigestDomain = "kaiba.provisioning.lane-guard.operation-digest.v1alpha2"
+	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha2"
 )
 
 type operationDigestMaterial struct {
@@ -23,13 +27,15 @@ type operationDigestMaterial struct {
 }
 
 type planDigestMaterial struct {
-	SchemaVersion     string   `json:"schema_version"`
-	StationID         string   `json:"station_id"`
-	LaneID            string   `json:"lane_id"`
-	TransactionID     string   `json:"transaction_id"`
-	TargetFingerprint string   `json:"target_fingerprint"`
-	FenceEpoch        uint64   `json:"fence_epoch"`
-	OperationDigests  []string `json:"operation_digests"`
+	SchemaVersion     string                 `json:"schema_version"`
+	StationID         string                 `json:"station_id"`
+	LaneID            string                 `json:"lane_id"`
+	TransactionID     string                 `json:"transaction_id"`
+	Release           releasebinding.Binding `json:"release"`
+	TargetFingerprint string                 `json:"target_fingerprint"`
+	FenceEpoch        uint64                 `json:"fence_epoch"`
+	ApprovalExpiresAt string                 `json:"approval_expires_at"`
+	OperationDigests  []string               `json:"operation_digests"`
 }
 
 // CanonicalDigestMaterial returns the deterministic operation representation
@@ -60,9 +66,14 @@ func (operation OperationSpec) Digest() (string, error) {
 }
 
 // CanonicalDigestMaterial returns the deterministic plan representation used
-// for digest derivation. Operation digests are independently recomputed in
-// order. PlanDigest, ApprovalID, and IntentReceipt are deliberately excluded.
+// for digest derivation. The release binding and canonical UTC approval expiry
+// are included, and operation digests are independently recomputed in order.
+// PlanDigest, ApprovalID, and IntentReceipt are deliberately excluded.
 func (plan Plan) CanonicalDigestMaterial() ([]byte, error) {
+	approvalExpiresAt, err := canonicalApprovalExpiry(plan.ApprovalExpiresAt)
+	if err != nil {
+		return nil, err
+	}
 	operationDigests := make([]string, len(plan.Operations))
 	for index, operation := range plan.Operations {
 		digest, err := operation.Digest()
@@ -76,14 +87,28 @@ func (plan Plan) CanonicalDigestMaterial() ([]byte, error) {
 		StationID:         plan.StationID,
 		LaneID:            plan.LaneID,
 		TransactionID:     plan.TransactionID,
+		Release:           plan.Release,
 		TargetFingerprint: plan.TargetFingerprint,
 		FenceEpoch:        plan.FenceEpoch,
+		ApprovalExpiresAt: approvalExpiresAt,
 		OperationDigests:  operationDigests,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode canonical plan digest material: %w", err)
 	}
 	return encoded, nil
+}
+
+func canonicalApprovalExpiry(value time.Time) (string, error) {
+	if value.IsZero() {
+		return "", errors.New("plan requires an approval expiry")
+	}
+	canonical := value.UTC().Format(time.RFC3339Nano)
+	parsed, err := time.Parse(time.RFC3339Nano, canonical)
+	if err != nil || !parsed.Equal(value) {
+		return "", errors.New("plan approval expiry must be representable as canonical UTC RFC3339Nano")
+	}
+	return canonical, nil
 }
 
 // Digest returns the domain-separated digest of the canonical plan body and

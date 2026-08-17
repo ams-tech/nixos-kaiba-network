@@ -150,6 +150,14 @@ hardware and authorization boundaries.
 Deferred, rather than exercised: real Namecheap or provider changes and SLAs,
 Internet/ISP/modem/NAT behavior, outside-in probes, public ACME, DNSSEC,
 automatic promotion or fencing, redundant controllers or replicated desired
-state, fleet-scale load and sharding, device image and secure-boot work,
-deployment, production enrollment and credential rotation, hardware-backed
-signing, attestation, and monitoring.
+state, fleet-scale load and sharding, deployment, production enrollment and
+credential rotation, production hardware-backed signing, attestation, and
+monitoring.
+
+The Raspberry Pi 5 development lane is no longer wholly deferred. The
+repository contains reviewed read-only hardware-qualification evidence,
+deterministic unsigned boot and dm-verity artifacts, an evaluated immutable
+target, and development signing, control, audit, and lane-guard foundations.
+It still lacks the complete signed release, authenticated control-to-guard
+bridge, target-media writer, live-token evidence, and physical failure campaign
+required before an irreversible ownership ceremony.

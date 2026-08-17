@@ -12,6 +12,7 @@ import (
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/physicalrpi5"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
 type commandHardware struct {
@@ -33,6 +34,18 @@ func (hardware *commandHardware) Execute(_ context.Context, _ laneguard.Config, 
 func TestDisabledCommandValidatesLaneWithoutMutationInputs(t *testing.T) {
 	if err := run(context.Background(), nil); err != nil {
 		t.Fatalf("disabled run: %v", err)
+	}
+}
+
+func TestImmutableReleaseBindingUsesEveryLinkerValue(t *testing.T) {
+	restoreCommandGlobals(t)
+	setImmutableTestGlobals()
+	binding, err := immutableReleaseBinding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding != commandReleaseBinding() {
+		t.Fatalf("immutable release binding = %#v", binding)
 	}
 }
 
@@ -124,6 +137,55 @@ func TestCommandRejectsMismatchedRequestBeforeConstructingHardware(t *testing.T)
 	}
 }
 
+func TestCommandRejectsReleaseThatDiffersFromImmutableBuild(t *testing.T) {
+	restoreCommandGlobals(t)
+	effectiveUID = func() int { return 0 }
+	setImmutableTestGlobals()
+	plan, request := commandPlanAndRequest()
+	compiledArtifactSetDigest = commandDigest("9")
+	buildHardware = func(physicalrpi5.Config) (laneguard.Hardware, error) {
+		t.Fatal("release-binding mismatch reached hardware construction")
+		return nil, nil
+	}
+	directory := t.TempDir()
+	err := run(context.Background(), []string{
+		"--enable-mutations",
+		"--plan", writeJSON(t, directory, "plan.json", plan),
+		"--request", writeJSON(t, directory, "request.json", request),
+		"--journal", filepath.Join(directory, "journal.json"),
+	})
+	if !errors.Is(err, laneguard.ErrPlanMismatch) {
+		t.Fatalf("error = %v, want plan mismatch", err)
+	}
+}
+
+func TestCommandRejectsExpiredApprovalBeforeConstructingHardware(t *testing.T) {
+	restoreCommandGlobals(t)
+	effectiveUID = func() int { return 0 }
+	plan, request := commandPlanAndRequest()
+	plan.ApprovalExpiresAt = time.Now().UTC().Add(-time.Minute)
+	plan, err := plan.WithDerivedDigests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.PlanDigest = plan.PlanDigest
+	request.ApprovalExpiresAt = plan.ApprovalExpiresAt
+	buildHardware = func(physicalrpi5.Config) (laneguard.Hardware, error) {
+		t.Fatal("expired approval reached hardware construction")
+		return nil, nil
+	}
+	directory := t.TempDir()
+	err = run(context.Background(), []string{
+		"--enable-mutations",
+		"--plan", writeJSON(t, directory, "plan.json", plan),
+		"--request", writeJSON(t, directory, "request.json", request),
+		"--journal", filepath.Join(directory, "journal.json"),
+	})
+	if !errors.Is(err, laneguard.ErrApprovalExpired) {
+		t.Fatalf("error = %v, want approval expired", err)
+	}
+}
+
 func TestStrictInputRejectsDuplicateFieldsAndSymlinks(t *testing.T) {
 	directory := t.TempDir()
 	duplicatePath := filepath.Join(directory, "duplicate.json")
@@ -148,8 +210,8 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 	poststate := laneguard.DirectState{CustomerKeyHash: strings.Repeat("1", 64), EEPROMHash: strings.Repeat("e", 64), SecurityState: "owned", PowerState: "rpiboot"}
 	plan := laneguard.Plan{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: "development-station", LaneID: "lane-1",
-		TransactionID: "transaction-1", TargetFingerprint: "target-1",
-		FenceEpoch: 1, ApprovalID: "approval-1", IntentReceipt: "intent-1",
+		TransactionID: "transaction-1", Release: commandReleaseBinding(), TargetFingerprint: "target-1",
+		FenceEpoch: 1, ApprovalID: "approval-1", ApprovalExpiresAt: time.Now().UTC().Add(5 * time.Minute), IntentReceipt: "intent-1",
 		Operations: []laneguard.OperationSpec{
 			{
 				Sequence: 1, Operation: laneguard.OperationProgramCustomerKeyAndEEPROM,
@@ -202,13 +264,24 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 	plan = derived
 	request := laneguard.ExecuteRequest{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
-		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest, TargetFingerprint: plan.TargetFingerprint,
-		FenceEpoch: plan.FenceEpoch, ApprovalID: plan.ApprovalID, IntentReceipt: plan.IntentReceipt,
+		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest, Release: plan.Release, TargetFingerprint: plan.TargetFingerprint,
+		FenceEpoch: plan.FenceEpoch, ApprovalID: plan.ApprovalID, ApprovalExpiresAt: plan.ApprovalExpiresAt, IntentReceipt: plan.IntentReceipt,
 		Sequence: 1, OperationDigest: plan.Operations[0].OperationDigest,
 		AuthorizationID: plan.Operations[0].AuthorizationID, ExpectedPrestate: prestate,
 		ClaimExpiresAt: time.Now().Add(10 * time.Minute),
 	}
 	return plan, request
+}
+
+func commandReleaseBinding() releasebinding.Binding {
+	return releasebinding.Binding{
+		SignedReleaseManifestDigest: commandDigest("f"),
+		LaneGuardPackageDigest:      commandDigest("d"),
+		CompiledArtifactSetDigest:   commandDigest("c"),
+		ExpectedCustomerKeyHash:     commandDigest("1"),
+		ExpectedEEPROMDigest:        commandDigest("e"),
+		ExpectedBootImageDigest:     commandDigest("b"),
+	}
 }
 
 func writeJSON(t *testing.T, directory, name string, value any) string {
@@ -236,6 +309,9 @@ func setImmutableTestGlobals() {
 	expectedCustomerKeyHash = strings.Repeat("1", 64)
 	expectedEEPROMHash = strings.Repeat("e", 64)
 	expectedBootImageDigest = "sha256:" + strings.Repeat("b", 64)
+	signedReleaseManifestDigest = commandDigest("f")
+	laneGuardPackageDigest = commandDigest("d")
+	compiledArtifactSetDigest = commandDigest("c")
 }
 
 func restoreCommandGlobals(t *testing.T) {
@@ -244,6 +320,7 @@ func restoreCommandGlobals(t *testing.T) {
 	values := []string{
 		rpibootBinary, gpioSetBinary, freshReadbackBundle, freshCommitBundle,
 		ownedReadbackBundle, ownedRecoveryBundle, negativeBootBundle, rootIntegrityBundle,
+		signedReleaseManifestDigest, laneGuardPackageDigest, compiledArtifactSetDigest,
 		expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest,
 	}
 	t.Cleanup(func() {
@@ -252,7 +329,8 @@ func restoreCommandGlobals(t *testing.T) {
 		freshReadbackBundle, freshCommitBundle = values[2], values[3]
 		ownedReadbackBundle, ownedRecoveryBundle = values[4], values[5]
 		negativeBootBundle, rootIntegrityBundle = values[6], values[7]
-		expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest = values[8], values[9], values[10]
+		signedReleaseManifestDigest, laneGuardPackageDigest, compiledArtifactSetDigest = values[8], values[9], values[10]
+		expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest = values[11], values[12], values[13]
 	})
 }
 

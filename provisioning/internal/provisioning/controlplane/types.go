@@ -3,11 +3,15 @@
 // the responsibility of the station lane guard and target adapter.
 package controlplane
 
-import "time"
+import (
+	"time"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
+)
 
 const (
-	TransactionSchemaVersion = "provisioning.kaiba.network/control-transaction/v1alpha1"
-	StoreSchemaVersion       = "provisioning.kaiba.network/control-store/v1alpha1"
+	TransactionSchemaVersion = "provisioning.kaiba.network/control-transaction/v1alpha2"
+	StoreSchemaVersion       = "provisioning.kaiba.network/control-store/v1alpha2"
 	CommandSchemaVersion     = "provisioning.kaiba.network/control-command/v1alpha1"
 
 	CreateTransactionRequestSchemaVersion    = "provisioning.kaiba.network/create-transaction-request/v1alpha1"
@@ -16,7 +20,7 @@ const (
 	TransferClaimRequestSchemaVersion        = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
 	ReleaseClaimRequestSchemaVersion         = "provisioning.kaiba.network/release-claim-request/v1alpha1"
 	BindTargetRequestSchemaVersion           = "provisioning.kaiba.network/bind-target-request/v1alpha1"
-	RecordApprovalRequestSchemaVersion       = "provisioning.kaiba.network/record-approval-request/v1alpha1"
+	RecordApprovalRequestSchemaVersion       = "provisioning.kaiba.network/record-approval-request/v1alpha2"
 	RecordIntentRequestSchemaVersion         = "provisioning.kaiba.network/record-intent-request/v1alpha1"
 	RecordEvidenceRequestSchemaVersion       = "provisioning.kaiba.network/record-evidence-request/v1alpha1"
 	RecordReconciliationRequestSchemaVersion = "provisioning.kaiba.network/record-reconciliation-request/v1alpha1"
@@ -106,36 +110,38 @@ type Claim struct {
 }
 
 type Approval struct {
-	ID                      string    `json:"id"`
-	ApproverID              string    `json:"approver_id"`
-	TransactionDigest       string    `json:"transaction_digest"`
-	PlanDigest              string    `json:"plan_digest"`
-	StationID               string    `json:"station_id"`
-	LaneID                  string    `json:"lane_id"`
-	FenceEpoch              uint64    `json:"fence_epoch"`
-	TargetFingerprint       string    `json:"target_fingerprint"`
-	ExpectedCustomerKeyHash string    `json:"expected_customer_key_hash"`
-	AllowedOperations       []string  `json:"allowed_operations"`
-	AuditReceiptID          string    `json:"audit_receipt_id"`
-	ApprovedAt              time.Time `json:"approved_at"`
-	ExpiresAt               time.Time `json:"expires_at"`
+	ID                string                 `json:"id"`
+	ApproverID        string                 `json:"approver_id"`
+	TransactionDigest string                 `json:"transaction_digest"`
+	PlanDigest        string                 `json:"plan_digest"`
+	StationID         string                 `json:"station_id"`
+	LaneID            string                 `json:"lane_id"`
+	FenceEpoch        uint64                 `json:"fence_epoch"`
+	TargetFingerprint string                 `json:"target_fingerprint"`
+	Release           releasebinding.Binding `json:"release"`
+	AllowedOperations []string               `json:"allowed_operations"`
+	AuditReceiptID    string                 `json:"audit_receipt_id"`
+	ApprovedAt        time.Time              `json:"approved_at"`
+	ExpiresAt         time.Time              `json:"expires_at"`
 }
 
 type OperationRecord struct {
-	ID                           string          `json:"id"`
-	Operation                    string          `json:"operation"`
-	Status                       OperationStatus `json:"status"`
-	PlanDigest                   string          `json:"plan_digest"`
-	InputDigest                  string          `json:"input_digest"`
-	PrestateDigest               string          `json:"prestate_digest"`
-	IntentAuditReceiptID         string          `json:"intent_audit_receipt_id"`
-	IntentAt                     time.Time       `json:"intent_at"`
-	IntentFenceEpoch             uint64          `json:"intent_fence_epoch"`
-	OutputDigest                 string          `json:"output_digest,omitempty"`
-	ObservationDigest            string          `json:"observation_digest,omitempty"`
-	EvidenceAuditReceiptID       string          `json:"evidence_audit_receipt_id,omitempty"`
-	EvidenceAt                   *time.Time      `json:"evidence_at,omitempty"`
-	ReconciliationAuditReceiptID string          `json:"reconciliation_audit_receipt_id,omitempty"`
+	ID                           string                 `json:"id"`
+	Operation                    string                 `json:"operation"`
+	Status                       OperationStatus        `json:"status"`
+	PlanDigest                   string                 `json:"plan_digest"`
+	Release                      releasebinding.Binding `json:"release"`
+	ApprovalExpiresAt            time.Time              `json:"approval_expires_at"`
+	InputDigest                  string                 `json:"input_digest"`
+	PrestateDigest               string                 `json:"prestate_digest"`
+	IntentAuditReceiptID         string                 `json:"intent_audit_receipt_id"`
+	IntentAt                     time.Time              `json:"intent_at"`
+	IntentFenceEpoch             uint64                 `json:"intent_fence_epoch"`
+	OutputDigest                 string                 `json:"output_digest,omitempty"`
+	ObservationDigest            string                 `json:"observation_digest,omitempty"`
+	EvidenceAuditReceiptID       string                 `json:"evidence_audit_receipt_id,omitempty"`
+	EvidenceAt                   *time.Time             `json:"evidence_at,omitempty"`
+	ReconciliationAuditReceiptID string                 `json:"reconciliation_audit_receipt_id,omitempty"`
 }
 
 type QuarantineRecord struct {
@@ -262,15 +268,15 @@ type RecordApprovalRequest struct {
 	SchemaVersion  string `json:"schema_version"`
 	IdempotencyKey string `json:"idempotency_key"`
 	MutationContext
-	ApprovalID              string    `json:"approval_id"`
-	ApproverID              string    `json:"approver_id"`
-	TransactionDigest       string    `json:"transaction_digest"`
-	PlanDigest              string    `json:"plan_digest"`
-	TargetFingerprint       string    `json:"target_fingerprint"`
-	ExpectedCustomerKeyHash string    `json:"expected_customer_key_hash"`
-	AllowedOperations       []string  `json:"allowed_operations"`
-	AuditReceiptID          string    `json:"audit_receipt_id"`
-	ExpiresAt               time.Time `json:"expires_at"`
+	ApprovalID        string                 `json:"approval_id"`
+	ApproverID        string                 `json:"approver_id"`
+	TransactionDigest string                 `json:"transaction_digest"`
+	PlanDigest        string                 `json:"plan_digest"`
+	TargetFingerprint string                 `json:"target_fingerprint"`
+	Release           releasebinding.Binding `json:"release"`
+	AllowedOperations []string               `json:"allowed_operations"`
+	AuditReceiptID    string                 `json:"audit_receipt_id"`
+	ExpiresAt         time.Time              `json:"expires_at"`
 }
 
 type RecordIntentRequest struct {

@@ -304,8 +304,8 @@ The final record contains no secret values. At minimum retain:
 - RPIBOOT metadata including `CUSTOMER_KEY_HASH`, `EEPROM_UPDATE`,
   `SECURE_BOOT_PROVISION`, and `EEPROM_HASH` when emitted;
 - cold-boot UART evidence, bit 3 of the bootloader `signed` property, and the
-  bootloader-provided `boot_img_sha256` value when supported by the pinned
-  firmware;
+  mandatory bootloader-provided `boot_img_sha256` value matching the approved
+  manifest;
 - each positive, negative, rollback, and post-finalization retest result; and
 - operator, approver, station, lane, transaction, timestamps, final lifecycle
   state, and any quarantine reason.

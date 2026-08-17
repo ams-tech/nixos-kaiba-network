@@ -12,27 +12,32 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/physicalrpi5"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
 // These values are immutable build inputs populated with -X linker flags by
 // the station package. There are intentionally no runtime flags for them.
 var (
-	rpibootBinary           string
-	gpioSetBinary           string
-	freshReadbackBundle     string
-	freshCommitBundle       string
-	ownedReadbackBundle     string
-	ownedRecoveryBundle     string
-	negativeBootBundle      string
-	rootIntegrityBundle     string
-	expectedCustomerKeyHash string
-	expectedEEPROMHash      string
-	expectedBootImageDigest string
+	rpibootBinary               string
+	gpioSetBinary               string
+	freshReadbackBundle         string
+	freshCommitBundle           string
+	ownedReadbackBundle         string
+	ownedRecoveryBundle         string
+	negativeBootBundle          string
+	rootIntegrityBundle         string
+	signedReleaseManifestDigest string
+	laneGuardPackageDigest      string
+	compiledArtifactSetDigest   string
+	expectedCustomerKeyHash     string
+	expectedEEPROMHash          string
+	expectedBootImageDigest     string
 )
 
 var effectiveUID = os.Geteuid
@@ -68,6 +73,7 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	requestPath := flags.String("request", "", "absolute execute/reconcile request JSON path")
 	mode := flags.String("mode", "execute", "one-shot operation: execute or reconcile")
 	enableMutations := flags.Bool("enable-mutations", false, "enable the immutable physical RPIBOOT adapter")
+	printReleaseBinding := flags.Bool("print-release-binding", false, "print the immutable public release binding as JSON and exit")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -86,6 +92,18 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	}
 	if err := laneConfig.Validate(); err != nil {
 		return err
+	}
+	if *printReleaseBinding {
+		if *enableMutations {
+			return errors.New("print-release-binding cannot be combined with enable-mutations")
+		}
+		compiledRelease, err := immutableReleaseBinding()
+		if err != nil {
+			return err
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetEscapeHTML(false)
+		return encoder.Encode(compiledRelease)
 	}
 	if !*enableMutations {
 		fmt.Fprintf(os.Stdout, "lane guard configuration valid; mutation disabled for %s/%s\n", laneConfig.StationID, laneConfig.LaneID)
@@ -111,6 +129,26 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if err := laneguard.ValidatePlanRequest(laneConfig, plan, request); err != nil {
 		return fmt.Errorf("validate approved plan and operation request: %w", err)
 	}
+	if *mode == "execute" && !time.Now().UTC().Before(plan.ApprovalExpiresAt) {
+		return laneguard.ErrApprovalExpired
+	}
+	immutablePaths := physicalrpi5.ImmutablePaths{
+		RPIBootBinary: rpibootBinary, GPIOSetBinary: gpioSetBinary,
+		FreshReadbackBundle: freshReadbackBundle, FreshCommitBundle: freshCommitBundle,
+		OwnedReadbackBundle: ownedReadbackBundle, OwnedRecoveryBundle: ownedRecoveryBundle,
+		NegativeBootBundle: negativeBootBundle, RootIntegrityBundle: rootIntegrityBundle,
+		RequireNixStorePaths: true,
+	}
+	if err := immutablePaths.Validate(); err != nil {
+		return fmt.Errorf("validate immutable physical paths: %w", err)
+	}
+	compiledRelease, err := immutableReleaseBinding()
+	if err != nil {
+		return err
+	}
+	if plan.Release != compiledRelease {
+		return fmt.Errorf("%w: approved release differs from the immutable lane-guard build", laneguard.ErrPlanMismatch)
+	}
 	initialMode := physicalrpi5.ModeFresh
 	if *mode == "reconcile" {
 		initialMode = physicalrpi5.ModeAuto
@@ -118,13 +156,7 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		initialMode = physicalrpi5.ModeOwned
 	}
 	physicalConfig := physicalrpi5.Config{
-		Paths: physicalrpi5.ImmutablePaths{
-			RPIBootBinary: rpibootBinary, GPIOSetBinary: gpioSetBinary,
-			FreshReadbackBundle: freshReadbackBundle, FreshCommitBundle: freshCommitBundle,
-			OwnedReadbackBundle: ownedReadbackBundle, OwnedRecoveryBundle: ownedRecoveryBundle,
-			NegativeBootBundle: negativeBootBundle, RootIntegrityBundle: rootIntegrityBundle,
-			RequireNixStorePaths: true,
-		},
+		Paths:       immutablePaths,
 		InitialMode: initialMode, ExpectedCustomerKeyHash: expectedCustomerKeyHash,
 		ExpectedEEPROMHash: expectedEEPROMHash, ExpectedBootImageDigest: expectedBootImageDigest,
 	}
@@ -162,6 +194,28 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		}
 	}
 	return err
+}
+
+func immutableReleaseBinding() (releasebinding.Binding, error) {
+	compiledRelease := releasebinding.Binding{
+		SignedReleaseManifestDigest: signedReleaseManifestDigest,
+		LaneGuardPackageDigest:      laneGuardPackageDigest,
+		CompiledArtifactSetDigest:   compiledArtifactSetDigest,
+		ExpectedCustomerKeyHash:     canonicalExpectedDigest(expectedCustomerKeyHash),
+		ExpectedEEPROMDigest:        canonicalExpectedDigest(expectedEEPROMHash),
+		ExpectedBootImageDigest:     expectedBootImageDigest,
+	}
+	if err := compiledRelease.Validate(); err != nil {
+		return releasebinding.Binding{}, fmt.Errorf("validate immutable release binding: %w", err)
+	}
+	return compiledRelease, nil
+}
+
+func canonicalExpectedDigest(value string) string {
+	if strings.HasPrefix(value, "sha256:") {
+		return value
+	}
+	return "sha256:" + value
 }
 
 const zeroHash = "0000000000000000000000000000000000000000000000000000000000000000"

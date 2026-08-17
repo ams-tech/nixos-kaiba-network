@@ -69,7 +69,12 @@ The repository already contains useful foundations:
   control-plane approval, lane-plan validation, persisted-state loading, and
   `security_applied` finalization; and
 - domain-separated, deterministic operation and plan digests that the lane
-  guard independently recomputes before observing a target.
+  guard independently recomputes before observing a target;
+- one canonical six-digest release binding carried by both the control approval
+  and lane plan, while the plan separately binds the approval expiry; and
+- a physical guard build that embeds the declared release binding, can report
+  it for build-time verification, and rejects a mismatch before constructing
+  the hardware adapter.
 
 The repository does not yet contain a complete signed-release adapter, target
 NVMe writer, mutation-capable station backend, authenticated control-to-guard
@@ -331,29 +336,47 @@ strings and that no shortened campaign can produce `security_applied`.
   change, but a coordinated root edit of both the plan and request remains
   possible until the authenticated bridge exists.
 
-The implemented `v1alpha1` digest contract serializes fixed-order JSON structs,
-without whitespace. Operation material contains `sequence`, `operation`,
+The release-bound `v1alpha2` digest contract serializes fixed-order JSON
+structs without whitespace. It deliberately supersedes the earlier pre-release
+`v1alpha1` contract rather than changing canonical material under an existing
+version. Operation material contains `sequence`, `operation`,
 `classification`, `authorization_id`, then `customer_key_hash`, `eeprom_hash`,
 `security_state`, and `power_state` within `expected_prestate` and
 `expected_poststate`, followed by `maximum_duration_nanoseconds`; it excludes
-`operation_digest`. Plan
-material contains `schema_version`, `station_id`, `lane_id`, `transaction_id`,
-`target_fingerprint`, `fence_epoch`, and the ordered operation digests freshly
-derived from their bodies; it excludes `plan_digest`, `approval_id`, and
-`intent_receipt`. The lowercase SHA-256 value is computed over the ASCII domain,
-one NUL byte, and the JSON bytes. The domains are
-`kaiba.provisioning.lane-guard.operation-digest.v1alpha1` and
-`kaiba.provisioning.lane-guard.plan-digest.v1alpha1`. The lane guard snapshots
+`operation_digest`. Plan material contains `schema_version`, `station_id`,
+`lane_id`, `transaction_id`, the six-field `release` binding,
+`target_fingerprint`, `fence_epoch`, canonical UTC `approval_expires_at`, and
+the ordered operation digests freshly derived from their bodies; it excludes
+`plan_digest`, `approval_id`, and `intent_receipt`. Every release-binding field
+is a canonical lowercase SHA-256 value. The lowercase plan SHA-256 value is
+computed over the ASCII domain, one NUL byte, and the JSON bytes. The domains
+are
+`kaiba.provisioning.lane-guard.operation-digest.v1alpha2` and
+`kaiba.provisioning.lane-guard.plan-digest.v1alpha2`. The lane guard snapshots
 the caller-owned operation slice, validates this contract, and compares every
 plan and operation digest claimed by the plan before any target observation.
 The one-shot command also validates all static request bindings against that
 plan before constructing the hardware adapter; the guard repeats the comparison
-and separately checks lease sufficiency immediately before execution.
+and separately checks lease sufficiency immediately before execution. Control
+rejects a reapproval that reuses a plan digest while changing its release or
+expiry. Every operation intent persists that plan/release/expiry anchor, so a
+claim transfer or reconciliation cannot erase it, and persisted approvals fail
+closed if their lifetime exceeds 24 hours.
 
-- [ ] Bind the plan to the signed-release manifest digest, immutable lane-guard
-  package, compiled artifact paths and digests, expected customer-key hash,
-  expected EEPROM digest, expected boot-image digest, target fingerprint,
-  station, lane, transaction, fence epoch, and approval expiry.
+- [x] Carry and enforce one declared plan binding covering the signed-release
+  manifest digest, lane-guard package digest, compiled artifact-set digest,
+  expected customer-key hash, expected EEPROM digest, expected boot-image
+  digest, target fingerprint, station, lane, transaction, fence epoch, and
+  approval expiry. Persist the same six-digest release binding in the control
+  approval, require its manifest and key hashes to match the transaction, and
+  require an exact match with the linker-fixed physical guard before
+  hardware-adapter construction.
+- [ ] Define and independently derive the compiled artifact-set and guard
+  package digests from canonical, reviewed path-and-content-digest material.
+  The current factory embeds, reports, and enforces declared digest values, but
+  does not prove that they describe its actual closure or bundle bytes. The
+  complete signed-release adapter must derive those values rather than accept
+  an opaque declaration; SB-05 remains incomplete until it does.
 - [x] Require the development operation sequence to contain, in order:
   1. `program_customer_key_and_eeprom`;
   2. `cold_power_cycle`, including complete power removal and signed cold boot;

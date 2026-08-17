@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/campaign"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
 type testFixture struct {
@@ -39,6 +40,10 @@ func TestSecurityAppliedWorkflowIsDurableAndIdempotent(t *testing.T) {
 	fixture := newTestFixture(t, FileStore{Path: path})
 	operations := developmentCampaignNames()
 	transaction := fixture.createClaimBindApprove(operations)
+	wantRelease := approvalRelease(transaction)
+	if transaction.Approval == nil || transaction.Approval.Release != wantRelease {
+		t.Fatalf("persisted approval release = %#v, want %#v", transaction.Approval, wantRelease)
+	}
 
 	for index, operation := range operations {
 		sequence := number(index + 1)
@@ -102,7 +107,8 @@ func TestSecurityAppliedWorkflowIsDurableAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Status != StatusSecurityApplied || persisted.ResourceVersion != transaction.ResourceVersion {
+	if persisted.Status != StatusSecurityApplied || persisted.ResourceVersion != transaction.ResourceVersion ||
+		persisted.Approval == nil || persisted.Approval.Release != wantRelease {
 		t.Fatalf("persisted transaction = %#v", persisted)
 	}
 }
@@ -168,6 +174,236 @@ func TestRecordApprovalRequiresCompleteDevelopmentCampaign(t *testing.T) {
 	}
 }
 
+func TestRecordApprovalRequiresCompleteReleaseBinding(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*releasebinding.Binding)
+	}{
+		{
+			name: "signed release manifest digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.SignedReleaseManifestDigest = ""
+			},
+		},
+		{
+			name: "lane guard package digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.LaneGuardPackageDigest = ""
+			},
+		},
+		{
+			name: "compiled artifact set digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.CompiledArtifactSetDigest = ""
+			},
+		},
+		{
+			name: "expected customer key hash",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.ExpectedCustomerKeyHash = ""
+			},
+		},
+		{
+			name: "expected EEPROM digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.ExpectedEEPROMDigest = ""
+			},
+		},
+		{
+			name: "expected boot image digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.ExpectedBootImageDigest = ""
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			transaction := fixture.createClaimBind(developmentCampaignNames())
+			request := fixture.approvalRequest(transaction, developmentCampaignNames(), "approval-invalid-release")
+			test.mutate(&request.Release)
+
+			if _, err := fixture.service.RecordApproval(context.Background(), request); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("error = %v, want invalid request", err)
+			}
+			persisted, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.ResourceVersion != transaction.ResourceVersion || persisted.Status != StatusTargetBound || persisted.Approval != nil {
+				t.Fatalf("rejected release binding changed transaction: %#v", persisted)
+			}
+		})
+	}
+}
+
+func TestRecordApprovalRequiresReleaseBindingToMatchTransaction(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*releasebinding.Binding)
+	}{
+		{
+			name: "signed release manifest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.SignedReleaseManifestDigest = digest("f")
+			},
+		},
+		{
+			name: "expected customer key",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.ExpectedCustomerKeyHash = digest("f")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			transaction := fixture.createClaimBind(developmentCampaignNames())
+			request := fixture.approvalRequest(transaction, developmentCampaignNames(), "approval-mismatched-release")
+			test.mutate(&request.Release)
+
+			if _, err := fixture.service.RecordApproval(context.Background(), request); !errors.Is(err, ErrConflict) {
+				t.Fatalf("error = %v, want conflict", err)
+			}
+			persisted, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.ResourceVersion != transaction.ResourceVersion || persisted.Status != StatusTargetBound || persisted.Approval != nil {
+				t.Fatalf("mismatched release binding changed transaction: %#v", persisted)
+			}
+		})
+	}
+}
+
+func TestReapprovalCannotRelabelStartedPlanReleaseOrExpiry(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*RecordApprovalRequest)
+	}{
+		{
+			name: "release binding",
+			mutate: func(request *RecordApprovalRequest) {
+				request.Release.ExpectedBootImageDigest = digest("f")
+			},
+		},
+		{
+			name: "approval expiry",
+			mutate: func(request *RecordApprovalRequest) {
+				request.ExpiresAt = request.ExpiresAt.Add(time.Minute)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			operations := developmentCampaignNames()
+			transaction := fixture.createClaimBindApprove(operations)
+			transaction = fixture.recordSuccessfulOperation(transaction, operations[0], 1)
+			request := fixture.approvalRequest(transaction, operations, "approval-replacement")
+			request.PlanDigest = transaction.Approval.PlanDigest
+			request.Release = transaction.Approval.Release
+			request.ExpiresAt = transaction.Approval.ExpiresAt
+			test.mutate(&request)
+
+			if _, err := fixture.service.RecordApproval(context.Background(), request); !errors.Is(err, ErrConflict) {
+				t.Fatalf("reapproval error = %v, want conflict", err)
+			}
+			persisted, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.ResourceVersion != transaction.ResourceVersion || persisted.Approval.ID != transaction.Approval.ID ||
+				persisted.Approval.Release != transaction.Approval.Release || !persisted.Approval.ExpiresAt.Equal(transaction.Approval.ExpiresAt) {
+				t.Fatalf("rejected reapproval changed transaction: %#v", persisted)
+			}
+		})
+	}
+}
+
+func TestReapprovalMayReplaceExcludedEnvelopeWithoutChangingStartedPlan(t *testing.T) {
+	fixture := newTestFixture(t, &MemoryStore{})
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBindApprove(operations)
+	transaction = fixture.recordSuccessfulOperation(transaction, operations[0], 1)
+	request := fixture.approvalRequest(transaction, operations, "approval-replacement")
+	request.PlanDigest = transaction.Approval.PlanDigest
+	request.Release = transaction.Approval.Release
+	request.ExpiresAt = transaction.Approval.ExpiresAt
+
+	reapproved, err := fixture.service.RecordApproval(context.Background(), request)
+	if err != nil {
+		t.Fatalf("same-plan reapproval: %v", err)
+	}
+	if reapproved.Approval.ID != request.ApprovalID || reapproved.Approval.Release != transaction.Approval.Release ||
+		!reapproved.Approval.ExpiresAt.Equal(transaction.Approval.ExpiresAt) {
+		t.Fatalf("reapproval = %#v", reapproved.Approval)
+	}
+}
+
+func TestReapprovalAfterClaimTransferCannotRelabelStartedPlan(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*RecordApprovalRequest)
+	}{
+		{
+			name: "release binding",
+			mutate: func(request *RecordApprovalRequest) {
+				request.Release.ExpectedEEPROMDigest = digest("f")
+			},
+		},
+		{
+			name: "approval expiry",
+			mutate: func(request *RecordApprovalRequest) {
+				request.ExpiresAt = request.ExpiresAt.Add(time.Minute)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			operations := developmentCampaignNames()
+			transaction := fixture.createClaimBindApprove(operations)
+			transaction = fixture.recordSuccessfulOperation(transaction, operations[0], 1)
+			anchor := transaction.Operations[0]
+			transaction, err := fixture.service.TransferClaim(context.Background(), TransferClaimRequest{
+				SchemaVersion: TransferClaimRequestSchemaVersion, IdempotencyKey: "transfer-started-plan",
+				TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+				ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
+				NewStationID: "station-2", NewLaneID: "lane-2", Mode: ClaimModeMutation,
+				AllowedStages: operations, LeaseDurationSeconds: 300,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			transaction, err = fixture.service.BindTarget(context.Background(), BindTargetRequest{
+				SchemaVersion: BindTargetRequestSchemaVersion, IdempotencyKey: "rebind-started-plan",
+				MutationContext: contextFor(transaction), TargetFingerprint: transaction.Target.Fingerprint,
+				ObservationDigest: digest("f"), CustomerKeyHash: transaction.ExpectedCustomerKeyHash,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if transaction.Approval != nil || len(transaction.Operations) != 1 {
+				t.Fatalf("transferred transaction lost plan history: %#v", transaction)
+			}
+			request := fixture.approvalRequest(transaction, operations, "approval-after-transfer")
+			request.PlanDigest = anchor.PlanDigest
+			request.Release = anchor.Release
+			request.ExpiresAt = anchor.ApprovalExpiresAt
+			test.mutate(&request)
+
+			if _, err := fixture.service.RecordApproval(context.Background(), request); !errors.Is(err, ErrConflict) {
+				t.Fatalf("reapproval error = %v, want conflict", err)
+			}
+		})
+	}
+}
+
 func TestMarkSecurityAppliedRejectsPartialCampaign(t *testing.T) {
 	fixture := newTestFixture(t, &MemoryStore{})
 	operations := developmentCampaignNames()
@@ -210,6 +446,118 @@ func TestPersistedTruncatedApprovalFailsClosed(t *testing.T) {
 	}
 	if _, err := NewService(store); !errors.Is(err, ErrCorruptStore) {
 		t.Fatalf("truncated persisted approval error = %v, want corrupt store", err)
+	}
+}
+
+func TestPersistedApprovalReleaseBindingFailsClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*releasebinding.Binding)
+	}{
+		{
+			name: "missing signed release manifest digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.SignedReleaseManifestDigest = ""
+			},
+		},
+		{
+			name: "missing lane guard package digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.LaneGuardPackageDigest = ""
+			},
+		},
+		{
+			name: "missing compiled artifact set digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.CompiledArtifactSetDigest = ""
+			},
+		},
+		{
+			name: "missing expected customer key hash",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.ExpectedCustomerKeyHash = ""
+			},
+		},
+		{
+			name: "missing expected EEPROM digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.ExpectedEEPROMDigest = ""
+			},
+		},
+		{
+			name: "missing expected boot image digest",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.ExpectedBootImageDigest = ""
+			},
+		},
+		{
+			name: "signed release manifest mismatches transaction",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.SignedReleaseManifestDigest = digest("f")
+			},
+		},
+		{
+			name: "customer key mismatches transaction",
+			mutate: func(binding *releasebinding.Binding) {
+				binding.ExpectedCustomerKeyHash = digest("f")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &MemoryStore{}
+			fixture := newTestFixture(t, store)
+			transaction := fixture.createClaimBindApprove(developmentCampaignNames())
+			data, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var state persistedState
+			if err := DecodeStrict(data, &state); err != nil {
+				t.Fatal(err)
+			}
+			stored := state.Transactions[transaction.ID]
+			test.mutate(&stored.Approval.Release)
+			state.Transactions[transaction.ID] = stored
+			data, err = marshalState(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(data); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewService(store); !errors.Is(err, ErrCorruptStore) {
+				t.Fatalf("corrupt persisted release binding error = %v, want corrupt store", err)
+			}
+		})
+	}
+}
+
+func TestPersistedApprovalLifetimeFailsClosed(t *testing.T) {
+	store := &MemoryStore{}
+	fixture := newTestFixture(t, store)
+	transaction := fixture.createClaimBindApprove(developmentCampaignNames())
+	data, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state persistedState
+	if err := DecodeStrict(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	stored := state.Transactions[transaction.ID]
+	stored.Approval.ExpiresAt = stored.Approval.ApprovedAt.Add(maximumApprovalLifetime + time.Nanosecond)
+	state.Transactions[transaction.ID] = stored
+	data, err = marshalState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(data); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService(store); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("overlong persisted approval error = %v, want corrupt store", err)
 	}
 }
 
@@ -315,16 +663,21 @@ func TestMarkSecurityAppliedRevalidatesCampaignAndEvidence(t *testing.T) {
 
 func TestCompletedCampaignAllowsConclusiveReadbackNoOpBeforeRetry(t *testing.T) {
 	operations := developmentCampaignNames()
-	approval := &Approval{PlanDigest: digest("5"), AllowedOperations: operations}
+	approval := &Approval{
+		PlanDigest: digest("5"), Release: approvalRelease(Transaction{BundleDigest: digest("0"), ExpectedCustomerKeyHash: digest("2")}),
+		AllowedOperations: operations, ExpiresAt: time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC),
+	}
 	records := make([]OperationRecord, 0, len(operations)+1)
 	for index, operation := range operations {
 		if index == 2 {
 			records = append(records, OperationRecord{
-				Operation: operation, PlanDigest: approval.PlanDigest, Status: OperationConfirmedNotApplied,
+				Operation: operation, PlanDigest: approval.PlanDigest, Release: approval.Release,
+				ApprovalExpiresAt: approval.ExpiresAt, Status: OperationConfirmedNotApplied,
 			})
 		}
 		records = append(records, OperationRecord{
-			Operation: operation, PlanDigest: approval.PlanDigest, Status: OperationSucceeded,
+			Operation: operation, PlanDigest: approval.PlanDigest, Release: approval.Release,
+			ApprovalExpiresAt: approval.ExpiresAt, Status: OperationSucceeded,
 		})
 	}
 	if err := validateCompletedDevelopmentCampaign(records, approval); err != nil {
@@ -464,6 +817,10 @@ func TestDecodeStrictRejectsUnknownSecretAndDuplicateFields(t *testing.T) {
 	if err := DecodeStrict([]byte(`{"schema_version":"x","private_key":"secret"}`), &request); err == nil {
 		t.Fatal("unknown secret-bearing field was accepted")
 	}
+	var approval RecordApprovalRequest
+	if err := DecodeStrict([]byte(`{"expected_customer_key_hash":"sha256:legacy"}`), &approval); err == nil {
+		t.Fatal("legacy top-level approval release field was accepted")
+	}
 }
 
 func (fixture *testFixture) create() Transaction {
@@ -517,8 +874,19 @@ func (fixture *testFixture) approvalRequest(transaction Transaction, operations 
 		SchemaVersion: RecordApprovalRequestSchemaVersion, IdempotencyKey: "record-" + approvalID,
 		MutationContext: contextFor(transaction), ApprovalID: approvalID, ApproverID: "approver-1",
 		TransactionDigest: transaction.TransactionDigest, PlanDigest: digest("5"),
-		TargetFingerprint: transaction.Target.Fingerprint, ExpectedCustomerKeyHash: transaction.ExpectedCustomerKeyHash,
+		TargetFingerprint: transaction.Target.Fingerprint, Release: approvalRelease(transaction),
 		AllowedOperations: operations, AuditReceiptID: digest("a"), ExpiresAt: fixture.now.Add(30 * time.Minute),
+	}
+}
+
+func approvalRelease(transaction Transaction) releasebinding.Binding {
+	return releasebinding.Binding{
+		SignedReleaseManifestDigest: transaction.BundleDigest,
+		LaneGuardPackageDigest:      digest("b"),
+		CompiledArtifactSetDigest:   digest("c"),
+		ExpectedCustomerKeyHash:     transaction.ExpectedCustomerKeyHash,
+		ExpectedEEPROMDigest:        digest("d"),
+		ExpectedBootImageDigest:     digest("e"),
 	}
 }
 

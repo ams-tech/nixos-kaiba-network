@@ -98,7 +98,11 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	if err != nil {
 		return Attempt{}, err
 	}
-	if remaining := request.ClaimExpiresAt.Sub(guard.clock.Now()); remaining < operation.MaximumDuration+guard.config.LeaseSafetyMargin {
+	current := guard.clock.Now()
+	if !current.Before(plan.ApprovalExpiresAt) {
+		return Attempt{}, ErrApprovalExpired
+	}
+	if remaining := request.ClaimExpiresAt.Sub(current); remaining < operation.MaximumDuration+guard.config.LeaseSafetyMargin {
 		return Attempt{}, ErrLeaseInvalid
 	}
 	key := attemptKey(plan, operation.Sequence)
@@ -298,8 +302,10 @@ func matchPlanRequest(plan Plan, request ExecuteRequest) (OperationSpec, error) 
 	if request.SchemaVersion != ContractSchemaVersion ||
 		request.StationID != plan.StationID || request.LaneID != plan.LaneID ||
 		request.TransactionID != plan.TransactionID || request.PlanDigest != plan.PlanDigest ||
+		request.Release != plan.Release ||
 		request.TargetFingerprint != plan.TargetFingerprint || request.FenceEpoch != plan.FenceEpoch ||
-		request.ApprovalID != plan.ApprovalID || request.IntentReceipt != plan.IntentReceipt ||
+		request.ApprovalID != plan.ApprovalID || !request.ApprovalExpiresAt.Equal(plan.ApprovalExpiresAt) ||
+		request.IntentReceipt != plan.IntentReceipt ||
 		request.Sequence == 0 || int(request.Sequence) > len(plan.Operations) {
 		return OperationSpec{}, ErrPlanMismatch
 	}
@@ -403,7 +409,7 @@ func clonePlan(plan Plan) Plan {
 }
 
 func samePlan(left, right Plan) bool {
-	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID || left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.TargetFingerprint != right.TargetFingerprint || left.FenceEpoch != right.FenceEpoch || left.ApprovalID != right.ApprovalID || left.IntentReceipt != right.IntentReceipt || len(left.Operations) != len(right.Operations) {
+	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID || left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release || left.TargetFingerprint != right.TargetFingerprint || left.FenceEpoch != right.FenceEpoch || left.ApprovalID != right.ApprovalID || !left.ApprovalExpiresAt.Equal(right.ApprovalExpiresAt) || left.IntentReceipt != right.IntentReceipt || len(left.Operations) != len(right.Operations) {
 		return false
 	}
 	for index := range left.Operations {

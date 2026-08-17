@@ -13,9 +13,10 @@ import (
 	"time"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/campaign"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
-const ContractSchemaVersion = "provisioning.kaiba.network/lane-guard/v1alpha1"
+const ContractSchemaVersion = "provisioning.kaiba.network/lane-guard/v1alpha2"
 
 var (
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -29,6 +30,7 @@ var (
 	ErrPrestateMismatch       = errors.New("direct target prestate does not match the approved plan")
 	ErrPoststateMismatch      = errors.New("direct target poststate does not match the approved plan")
 	ErrOutOfOrder             = errors.New("operation is out of order")
+	ErrApprovalExpired        = errors.New("approved plan has expired")
 	ErrLeaseInvalid           = errors.New("claim lease has insufficient remaining lifetime")
 	ErrReconciliationRequired = errors.New("operation outcome requires direct reconciliation")
 	ErrQuarantined            = errors.New("operation or target is quarantined")
@@ -156,16 +158,18 @@ type OperationSpec struct {
 // Plan is the complete approved operation sequence for one target and fence
 // epoch. Approval and intent receipts are required before it can be loaded.
 type Plan struct {
-	SchemaVersion     string          `json:"schema_version"`
-	StationID         string          `json:"station_id"`
-	LaneID            string          `json:"lane_id"`
-	TransactionID     string          `json:"transaction_id"`
-	PlanDigest        string          `json:"plan_digest"`
-	TargetFingerprint string          `json:"target_fingerprint"`
-	FenceEpoch        uint64          `json:"fence_epoch"`
-	ApprovalID        string          `json:"approval_id"`
-	IntentReceipt     string          `json:"intent_receipt"`
-	Operations        []OperationSpec `json:"operations"`
+	SchemaVersion     string                 `json:"schema_version"`
+	StationID         string                 `json:"station_id"`
+	LaneID            string                 `json:"lane_id"`
+	TransactionID     string                 `json:"transaction_id"`
+	PlanDigest        string                 `json:"plan_digest"`
+	Release           releasebinding.Binding `json:"release"`
+	TargetFingerprint string                 `json:"target_fingerprint"`
+	FenceEpoch        uint64                 `json:"fence_epoch"`
+	ApprovalID        string                 `json:"approval_id"`
+	ApprovalExpiresAt time.Time              `json:"approval_expires_at"`
+	IntentReceipt     string                 `json:"intent_receipt"`
+	Operations        []OperationSpec        `json:"operations"`
 }
 
 func (plan Plan) Validate(config Config) error {
@@ -184,8 +188,16 @@ func (plan Plan) Validate(config Config) error {
 	if !digestPattern.MatchString(plan.PlanDigest) {
 		return errors.New("plan digest must be a canonical sha256 digest")
 	}
+	if err := plan.Release.Validate(); err != nil {
+		return fmt.Errorf("plan release binding: %w", err)
+	}
 	if plan.FenceEpoch == 0 || plan.ApprovalID == "" || plan.IntentReceipt == "" {
 		return errors.New("plan requires a fence epoch, approval, and durable intent receipt")
+	}
+	// Validate representation here, but enforce freshness only in Execute so
+	// an interrupted operation can still be reconciled after approval expiry.
+	if _, err := canonicalApprovalExpiry(plan.ApprovalExpiresAt); err != nil {
+		return err
 	}
 	operations := make([]campaign.Operation, len(plan.Operations))
 	for index, operation := range plan.Operations {
@@ -250,20 +262,22 @@ func ValidatePlanRequest(config Config, plan Plan, request ExecuteRequest) error
 // ExecuteRequest repeats every security-relevant binding. Physical paths and
 // payload selectors are intentionally not request fields.
 type ExecuteRequest struct {
-	SchemaVersion     string      `json:"schema_version"`
-	StationID         string      `json:"station_id"`
-	LaneID            string      `json:"lane_id"`
-	TransactionID     string      `json:"transaction_id"`
-	PlanDigest        string      `json:"plan_digest"`
-	TargetFingerprint string      `json:"target_fingerprint"`
-	FenceEpoch        uint64      `json:"fence_epoch"`
-	ApprovalID        string      `json:"approval_id"`
-	IntentReceipt     string      `json:"intent_receipt"`
-	Sequence          uint32      `json:"sequence"`
-	OperationDigest   string      `json:"operation_digest"`
-	AuthorizationID   string      `json:"authorization_id"`
-	ExpectedPrestate  DirectState `json:"expected_prestate"`
-	ClaimExpiresAt    time.Time   `json:"claim_expires_at"`
+	SchemaVersion     string                 `json:"schema_version"`
+	StationID         string                 `json:"station_id"`
+	LaneID            string                 `json:"lane_id"`
+	TransactionID     string                 `json:"transaction_id"`
+	PlanDigest        string                 `json:"plan_digest"`
+	Release           releasebinding.Binding `json:"release"`
+	TargetFingerprint string                 `json:"target_fingerprint"`
+	FenceEpoch        uint64                 `json:"fence_epoch"`
+	ApprovalID        string                 `json:"approval_id"`
+	ApprovalExpiresAt time.Time              `json:"approval_expires_at"`
+	IntentReceipt     string                 `json:"intent_receipt"`
+	Sequence          uint32                 `json:"sequence"`
+	OperationDigest   string                 `json:"operation_digest"`
+	AuthorizationID   string                 `json:"authorization_id"`
+	ExpectedPrestate  DirectState            `json:"expected_prestate"`
+	ClaimExpiresAt    time.Time              `json:"claim_expires_at"`
 }
 
 type OperationResult struct {
