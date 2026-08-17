@@ -16,7 +16,7 @@ import (
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
-const ContractSchemaVersion = "provisioning.kaiba.network/lane-guard/v1alpha2"
+const ContractSchemaVersion = "provisioning.kaiba.network/lane-guard/v1alpha3"
 
 var (
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -120,6 +120,17 @@ func (config Config) Validate() error {
 	return nil
 }
 
+// LeaseCoversOperation reports whether an unexpired lease contains the full
+// operation budget plus its safety margin. The ordered subtraction avoids
+// overflowing time.Duration when an approved maximum is near its upper bound.
+func LeaseCoversOperation(now, expiresAt time.Time, maximumDuration, safetyMargin time.Duration) bool {
+	if now.IsZero() || !expiresAt.After(now) || maximumDuration <= 0 || safetyMargin < 0 {
+		return false
+	}
+	remaining := expiresAt.Sub(now)
+	return remaining >= maximumDuration && remaining-maximumDuration >= safetyMargin
+}
+
 func fixedChild(value, prefix string) bool {
 	if !strings.HasPrefix(value, prefix) || filepath.Clean(value) != value {
 		return false
@@ -169,6 +180,7 @@ type Plan struct {
 	ApprovalID        string                 `json:"approval_id"`
 	ApprovalExpiresAt time.Time              `json:"approval_expires_at"`
 	IntentReceipt     string                 `json:"intent_receipt"`
+	IntentSequence    uint32                 `json:"intent_sequence"`
 	Operations        []OperationSpec        `json:"operations"`
 }
 
@@ -191,8 +203,8 @@ func (plan Plan) Validate(config Config) error {
 	if err := plan.Release.Validate(); err != nil {
 		return fmt.Errorf("plan release binding: %w", err)
 	}
-	if plan.FenceEpoch == 0 || plan.ApprovalID == "" || plan.IntentReceipt == "" {
-		return errors.New("plan requires a fence epoch, approval, and durable intent receipt")
+	if plan.FenceEpoch == 0 || plan.ApprovalID == "" || plan.IntentReceipt == "" || plan.IntentSequence == 0 {
+		return errors.New("plan requires a fence epoch, approval, durable intent receipt, and intent sequence")
 	}
 	// Validate representation here, but enforce freshness only in Execute so
 	// an interrupted operation can still be reconciled after approval expiry.
@@ -208,6 +220,9 @@ func (plan Plan) Validate(config Config) error {
 	}
 	if err := campaign.ValidateDevelopmentOperations(operations); err != nil {
 		return fmt.Errorf("plan operations: %w", err)
+	}
+	if int(plan.IntentSequence) > len(plan.Operations) {
+		return errors.New("plan intent sequence is outside the approved campaign")
 	}
 	var previousPoststate DirectState
 	for index, operation := range plan.Operations {

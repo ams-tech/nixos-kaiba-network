@@ -14,8 +14,8 @@ import (
 )
 
 // RevalidatePersistence reopens both authoritative services, reconstructs the
-// receipt from the durable record, and binds the plan again. It never executes
-// either the software simulator or any lane operation.
+// receipt from the durable record, and verifies the rehearsal-only authority
+// again. It never constructs a lane plan/request or executes the simulator.
 func RevalidatePersistence(ctx context.Context, config Config, stores Stores, report Report) error {
 	if err := config.Validate(); err != nil {
 		return err
@@ -50,23 +50,16 @@ func RevalidatePersistence(ctx context.Context, config Config, stores Stores, re
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrPersistenceMismatch, err)
 	}
-	bound, err := plancompiler.Bind(fixture.draft, plancompiler.Authority{
+	verified, err := plancompiler.VerifySoftwareRehearsalAuthority(fixture.draft, plancompiler.Authority{
 		Transaction:     transaction,
 		ApprovalReceipt: approvalReceipt, ApprovalRecord: approvalRecord,
 		IntentReceipt: receipt, IntentRecord: record,
 		Now: clock, LeaseSafetyMargin: 30 * time.Second,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: rebind persisted authority: %v", ErrPersistenceMismatch, err)
+		return fmt.Errorf("%w: reverify persisted rehearsal authority: %v", ErrPersistenceMismatch, err)
 	}
-	plan := bound.Plan()
-	requests := bound.ExecuteRequests()
-	if report.Authority.TransactionID != transaction.ID || report.Authority.ResourceVersion != transaction.ResourceVersion ||
-		report.Authority.FenceEpoch != transaction.FenceEpoch || report.Authority.PlanDigest != plan.PlanDigest ||
-		report.Authority.ApprovalID != plan.ApprovalID || report.Authority.IntentReceipt != plan.IntentReceipt ||
-		report.Authority.ExecuteRequestCount != len(requests) ||
-		report.Authority.InitialCustomerKeyHash != plan.Operations[0].ExpectedPrestate.CustomerKeyHash ||
-		report.Authority.OwnedCustomerKeyHash != plan.Operations[0].ExpectedPoststate.CustomerKeyHash {
+	if report.Authority != authoritySummary(verified) {
 		return ErrPersistenceMismatch
 	}
 	return nil

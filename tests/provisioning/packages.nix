@@ -121,6 +121,11 @@ let
     expectedCustomerKeyHash = developmentYubiKeyCustomerKeyHash;
     grantRegistryPath = "/etc/kaiba-provisioning/signing-grants.json";
   };
+  unfusedVerifierFixture = built.mkRpi5UnfusedVerifier {
+    name = "kaiba-rpi5-unfused-verifier-fixture";
+    trustedPublicKeyFingerprint =
+      developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+  };
   expectedDevelopmentYubiKeyOpenSSLConfiguration = pkgs.writeText "kaiba-development-yubikey-openssl-expected.cnf" ''
     config_diagnostics = 1
     openssl_conf = kaiba_openssl_init
@@ -909,7 +914,10 @@ let
           and .hardware_observed == false
           and .security_enforced == false
           and .mutation_eligible == false
-          and .authority.execute_request_count == 7
+          and .authority.plan_operation_count == 7
+          and .authority.validated_intent_count == 1
+          and .authority.executable_request_count == 0
+          and .authority.pending_sequence == 1
           and .simulation.outcome == "rehearsal_passed"
         ' "$TMPDIR/integrated-rehearsal.json" > /dev/null
         if strings ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal \
@@ -924,6 +932,7 @@ let
         test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.mutationCapable}' = 'false'
         test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.otpCapable}' = 'false'
         test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.securityEnforcementClaim}' = 'false'
+        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.signerTrustAnchored}' = 'false'
         if strings ${built.unfusedCompat}/bin/kaiba-provision-unfused-compat \
           | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset'; then
           echo 'unfused compatibility verifier links a physical provisioning capability' >&2
@@ -931,17 +940,31 @@ let
         fi
         test -x ${built.unfusedEvidence}/bin/kaiba-provision-unfused-evidence
         test '${built.unfusedEvidence.kaibaUnfusedEvidence.evidenceMode}' = \
-          'operator_hardware_observation'
+          'offline_operator_correlation'
+        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.captureAuthenticated}' = 'false'
         test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.directHardwareAccess}' = 'false'
+        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.hardwareObservationClaim}' = 'false'
         test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.mutationCapable}' = 'false'
         test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.oneTimeSettingCapable}' = 'false'
         test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.otpCapable}' = 'false'
         test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.securityEnforcementClaim}' = 'false'
+        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.signerTrustAnchored}' = 'false'
         if strings ${built.unfusedEvidence}/bin/kaiba-provision-unfused-evidence \
           | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
           echo 'unfused evidence verifier links a live physical provisioning capability' >&2
           exit 1
         fi
+        test -x ${unfusedVerifierFixture}/bin/kaiba-provision-unfused-compat
+        test -x ${unfusedVerifierFixture}/bin/kaiba-provision-unfused-evidence
+        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.signerTrustAnchored}' = 'true'
+        test '${unfusedVerifierFixture.kaibaUnfusedVerifier.trustedPublicKeyFingerprint}' = \
+          '${developmentYubiKeyPublicKeyFingerprint}'
+        test '${unfusedVerifierFixture.kaibaUnfusedVerifier.evidenceMode}' = \
+          'offline_operator_correlation'
+        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.captureAuthenticated}' = 'false'
+        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.hardwareObservationClaim}' = 'false'
+        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.oneTimeSettingCapable}' = 'false'
+        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.securityEnforcementClaim}' = 'false'
         test -x ${built.mediaStager}/bin/kaiba-provision-media-stager
         test '${toString built.mediaStager.kaibaMediaStager.blockDeviceWriteCapable}' = 'true'
         test '${toString built.mediaStager.kaibaMediaStager.oneTimeSettingCapable}' = 'false'

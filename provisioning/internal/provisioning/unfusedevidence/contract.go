@@ -1,6 +1,6 @@
-// Package unfusedevidence validates operator-recorded, non-enforcement
-// hardware evidence for an already verified unfused compatibility capsule.
-// It contains no live hardware or process-execution boundary.
+// Package unfusedevidence verifies a signed unfused compatibility capsule and
+// correlates it with an operator record and UART transcript. It contains no
+// authenticated capture, live hardware, or process-execution boundary.
 package unfusedevidence
 
 import (
@@ -16,11 +16,11 @@ import (
 )
 
 const (
-	ObservationSchemaVersion = "provisioning.kaiba.network/rpi5-unfused-hardware-observation/v1alpha1"
-	OutcomeSchemaVersion     = "provisioning.kaiba.network/rpi5-unfused-hardware-evidence/v1alpha1"
+	ObservationSchemaVersion = "provisioning.kaiba.network/rpi5-unfused-hardware-observation/v1alpha2"
+	OutcomeSchemaVersion     = "provisioning.kaiba.network/rpi5-unfused-hardware-evidence/v1alpha2"
 
-	EvidenceModeOperatorHardware = "operator_hardware_observation"
-	StatusCompatibilityPassed    = "compatibility_passed"
+	EvidenceModeOfflineOperatorCorrelation = "offline_operator_correlation"
+	StatusRecordConsistent                 = "record_consistent"
 
 	ManualBOOTSELConfirmation    = "manual_bootsel_rpiboot_observed"
 	ManualNormalBootConfirmation = "manual_normal_boot_observed"
@@ -44,8 +44,9 @@ type TargetObservation struct {
 	CustomerKeyHash   string `json:"customer_key_hash"`
 }
 
-// HardwareObservation is a strict operator record. Confirmations are closed
-// constants so free-form prose cannot accidentally satisfy the ceremony.
+// HardwareObservation is a strict operator-authored record, not authenticated
+// hardware evidence. Confirmations are closed constants so free-form prose
+// cannot accidentally satisfy the correlation checks.
 type HardwareObservation struct {
 	SchemaVersion                string `json:"schema_version"`
 	ObservationID                string `json:"observation_id"`
@@ -56,6 +57,7 @@ type HardwareObservation struct {
 	BootSignatureDigest          string `json:"boot_signature_digest"`
 	BootPublicKeyFingerprint     string `json:"boot_public_key_fingerprint"`
 	SignatureVerificationReceipt string `json:"signature_verification_receipt"`
+	SignerTrustPolicyDigest      string `json:"signer_trust_policy_digest"`
 	RootDataDigest               string `json:"root_data_digest"`
 	RootHashDigest               string `json:"root_hash_digest"`
 	UARTCaptureDigest            string `json:"uart_capture_digest"`
@@ -70,8 +72,9 @@ type HardwareObservation struct {
 	After  TargetObservation `json:"after"`
 }
 
-// Outcome is emitted only after the prior capsule result, operator record, and
-// UART capture all agree. Its policy booleans are fixed by the verifier.
+// Outcome is emitted only after an in-process signed capsule verification, the
+// operator record, and UART transcript all agree. Agreement is correlation;
+// neither the record nor capture is authenticated or fresh.
 type Outcome struct {
 	SchemaVersion                string `json:"schema_version"`
 	Status                       string `json:"status"`
@@ -90,16 +93,22 @@ type Outcome struct {
 	BootPublicKeyFingerprint     string `json:"boot_public_key_fingerprint"`
 	SignatureVerificationReceipt string `json:"signature_verification_receipt"`
 	SignatureVerified            bool   `json:"signature_verified"`
+	SignerTrustAnchored          bool   `json:"signer_trust_anchored"`
+	SignerTrustPolicyDigest      string `json:"signer_trust_policy_digest"`
 	RootDataDigest               string `json:"root_data_digest"`
 	RootHashDigest               string `json:"root_hash_digest"`
 	UARTCaptureDigest            string `json:"uart_capture_digest"`
+	RecordConsistent             bool   `json:"record_consistent"`
+	CaptureAuthenticated         bool   `json:"capture_authenticated"`
+	FreshnessEstablished         bool   `json:"freshness_established"`
 	HardwareObserved             bool   `json:"hardware_observed"`
 	SecurityEnforced             bool   `json:"security_enforced"`
 	MutationEligible             bool   `json:"mutation_eligible"`
 }
 
 // CompatibilityOutcomeDigest derives the binding that an operator observation
-// must repeat. It accepts only a successful, offline, non-enforcement result.
+// must repeat. It accepts only a successful, signer-anchored, offline,
+// non-enforcement result.
 func CompatibilityOutcomeDigest(outcome unfusedcompat.Outcome) (string, error) {
 	if err := validateCompatibilityOutcome(outcome); err != nil {
 		return "", err
@@ -108,7 +117,7 @@ func CompatibilityOutcomeDigest(outcome unfusedcompat.Outcome) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode canonical compatibility outcome: %w", err)
 	}
-	return domainDigest("kaiba.rpi5.unfused-compatibility-result.v1", canonical), nil
+	return domainDigest("kaiba.rpi5.unfused-compatibility-result.v2", canonical), nil
 }
 
 // ExpectedUARTMarkers returns the two exact records required in a bounded UART
@@ -152,6 +161,9 @@ func validateCompatibilityOutcome(outcome unfusedcompat.Outcome) error {
 	if !outcome.SignatureVerified {
 		return errors.New("compatibility outcome did not verify the detached boot signature")
 	}
+	if !outcome.SignerTrustAnchored || !validDigest(outcome.SignerTrustPolicyDigest) {
+		return errors.New("compatibility outcome is not anchored to a trusted signer policy")
+	}
 	if outcome.HardwareObserved || outcome.SecurityEnforced || outcome.MutationEligible {
 		return errors.New("compatibility outcome contains a prohibited hardware or policy claim")
 	}
@@ -173,6 +185,7 @@ func (observation HardwareObservation) validate(outcome unfusedcompat.Outcome, o
 		observation.BootSignatureDigest != outcome.BootSignatureDigest ||
 		observation.BootPublicKeyFingerprint != outcome.BootPublicKeyFingerprint ||
 		observation.SignatureVerificationReceipt != outcome.SignatureVerificationReceipt ||
+		observation.SignerTrustPolicyDigest != outcome.SignerTrustPolicyDigest ||
 		observation.RootDataDigest != outcome.RootDataDigest || observation.RootHashDigest != outcome.RootHashDigest {
 		return errors.New("hardware observation capsule binding differs from the compatibility outcome")
 	}
@@ -218,7 +231,7 @@ func observationDigest(observation HardwareObservation) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode canonical hardware observation: %w", err)
 	}
-	return domainDigest("kaiba.rpi5.unfused-hardware-observation.v1", canonical), nil
+	return domainDigest("kaiba.rpi5.unfused-hardware-observation.v2", canonical), nil
 }
 
 func domainDigest(domain string, value []byte) string {

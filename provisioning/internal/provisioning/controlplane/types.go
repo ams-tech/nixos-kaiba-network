@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	TransactionSchemaVersion = "provisioning.kaiba.network/control-transaction/v1alpha2"
-	StoreSchemaVersion       = "provisioning.kaiba.network/control-store/v1alpha2"
+	TransactionSchemaVersion = "provisioning.kaiba.network/control-transaction/v1alpha3"
+	StoreSchemaVersion       = "provisioning.kaiba.network/control-store/v1alpha3"
 	CommandSchemaVersion     = "provisioning.kaiba.network/control-command/v1alpha1"
 
-	CreateTransactionRequestSchemaVersion    = "provisioning.kaiba.network/create-transaction-request/v1alpha2"
+	CreateTransactionRequestSchemaVersion    = "provisioning.kaiba.network/create-transaction-request/v1alpha3"
 	AcquireClaimRequestSchemaVersion         = "provisioning.kaiba.network/acquire-claim-request/v1alpha1"
 	RenewClaimRequestSchemaVersion           = "provisioning.kaiba.network/renew-claim-request/v1alpha1"
 	TransferClaimRequestSchemaVersion        = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
@@ -28,6 +28,10 @@ const (
 	AbortRequestSchemaVersion                = "provisioning.kaiba.network/abort-request/v1alpha1"
 	SecurityAppliedRequestSchemaVersion      = "provisioning.kaiba.network/security-applied-request/v1alpha1"
 )
+
+// UnownedCustomerKeyHash is the only prestate accepted by the development
+// ownership workflow. The intended owned key must be a distinct nonzero hash.
+const UnownedCustomerKeyHash = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 type TransactionStatus string
 

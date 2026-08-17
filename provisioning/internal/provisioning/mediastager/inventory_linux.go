@@ -15,7 +15,10 @@ import (
 	"unsafe"
 )
 
-const blockGetSize64 = uintptr(0x80081272)
+const (
+	blockGetSize64       = uintptr(0x80081272)
+	blockGetDiskSequence = uintptr(0x80081280)
+)
 
 type SystemInventory struct {
 	MountInfoPath string
@@ -109,6 +112,10 @@ func (inventory SystemInventory) inspectDevice(requestedPath string) (TargetFact
 	if err != nil {
 		return TargetFacts{}, err
 	}
+	diskSequence, err := blockDeviceDiskSequence(file)
+	if err != nil {
+		return TargetFacts{}, err
+	}
 	deviceKey := majorMinor(uint64(stat.Rdev))
 	sysfsPath, err := filepath.EvalSymlinks(filepath.Join(inventory.SysDevPath, deviceKey))
 	if err != nil {
@@ -126,6 +133,7 @@ func (inventory SystemInventory) inspectDevice(requestedPath string) (TargetFact
 		Kind:          TargetBlockDevice,
 		WholeDevice:   errors.Is(partitionErr, os.ErrNotExist),
 		DeviceNumber:  uint64(stat.Rdev),
+		DiskSequence:  diskSequence,
 		SysfsPath:     sysfsPath,
 	}, nil
 }
@@ -276,6 +284,18 @@ func blockDeviceSize(file *os.File) (uint64, error) {
 		return 0, fmt.Errorf("%w: block-device size is zero", ErrUnsafeTarget)
 	}
 	return size, nil
+}
+
+func blockDeviceDiskSequence(file *os.File) (uint64, error) {
+	var sequence uint64
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), blockGetDiskSequence, uintptr(unsafe.Pointer(&sequence)))
+	if errno != 0 {
+		return 0, fmt.Errorf("read block-device disk sequence: %w", errno)
+	}
+	if sequence == 0 {
+		return 0, fmt.Errorf("%w: block-device disk sequence is zero", ErrUnsafeTarget)
+	}
+	return sequence, nil
 }
 
 func majorMinor(device uint64) string {

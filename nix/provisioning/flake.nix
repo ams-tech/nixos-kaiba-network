@@ -65,6 +65,10 @@
         mkDevelopmentYubiKeySigning =
           { system, ... }@args:
           (packagesFor system).mkDevelopmentYubiKeySigning (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5UnfusedVerifier =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5UnfusedVerifier (builtins.removeAttrs args [ "system" ]);
       };
 
       packages = forAllSystems (

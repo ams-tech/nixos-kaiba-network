@@ -211,7 +211,7 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 	plan := laneguard.Plan{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: "development-station", LaneID: "lane-1",
 		TransactionID: "transaction-1", Release: commandReleaseBinding(), TargetFingerprint: "target-1",
-		FenceEpoch: 1, ApprovalID: "approval-1", ApprovalExpiresAt: time.Now().UTC().Add(5 * time.Minute), IntentReceipt: "intent-1",
+		FenceEpoch: 1, ApprovalID: "approval-1", ApprovalExpiresAt: time.Now().UTC().Add(5 * time.Minute), IntentReceipt: "intent-1", IntentSequence: 1,
 		Operations: []laneguard.OperationSpec{
 			{
 				Sequence: 1, Operation: laneguard.OperationProgramCustomerKeyAndEEPROM,

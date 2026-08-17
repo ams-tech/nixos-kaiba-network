@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -35,15 +36,15 @@ func (executor Executor) DryRun(ctx context.Context, plan Plan, mode Mode) (Resu
 	return resultFor(plan, ActionDryRun, "validated_no_write"), nil
 }
 
-// Stage verifies every source before opening the target for writing, takes an
-// exclusive nonblocking lock, rechecks target usage, writes only the approved
-// extents, and fsyncs the target. A later Readback call is deliberately
-// separate so the caller can close the physical power boundary first.
+// Stage opens, exclusively locks, and pins the inspected target before source
+// verification, then revalidates its attachment identity and usage before
+// writing only the approved extents and fsyncing. A later Readback call is
+// deliberately separate so the caller can close the physical power boundary.
 func (executor Executor) Stage(ctx context.Context, plan Plan, mode Mode) (Result, error) {
 	if err := executor.validateConfiguration(); err != nil {
 		return Result{}, err
 	}
-	prepared, _, target, err := executor.prepareForWrite(ctx, plan, mode, true)
+	prepared, facts, target, err := executor.prepareForWrite(ctx, plan, mode, true)
 	if err != nil {
 		return Result{}, err
 	}
@@ -65,6 +66,9 @@ func (executor Executor) Stage(ctx context.Context, plan Plan, mode Mode) (Resul
 	}
 	if err := target.Sync(); err != nil {
 		return Result{}, fmt.Errorf("fsync staged target: %w", err)
+	}
+	if err := validateOpenedTarget(target, facts, mode); err != nil {
+		return Result{}, fmt.Errorf("revalidate staged target: %w", err)
 	}
 	return resultFor(plan, ActionStage, "fsync_complete_readback_required"), nil
 }
@@ -101,11 +105,21 @@ func (executor Executor) Readback(ctx context.Context, plan Plan, mode Mode) (Re
 	if err := validateOpenedTarget(target, facts, mode); err != nil {
 		return Result{}, err
 	}
-	usage, err = inventory.Usage(ctx, facts, mode)
+	currentFacts, err := inventory.Inspect(ctx, plan.Target.Path, mode)
+	if err != nil {
+		return Result{}, fmt.Errorf("reinspect readback target: %w", err)
+	}
+	if err := validateSameTargetFacts(facts, currentFacts); err != nil {
+		return Result{}, err
+	}
+	usage, err = inventory.Usage(ctx, currentFacts, mode)
 	if err != nil {
 		return Result{}, fmt.Errorf("recheck readback target usage: %w", err)
 	}
-	if err := validateTargetFacts(plan, mode, facts, usage); err != nil {
+	if err := validateTargetFacts(plan, mode, currentFacts, usage); err != nil {
+		return Result{}, err
+	}
+	if err := validateOpenedTarget(target, currentFacts, mode); err != nil {
 		return Result{}, err
 	}
 	for _, image := range plan.Images {
@@ -116,6 +130,9 @@ func (executor Executor) Readback(ctx context.Context, plan Plan, mode Mode) (Re
 		if digest != image.Digest {
 			return Result{}, fmt.Errorf("%w: image %q digest is %s, expected %s", ErrReadbackMismatch, image.Role, digest, image.Digest)
 		}
+	}
+	if err := validateOpenedTarget(target, currentFacts, mode); err != nil {
+		return Result{}, fmt.Errorf("revalidate readback target: %w", err)
 	}
 	return resultFor(plan, ActionReadback, "reopened_readback_verified"), nil
 }
@@ -139,18 +156,17 @@ func (executor Executor) prepareForWrite(ctx context.Context, plan Plan, mode Mo
 	if err := validateTargetFacts(plan, mode, facts, usage); err != nil {
 		return nil, TargetFacts{}, nil, err
 	}
-	prepared, err := executor.prepareImages(ctx, plan.Images)
-	if err != nil {
-		return nil, TargetFacts{}, nil, err
-	}
 	target, err := openLockedTarget(facts, mode, writable)
 	if err != nil {
-		closePreparedImages(prepared)
 		return nil, TargetFacts{}, nil, err
 	}
 	if err := validateOpenedTarget(target, facts, mode); err != nil {
 		closeLockedTarget(target)
-		closePreparedImages(prepared)
+		return nil, TargetFacts{}, nil, err
+	}
+	prepared, err := executor.prepareImages(ctx, plan.Images)
+	if err != nil {
+		closeLockedTarget(target)
 		return nil, TargetFacts{}, nil, err
 	}
 	if err := rejectTargetSourceAlias(target, prepared, mode); err != nil {
@@ -158,18 +174,36 @@ func (executor Executor) prepareForWrite(ctx context.Context, plan Plan, mode Mo
 		closePreparedImages(prepared)
 		return nil, TargetFacts{}, nil, err
 	}
-	usage, err = inventory.Usage(ctx, facts, mode)
+	currentFacts, err := inventory.Inspect(ctx, plan.Target.Path, mode)
+	if err != nil {
+		closeLockedTarget(target)
+		closePreparedImages(prepared)
+		return nil, TargetFacts{}, nil, fmt.Errorf("reinspect target: %w", err)
+	}
+	if err := validateSameTargetFacts(facts, currentFacts); err != nil {
+		closeLockedTarget(target)
+		closePreparedImages(prepared)
+		return nil, TargetFacts{}, nil, err
+	}
+	usage, err = inventory.Usage(ctx, currentFacts, mode)
 	if err != nil {
 		closeLockedTarget(target)
 		closePreparedImages(prepared)
 		return nil, TargetFacts{}, nil, fmt.Errorf("recheck target usage: %w", err)
 	}
-	if err := validateTargetFacts(plan, mode, facts, usage); err != nil {
+	if err := validateTargetFacts(plan, mode, currentFacts, usage); err != nil {
 		closeLockedTarget(target)
 		closePreparedImages(prepared)
 		return nil, TargetFacts{}, nil, err
 	}
-	return prepared, facts, target, nil
+	// Keep the attachment check last: this is the final validation before the
+	// caller can issue the first write through the already-pinned descriptor.
+	if err := validateOpenedTarget(target, currentFacts, mode); err != nil {
+		closeLockedTarget(target)
+		closePreparedImages(prepared)
+		return nil, TargetFacts{}, nil, err
+	}
+	return prepared, currentFacts, target, nil
 }
 
 func (executor Executor) prepareImages(ctx context.Context, images []ImageSpec) ([]preparedImage, error) {
@@ -302,15 +336,38 @@ func validateOpenedTarget(file *os.File, facts TargetFacts, mode Mode) error {
 		}
 		return nil
 	}
-	if info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice != 0 || uint64(stat.Rdev) != facts.DeviceNumber {
+	if info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice != 0 {
 		return fmt.Errorf("%w: opened block-device identity changed", ErrTargetMismatch)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(facts.RequestedPath)
+	if err != nil {
+		return fmt.Errorf("%w: re-resolve by-id target: %v", ErrTargetMismatch, err)
+	}
+	if resolvedPath != facts.ResolvedPath {
+		return fmt.Errorf("%w: by-id target resolves to a different device node", ErrTargetMismatch)
+	}
+	aliasInfo, err := os.Stat(resolvedPath)
+	if err != nil {
+		return fmt.Errorf("%w: stat re-resolved by-id target: %v", ErrTargetMismatch, err)
+	}
+	aliasStat, ok := aliasInfo.Sys().(*syscall.Stat_t)
+	if !ok || aliasInfo.Mode()&os.ModeDevice == 0 || aliasInfo.Mode()&os.ModeCharDevice != 0 || aliasStat.Rdev != stat.Rdev {
+		return fmt.Errorf("%w: by-id target no longer identifies the opened block device", ErrTargetMismatch)
 	}
 	size, err := blockDeviceSize(file)
 	if err != nil {
 		return err
 	}
-	if size != facts.SizeBytes {
-		return fmt.Errorf("%w: opened block-device size changed", ErrTargetMismatch)
+	diskSequence, err := blockDeviceDiskSequence(file)
+	if err != nil {
+		return err
+	}
+	return validateDeviceInstance(facts, uint64(stat.Rdev), size, diskSequence)
+}
+
+func validateDeviceInstance(facts TargetFacts, deviceNumber, sizeBytes, diskSequence uint64) error {
+	if deviceNumber != facts.DeviceNumber || sizeBytes != facts.SizeBytes || diskSequence != facts.DiskSequence {
+		return fmt.Errorf("%w: opened block-device attachment changed", ErrTargetMismatch)
 	}
 	return nil
 }

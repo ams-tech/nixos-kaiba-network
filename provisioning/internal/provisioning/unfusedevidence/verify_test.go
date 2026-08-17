@@ -1,53 +1,73 @@
 package unfusedevidence
 
 import (
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/unfusedcompat"
 )
 
 type evidenceInputs struct {
-	compatibilityPath string
-	observationPath   string
-	uartPath          string
-	compatibility     unfusedcompat.Outcome
-	observation       HardwareObservation
-	uart              []byte
+	manifestPath    string
+	capsuleRoot     string
+	fixturePath     string
+	publicKeyPath   string
+	observationPath string
+	uartPath        string
+	policy          unfusedcompat.TrustedSignerPolicy
+	manifest        unfusedcompat.CapsuleManifest
+	fixture         unfusedcompat.OfflineFixture
+	compatibility   unfusedcompat.Outcome
+	observation     HardwareObservation
+	uart            []byte
 }
 
-func TestVerifyProducesBoundedHardwareObservationWithoutEnforcement(t *testing.T) {
+var (
+	evidenceSigningKeyOnce sync.Once
+	evidenceSigningKey     *rsa.PrivateKey
+	evidenceSigningKeyErr  error
+)
+
+func TestVerifyProducesOfflineCorrelationWithoutHardwareClaim(t *testing.T) {
 	inputs := makeEvidenceInputs(t)
-	result, err := Verify(inputs.compatibilityPath, inputs.observationPath, inputs.uartPath)
+	result, err := verifyEvidence(inputs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.SchemaVersion != OutcomeSchemaVersion || result.Status != StatusCompatibilityPassed || result.EvidenceMode != EvidenceModeOperatorHardware {
+	if result.SchemaVersion != OutcomeSchemaVersion || result.Status != StatusRecordConsistent || result.EvidenceMode != EvidenceModeOfflineOperatorCorrelation {
 		t.Fatalf("unexpected result identity: %#v", result)
 	}
-	if !result.HardwareObserved || result.SecurityEnforced || result.MutationEligible {
-		t.Fatalf("hardware result contains the wrong policy claims: %#v", result)
+	if !result.RecordConsistent || result.CaptureAuthenticated || result.FreshnessEstablished || result.HardwareObserved || result.SecurityEnforced || result.MutationEligible {
+		t.Fatalf("correlation result contains the wrong policy claims: %#v", result)
 	}
-	if !result.SignatureVerified || result.BootPublicKeyFingerprint != inputs.compatibility.BootPublicKeyFingerprint || result.SignatureVerificationReceipt != inputs.compatibility.SignatureVerificationReceipt {
-		t.Fatalf("hardware result lost signed-capsule verification: %#v", result)
+	if !result.SignatureVerified || !result.SignerTrustAnchored || result.BootPublicKeyFingerprint != inputs.compatibility.BootPublicKeyFingerprint ||
+		result.SignatureVerificationReceipt != inputs.compatibility.SignatureVerificationReceipt ||
+		result.SignerTrustPolicyDigest != inputs.compatibility.SignerTrustPolicyDigest {
+		t.Fatalf("correlation result lost signed-capsule verification: %#v", result)
 	}
 	if result.LaneID != inputs.observation.Before.LaneID || result.TargetFingerprint != inputs.observation.Before.TargetFingerprint {
-		t.Fatalf("result lost target continuity: %#v", result)
+		t.Fatalf("result lost target correlation: %#v", result)
 	}
 	if result.CustomerKeyHashBefore != ZeroCustomerKeyHash || result.CustomerKeyHashAfter != ZeroCustomerKeyHash {
-		t.Fatalf("result lost unfused state: %#v", result)
+		t.Fatalf("result lost recorded unfused state: %#v", result)
 	}
 	if result.CompatibilityOutcomeDigest != inputs.observation.CompatibilityOutcomeDigest || result.UARTCaptureDigest != inputs.observation.UARTCaptureDigest {
 		t.Fatalf("result lost input evidence binding: %#v", result)
 	}
 	if result.ObservationDigest == "" || result.BootImageDigest != inputs.compatibility.BootImageDigest || result.RootHashDigest != inputs.compatibility.RootHashDigest {
-		t.Fatalf("result lost capsule evidence: %#v", result)
+		t.Fatalf("result lost capsule correlation: %#v", result)
 	}
 }
 
@@ -57,7 +77,9 @@ func TestHardwareObservationRejectsBindingContinuityAndCeremonyTampering(t *test
 		mutate func(*HardwareObservation)
 		want   string
 	}{
-		{"schema", func(value *HardwareObservation) { value.SchemaVersion = "other" }, "unsupported"},
+		{"legacy schema", func(value *HardwareObservation) {
+			value.SchemaVersion = "provisioning.kaiba.network/rpi5-unfused-hardware-observation/v1alpha1"
+		}, "unsupported"},
 		{"observation id", func(value *HardwareObservation) { value.ObservationID = "../observation" }, "observation_id"},
 		{"compatibility result", func(value *HardwareObservation) { value.CompatibilityOutcomeDigest = digestBytes([]byte("other")) }, "compatibility outcome"},
 		{"capsule id", func(value *HardwareObservation) { value.CapsuleID = "other" }, "capsule binding"},
@@ -66,6 +88,7 @@ func TestHardwareObservationRejectsBindingContinuityAndCeremonyTampering(t *test
 		{"boot signature", func(value *HardwareObservation) { value.BootSignatureDigest = digestBytes([]byte("other")) }, "capsule binding"},
 		{"boot key", func(value *HardwareObservation) { value.BootPublicKeyFingerprint = digestBytes([]byte("other")) }, "capsule binding"},
 		{"signature receipt", func(value *HardwareObservation) { value.SignatureVerificationReceipt = digestBytes([]byte("other")) }, "capsule binding"},
+		{"signer policy", func(value *HardwareObservation) { value.SignerTrustPolicyDigest = digestBytes([]byte("other")) }, "capsule binding"},
 		{"root data", func(value *HardwareObservation) { value.RootDataDigest = digestBytes([]byte("other")) }, "capsule binding"},
 		{"root hash", func(value *HardwareObservation) { value.RootHashDigest = digestBytes([]byte("other")) }, "capsule binding"},
 		{"UART digest", func(value *HardwareObservation) { value.UARTCaptureDigest = digestBytes([]byte("other")) }, "UART digest"},
@@ -85,7 +108,7 @@ func TestHardwareObservationRejectsBindingContinuityAndCeremonyTampering(t *test
 			inputs := makeEvidenceInputs(t)
 			test.mutate(&inputs.observation)
 			writeJSON(t, inputs.observationPath, inputs.observation)
-			_, err := Verify(inputs.compatibilityPath, inputs.observationPath, inputs.uartPath)
+			_, err := verifyEvidence(inputs)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
@@ -93,35 +116,61 @@ func TestHardwareObservationRejectsBindingContinuityAndCeremonyTampering(t *test
 	}
 }
 
-func TestCompatibilityOutcomeMustRemainOfflineAndNonEnforcing(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*unfusedcompat.Outcome)
-		want   string
-	}{
-		{"schema", func(value *unfusedcompat.Outcome) { value.SchemaVersion = "other" }, "successful offline"},
-		{"status", func(value *unfusedcompat.Outcome) { value.Status = "failed" }, "successful offline"},
-		{"mode", func(value *unfusedcompat.Outcome) { value.EvidenceMode = "hardware" }, "successful offline"},
-		{"hardware", func(value *unfusedcompat.Outcome) { value.HardwareObserved = true }, "prohibited"},
-		{"enforcement", func(value *unfusedcompat.Outcome) { value.SecurityEnforced = true }, "prohibited"},
-		{"eligibility", func(value *unfusedcompat.Outcome) { value.MutationEligible = true }, "prohibited"},
-		{"roles", func(value *unfusedcompat.Outcome) { value.FilesVerified = 3 }, "required capsule roles"},
-		{"signature", func(value *unfusedcompat.Outcome) { value.SignatureVerified = false }, "detached boot signature"},
-		{"boot key", func(value *unfusedcompat.Outcome) { value.BootPublicKeyFingerprint = "sha256:UPPER" }, "canonical"},
-		{"signature receipt", func(value *unfusedcompat.Outcome) { value.SignatureVerificationReceipt = "sha256:UPPER" }, "canonical"},
-		{"digest", func(value *unfusedcompat.Outcome) { value.RootHashDigest = "sha256:UPPER" }, "canonical"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			inputs := makeEvidenceInputs(t)
-			test.mutate(&inputs.compatibility)
-			writeJSON(t, inputs.compatibilityPath, inputs.compatibility)
-			_, err := Verify(inputs.compatibilityPath, inputs.observationPath, inputs.uartPath)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want %q", err, test.want)
-			}
-		})
-	}
+func TestVerifyRecomputesSignedCompatibilityOutcome(t *testing.T) {
+	t.Run("untrusted signer", func(t *testing.T) {
+		inputs := makeEvidenceInputs(t)
+		policy, err := unfusedcompat.NewTrustedSignerPolicy(digestBytes([]byte("different signer")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		inputs.policy = policy
+		_, err = verifyEvidence(inputs)
+		if err == nil || !strings.Contains(err.Error(), "not authorized") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("tampered manifest", func(t *testing.T) {
+		inputs := makeEvidenceInputs(t)
+		inputs.manifest.SchemaVersion = "provisioning.kaiba.network/rpi5-unfused-capsule-manifest/v0"
+		writeJSON(t, inputs.manifestPath, inputs.manifest)
+		_, err := verifyEvidence(inputs)
+		if err == nil || !strings.Contains(err.Error(), "unsupported capsule manifest") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("tampered fixture", func(t *testing.T) {
+		inputs := makeEvidenceInputs(t)
+		inputs.fixture.CompatibilityMarkerObserved = false
+		writeJSON(t, inputs.fixturePath, inputs.fixture)
+		_, err := verifyEvidence(inputs)
+		if err == nil || !strings.Contains(err.Error(), "complete compatibility sequence") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("tampered capsule", func(t *testing.T) {
+		inputs := makeEvidenceInputs(t)
+		mustWrite(t, filepath.Join(inputs.capsuleRoot, inputs.manifest.RootDataPath), []byte("tampered root data"))
+		_, err := verifyEvidence(inputs)
+		if err == nil || !strings.Contains(err.Error(), "verify capsule file") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("substituted public key", func(t *testing.T) {
+		inputs := makeEvidenceInputs(t)
+		wrong, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writePublicKey(t, inputs.publicKeyPath, &wrong.PublicKey)
+		_, err = verifyEvidence(inputs)
+		if err == nil || !strings.Contains(err.Error(), "not authorized") {
+			t.Fatalf("error = %v", err)
+		}
+	})
 }
 
 func TestUARTCaptureRequiresExactlyBoundCompatibilityAndIntegrityMarkers(t *testing.T) {
@@ -176,7 +225,7 @@ func TestUARTCaptureRequiresExactlyBoundCompatibilityAndIntegrityMarkers(t *test
 			mustWrite(t, inputs.uartPath, inputs.uart)
 			inputs.observation.UARTCaptureDigest = rawDigest(inputs.uart)
 			writeJSON(t, inputs.observationPath, inputs.observation)
-			_, err := Verify(inputs.compatibilityPath, inputs.observationPath, inputs.uartPath)
+			_, err := verifyEvidence(inputs)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
@@ -193,7 +242,7 @@ func TestStrictInputsRejectUnknownDuplicateTrailingSymlinkAndOversize(t *testing
 		}
 		raw = []byte(strings.Replace(string(raw), `"observation_id":`, `"device_path":"/dev/example","observation_id":`, 1))
 		mustWrite(t, inputs.observationPath, raw)
-		_, err = Verify(inputs.compatibilityPath, inputs.observationPath, inputs.uartPath)
+		_, err = verifyEvidence(inputs)
 		if err == nil || !strings.Contains(err.Error(), "unknown field") {
 			t.Fatalf("error = %v", err)
 		}
@@ -207,15 +256,15 @@ func TestStrictInputsRejectUnknownDuplicateTrailingSymlinkAndOversize(t *testing
 		}
 		raw = []byte(strings.Replace(string(raw), `"lane_id":`, `"lane_id":"duplicate","lane_id":`, 1))
 		mustWrite(t, inputs.observationPath, raw)
-		_, err = Verify(inputs.compatibilityPath, inputs.observationPath, inputs.uartPath)
+		_, err = verifyEvidence(inputs)
 		if err == nil || !strings.Contains(err.Error(), "duplicate") {
 			t.Fatalf("error = %v", err)
 		}
 	})
 
-	t.Run("trailing outcome", func(t *testing.T) {
+	t.Run("trailing observation", func(t *testing.T) {
 		inputs := makeEvidenceInputs(t)
-		file, err := os.OpenFile(inputs.compatibilityPath, os.O_WRONLY|os.O_APPEND, 0)
+		file, err := os.OpenFile(inputs.observationPath, os.O_WRONLY|os.O_APPEND, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -224,7 +273,7 @@ func TestStrictInputsRejectUnknownDuplicateTrailingSymlinkAndOversize(t *testing
 		if writeErr != nil || closeErr != nil {
 			t.Fatalf("append: %v close: %v", writeErr, closeErr)
 		}
-		_, err = Verify(inputs.compatibilityPath, inputs.observationPath, inputs.uartPath)
+		_, err = verifyEvidence(inputs)
 		if err == nil || !strings.Contains(err.Error(), "trailing") {
 			t.Fatalf("error = %v", err)
 		}
@@ -236,7 +285,8 @@ func TestStrictInputsRejectUnknownDuplicateTrailingSymlinkAndOversize(t *testing
 		if err := os.Symlink(inputs.uartPath, link); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Verify(inputs.compatibilityPath, inputs.observationPath, link)
+		inputs.uartPath = link
+		_, err := verifyEvidence(inputs)
 		if err == nil || !strings.Contains(err.Error(), "non-symlink") {
 			t.Fatalf("error = %v", err)
 		}
@@ -245,7 +295,7 @@ func TestStrictInputsRejectUnknownDuplicateTrailingSymlinkAndOversize(t *testing
 	t.Run("oversize UART", func(t *testing.T) {
 		inputs := makeEvidenceInputs(t)
 		mustWrite(t, inputs.uartPath, []byte(strings.Repeat("x", maximumUARTCaptureBytes+1)))
-		_, err := Verify(inputs.compatibilityPath, inputs.observationPath, inputs.uartPath)
+		_, err := verifyEvidence(inputs)
 		if err == nil || !strings.Contains(err.Error(), "exceeds") {
 			t.Fatalf("error = %v", err)
 		}
@@ -260,28 +310,80 @@ func TestPackageDependsOnlyOnTheOfflineCompatibilityContract(t *testing.T) {
 	}
 	for _, dependency := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		if strings.HasPrefix(dependency, "github.com/ams-tech/nixos-kaiba-network/provisioning/") && dependency != "github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/unfusedcompat" {
-			t.Fatalf("hardware evidence package gained a production repository dependency %q", dependency)
+			t.Fatalf("evidence correlation package gained a production repository dependency %q", dependency)
 		}
 		if dependency == "os/exec" || dependency == "net" || strings.HasPrefix(dependency, "net/") {
-			t.Fatalf("hardware evidence package gained a process or network dependency %q", dependency)
+			t.Fatalf("evidence correlation package gained a process or network dependency %q", dependency)
 		}
 	}
+}
+
+func verifyEvidence(inputs evidenceInputs) (Outcome, error) {
+	return Verify(inputs.manifestPath, inputs.capsuleRoot, inputs.fixturePath, inputs.publicKeyPath, inputs.observationPath, inputs.uartPath, inputs.policy)
 }
 
 func makeEvidenceInputs(t *testing.T) evidenceInputs {
 	t.Helper()
 	base := t.TempDir()
-	compatibility := unfusedcompat.Outcome{
-		SchemaVersion: unfusedcompat.OutcomeSchemaVersion,
-		Status:        unfusedcompat.StatusCompatibilityPassed, EvidenceMode: unfusedcompat.EvidenceModeOfflineFixture,
-		FixtureID: "fixture-1", CapsuleID: "capsule-1",
-		ManifestDigest: digestBytes([]byte("manifest")), CapsuleDigest: digestBytes([]byte("capsule")),
-		BootImageDigest: digestBytes([]byte("boot image")), BootSignatureDigest: digestBytes([]byte("boot signature")),
-		BootPublicKeyFingerprint:     digestBytes([]byte("boot public key")),
-		SignatureVerificationReceipt: digestBytes([]byte("signature receipt")), SignatureVerified: true,
-		RootDataDigest: digestBytes([]byte("root data")), RootHashDigest: digestBytes([]byte("root hash")),
-		FixtureDigest: digestBytes([]byte("fixture")), FilesVerified: 4,
-		HardwareObserved: false, SecurityEnforced: false, MutationEligible: false,
+	root := filepath.Join(base, "capsule")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	privateKey := testEvidenceSigningKey(t)
+	bootImage := []byte("immutable boot capsule")
+	bootHash := sha256.Sum256(bootImage)
+	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, bootHash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := []struct {
+		path string
+		data []byte
+	}{
+		{"boot.img", bootImage},
+		{"boot.sig", signature},
+		{"nvme/root-data.img", []byte("immutable root data")},
+		{"nvme/root-hash.img", []byte("immutable verity hash tree")},
+	}
+	files := make([]unfusedcompat.CapsuleFile, 0, len(contents))
+	for _, content := range contents {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, content.path)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		mustWrite(t, filepath.Join(root, content.path), content.data)
+		files = append(files, unfusedcompat.CapsuleFile{Path: content.path, SizeBytes: int64(len(content.data)), SHA256: digestBytes(content.data)})
+	}
+	capsuleDigest, err := unfusedcompat.ComputeCapsuleDigest(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := unfusedcompat.CapsuleManifest{
+		SchemaVersion: unfusedcompat.ManifestSchemaVersion, CapsuleID: "capsule-fixture-1",
+		CapsuleDigest: capsuleDigest, BootImagePath: "boot.img", BootSignaturePath: "boot.sig",
+		RootDataPath: "nvme/root-data.img", RootHashPath: "nvme/root-hash.img", Files: files,
+	}
+	fixture := unfusedcompat.OfflineFixture{
+		SchemaVersion: unfusedcompat.FixtureSchemaVersion, FixtureID: "fixture-1",
+		CapsuleID: manifest.CapsuleID, CapsuleDigest: manifest.CapsuleDigest,
+		BootImageDigest: files[0].SHA256, BootSignatureDigest: files[1].SHA256,
+		RootDataDigest: files[2].SHA256, RootHashDigest: files[3].SHA256,
+		BootMode:       unfusedcompat.BootModeRAMDisk,
+		FirmwareLoaded: true, KernelStarted: true, InitramfsStarted: true,
+		CompatibilityMarkerObserved: true,
+	}
+	manifestPath := filepath.Join(base, "manifest.json")
+	fixturePath := filepath.Join(base, "fixture.json")
+	publicKeyPath := filepath.Join(base, "public.pem")
+	writeJSON(t, manifestPath, manifest)
+	writeJSON(t, fixturePath, fixture)
+	publicKeyFingerprint := writePublicKey(t, publicKeyPath, &privateKey.PublicKey)
+	policy, err := unfusedcompat.NewTrustedSignerPolicy(publicKeyFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatibility, err := unfusedcompat.VerifySignedOfflineFixture(manifestPath, root, fixturePath, publicKeyPath, policy)
+	if err != nil {
+		t.Fatal(err)
 	}
 	compatibilityDigest, err := CompatibilityOutcomeDigest(compatibility)
 	if err != nil {
@@ -299,6 +401,7 @@ func makeEvidenceInputs(t *testing.T) evidenceInputs {
 		BootImageDigest: compatibility.BootImageDigest, BootSignatureDigest: compatibility.BootSignatureDigest,
 		BootPublicKeyFingerprint:     compatibility.BootPublicKeyFingerprint,
 		SignatureVerificationReceipt: compatibility.SignatureVerificationReceipt,
+		SignerTrustPolicyDigest:      compatibility.SignerTrustPolicyDigest,
 		RootDataDigest:               compatibility.RootDataDigest, RootHashDigest: compatibility.RootHashDigest,
 		UARTCaptureDigest:                  rawDigest(uart),
 		ManualBOOTSELConfirmation:          ManualBOOTSELConfirmation,
@@ -309,16 +412,36 @@ func makeEvidenceInputs(t *testing.T) evidenceInputs {
 		Before:                             TargetObservation{LaneID: "lane-1", TargetFingerprint: digestBytes([]byte("target")), CustomerKeyHash: ZeroCustomerKeyHash},
 		After:                              TargetObservation{LaneID: "lane-1", TargetFingerprint: digestBytes([]byte("target")), CustomerKeyHash: ZeroCustomerKeyHash},
 	}
-	compatibilityPath := filepath.Join(base, "compatibility.json")
 	observationPath := filepath.Join(base, "observation.json")
 	uartPath := filepath.Join(base, "uart.txt")
-	writeJSON(t, compatibilityPath, compatibility)
 	writeJSON(t, observationPath, observation)
 	mustWrite(t, uartPath, uart)
 	return evidenceInputs{
-		compatibilityPath: compatibilityPath, observationPath: observationPath, uartPath: uartPath,
-		compatibility: compatibility, observation: observation, uart: uart,
+		manifestPath: manifestPath, capsuleRoot: root, fixturePath: fixturePath, publicKeyPath: publicKeyPath,
+		observationPath: observationPath, uartPath: uartPath, policy: policy,
+		manifest: manifest, fixture: fixture, compatibility: compatibility, observation: observation, uart: uart,
 	}
+}
+
+func testEvidenceSigningKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	evidenceSigningKeyOnce.Do(func() {
+		evidenceSigningKey, evidenceSigningKeyErr = rsa.GenerateKey(rand.Reader, 2048)
+	})
+	if evidenceSigningKeyErr != nil {
+		t.Fatal(evidenceSigningKeyErr)
+	}
+	return evidenceSigningKey
+}
+
+func writePublicKey(t *testing.T, filePath string, publicKey *rsa.PublicKey) string {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filePath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+	return digestBytes(der)
 }
 
 func writeJSON(t *testing.T, filePath string, value any) {

@@ -23,6 +23,13 @@ type usageInventory struct {
 	calls  int
 }
 
+type lockCheckingInventory struct {
+	base                    Inventory
+	inspectCalls            int
+	targetLockedOnReinspect bool
+	lockCheckErr            error
+}
+
 func (inventory *usageInventory) Inspect(ctx context.Context, path string, mode Mode) (TargetFacts, error) {
 	return inventory.base.Inspect(ctx, path, mode)
 }
@@ -34,6 +41,38 @@ func (inventory *usageInventory) Usage(ctx context.Context, facts TargetFacts, m
 	value := inventory.values[inventory.calls]
 	inventory.calls++
 	return value, nil
+}
+
+func (inventory *lockCheckingInventory) Inspect(ctx context.Context, path string, mode Mode) (TargetFacts, error) {
+	facts, err := inventory.base.Inspect(ctx, path, mode)
+	if err != nil {
+		return TargetFacts{}, err
+	}
+	inventory.inspectCalls++
+	if inventory.inspectCalls != 2 {
+		return facts, nil
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		inventory.lockCheckErr = err
+		return facts, nil
+	}
+	defer file.Close()
+	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK) {
+		inventory.targetLockedOnReinspect = true
+		return facts, nil
+	}
+	if err != nil {
+		inventory.lockCheckErr = err
+		return facts, nil
+	}
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	return facts, nil
+}
+
+func (inventory *lockCheckingInventory) Usage(ctx context.Context, facts TargetFacts, mode Mode) (TargetUsage, error) {
+	return inventory.base.Usage(ctx, facts, mode)
 }
 
 func TestPlanValidateRequiresClosedLayoutAndTargetModes(t *testing.T) {
@@ -76,6 +115,77 @@ func TestPlanValidateRequiresClosedLayoutAndTargetModes(t *testing.T) {
 			test.mutate(&candidate)
 			if err := candidate.Validate(test.mode); !errors.Is(err, ErrInvalidPlan) {
 				t.Fatalf("error = %v, want invalid plan", err)
+			}
+		})
+	}
+}
+
+func TestDeviceFactsRequirePerAttachmentIdentity(t *testing.T) {
+	fixture := newFixture(t)
+	plan := fixture.plan
+	plan.Target.Path = "/dev/disk/by-id/nvme-example"
+	plan.Target.ExpectedIdentity = "nvme-example"
+	facts := TargetFacts{
+		RequestedPath: plan.Target.Path, ResolvedPath: "/dev/nvme0n1",
+		Identity: plan.Target.ExpectedIdentity, SizeBytes: plan.Target.ExpectedSizeBytes,
+		Kind: TargetBlockDevice, WholeDevice: true, DeviceNumber: 0x103,
+		SysfsPath: "/sys/devices/pci0000:00/nvme/nvme0/nvme0n1",
+	}
+
+	if err := validateTargetFacts(plan, ModeDevice, facts, TargetUsage{}); !errors.Is(err, ErrUnsafeTarget) {
+		t.Fatalf("device facts without a kernel attachment identity error = %v", err)
+	}
+	facts.DiskSequence = 17
+	if err := validateTargetFacts(plan, ModeDevice, facts, TargetUsage{}); err != nil {
+		t.Fatalf("complete device facts error = %v", err)
+	}
+}
+
+func TestDeviceInstanceRejectsReenumeration(t *testing.T) {
+	facts := TargetFacts{DeviceNumber: 0x103, SizeBytes: fixtureTargetSize, DiskSequence: 17}
+	if err := validateDeviceInstance(facts, facts.DeviceNumber, facts.SizeBytes, facts.DiskSequence); err != nil {
+		t.Fatalf("unchanged device instance error = %v", err)
+	}
+	for name, values := range map[string][3]uint64{
+		"device number": {0x104, facts.SizeBytes, facts.DiskSequence},
+		"size":          {facts.DeviceNumber, facts.SizeBytes + 4096, facts.DiskSequence},
+		"disk sequence": {facts.DeviceNumber, facts.SizeBytes, facts.DiskSequence + 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateDeviceInstance(facts, values[0], values[1], values[2]); !errors.Is(err, ErrTargetMismatch) {
+				t.Fatalf("changed device instance error = %v", err)
+			}
+		})
+	}
+}
+
+func TestTargetFactsSnapshotRejectsAttachmentReplacement(t *testing.T) {
+	initial := TargetFacts{
+		RequestedPath: "/dev/disk/by-id/nvme-example",
+		ResolvedPath:  "/dev/nvme0n1",
+		Identity:      "nvme-example",
+		SizeBytes:     fixtureTargetSize,
+		Kind:          TargetBlockDevice,
+		WholeDevice:   true,
+		DeviceNumber:  0x103,
+		DiskSequence:  17,
+		SysfsPath:     "/sys/devices/pci0000:00/nvme/nvme0/nvme0n1",
+	}
+	if err := validateSameTargetFacts(initial, initial); err != nil {
+		t.Fatalf("unchanged target snapshot error = %v", err)
+	}
+	for name, mutate := range map[string]func(*TargetFacts){
+		"resolved path":  func(value *TargetFacts) { value.ResolvedPath = "/dev/nvme1n1" },
+		"device number":  func(value *TargetFacts) { value.DeviceNumber++ },
+		"disk sequence":  func(value *TargetFacts) { value.DiskSequence++ },
+		"capacity":       func(value *TargetFacts) { value.SizeBytes += 4096 },
+		"sysfs identity": func(value *TargetFacts) { value.SysfsPath += "-replacement" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			current := initial
+			mutate(&current)
+			if err := validateSameTargetFacts(initial, current); !errors.Is(err, ErrTargetMismatch) {
+				t.Fatalf("changed target snapshot error = %v", err)
 			}
 		})
 	}
@@ -222,6 +332,23 @@ func TestStagePreflightsEverySourceBeforeWriting(t *testing.T) {
 	}
 	if after := readWholeFile(t, fixture.targetPath); !bytes.Equal(after, before) {
 		t.Fatal("failed source preflight changed target bytes")
+	}
+}
+
+func TestStagePinsTargetBeforeReinspection(t *testing.T) {
+	fixture := newFixture(t)
+	inventory := &lockCheckingInventory{base: SystemInventory{}}
+	if _, err := (Executor{Inventory: inventory}).Stage(context.Background(), fixture.plan, ModeFixture); err != nil {
+		t.Fatal(err)
+	}
+	if inventory.inspectCalls != 2 {
+		t.Fatalf("target inspections = %d, want 2", inventory.inspectCalls)
+	}
+	if inventory.lockCheckErr != nil {
+		t.Fatalf("check target lock during reinspection: %v", inventory.lockCheckErr)
+	}
+	if !inventory.targetLockedOnReinspect {
+		t.Fatal("target was not exclusively locked during final reinspection")
 	}
 }
 

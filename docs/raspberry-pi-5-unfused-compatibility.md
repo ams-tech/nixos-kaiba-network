@@ -17,14 +17,16 @@ and SHA-256 digest. Extra files or directories, symbolic links, special files,
 changed content, duplicate JSON keys, unknown JSON fields, and trailing JSON
 values are rejected.
 
-Run the signed offline verifier with absolute paths. The public key must be one
-RSA-2048 `PUBLIC KEY` PEM block using exponent 65537; the command verifies the
+Signed verification is available only from a verifier built with
+`mkRpi5UnfusedVerifier`. That factory pins the reviewed signer's canonical
+SPKI SHA-256 fingerprint into both offline binaries. The supplied public key
+must be one RSA-2048 `PUBLIC KEY` PEM block using exponent 65537, and its
+fingerprint must match that immutable anchor. The command then verifies the
 manifest-bound `boot.sig` as RSA PKCS#1 v1.5/SHA-256 over `boot.img` and emits a
-domain-separated verification receipt:
+domain-separated receipt that includes the signer-policy digest:
 
 ```console
-nix run ./nix/provisioning#kaiba-provision-unfused-compat -- \
-  verify-signed-offline-fixture \
+./result/bin/kaiba-provision-unfused-compat verify-signed-offline-fixture \
   --manifest /absolute/path/capsule-manifest.json \
   --capsule-root /absolute/path/capsule \
   --fixture /absolute/path/unfused-fixture.json \
@@ -37,47 +39,81 @@ A successful result is always limited to:
 status: compatibility_passed
 evidence_mode: offline_fixture
 signature_verified: true
+signer_trust_anchored: true
 hardware_observed: false
 security_enforced: false
 mutation_eligible: false
 ```
 
-`verify-offline-fixture` remains available for deliberately synthetic fixture
-tests and emits `signature_verified:false`; it is not sufficient for a signed
-capsule acceptance record. Neither mode can emit a production approval,
-`security_applied`, or an enrollment state. The Nix package is built in a dedicated derivation and its
-contract check rejects a linked production lane, physical Pi adapter, RPIBOOT,
-or GPIO implementation.
+The generic `kaiba-provision-unfused-compat` package has no signer anchor and
+therefore fails closed in signed mode. Its `verify-offline-fixture` mode remains
+available for deliberately synthetic fixture tests and emits
+`signature_verified:false` and `signer_trust_anchored:false`; it is not
+sufficient for a signed capsule acceptance record. Neither mode can emit a
+production approval, `security_applied`, or an enrollment state. The packages
+are dedicated derivations, and their contract checks reject a linked production
+lane, physical Pi adapter, RPIBOOT, or GPIO implementation.
 
-## Passive unfused hardware evidence
+In Nix, derive the verifier anchor from the same public metadata as the
+development signing package rather than copying a runtime flag:
+
+```nix
+unfusedVerifier = provisioning.lib.mkRpi5UnfusedVerifier {
+  inherit system;
+  trustedPublicKeyFingerprint =
+    developmentSigning.kaibaSigning.publicKeyFingerprint;
+};
+```
+
+## Offline unfused record correlation
 
 After the signed offline result exists, a fresh unfused board may be booted
 manually without supplying any ownership, OTP, or EEPROM programming bundle.
-Capture the bounded UART output and create the strict operator observation
-described by the verifier. It must bind the signed compatibility outcome,
-capsule and role digests, one lane and target fingerprint, the all-zero
-customer-key hash before and after, explicit manual BOOTSEL and normal-boot
-confirmations, and complete power removal at all three mode boundaries.
+Capture the bounded UART output and create the strict operator record described
+by the verifier. It must bind the signer policy, capsule and role digests, one
+lane and target fingerprint, the all-zero customer-key hash before and after,
+explicit manual BOOTSEL and normal-boot confirmations, and complete power
+removal at all three mode boundaries.
 
 The UART transcript must contain exactly one capsule-bound compatibility record
 and exactly one root-data/root-hash-bound dm-verity record. Then run:
 
 ```console
-nix run ./nix/provisioning#kaiba-provision-unfused-evidence -- \
-  verify-operator-observation \
-  --compatibility-outcome /absolute/path/signed-compatibility-result.json \
+./result/bin/kaiba-provision-unfused-evidence verify-operator-observation \
+  --manifest /absolute/path/capsule-manifest.json \
+  --capsule-root /absolute/path/capsule \
+  --fixture /absolute/path/unfused-fixture.json \
+  --public-key /absolute/path/reviewed-boot-public.pem \
   --observation /absolute/path/operator-observation.json \
   --uart-capture /absolute/path/uart.txt
 ```
 
-The successful physical result changes only `hardware_observed` to `true`.
-`security_enforced` and `mutation_eligible` remain false. The verifier reads
-the three named regular files; it has no live UART, USB, GPIO, block-device,
-subprocess, or network boundary.
+The evidence command re-verifies the raw signed capsule inputs in-process; a
+previous compatibility-result JSON is archival output and is never accepted as
+authority input. A successful result is deliberately correlation-only:
 
-This offline layer is followed by two separately privileged tools: an explicit
-media stager that can overwrite only an operator-selected dedicated disk, and
-a passive/manual boot-evidence collector. Neither is allowed to carry an OTP
-or EEPROM programming bundle. An unfused physical run can establish capsule
-and dm-verity compatibility, but customer-signature enforcement remains
-unproven until the separately reviewed irreversible ceremony.
+```text
+status: record_consistent
+evidence_mode: offline_operator_correlation
+record_consistent: true
+capture_authenticated: false
+freshness_established: false
+hardware_observed: false
+security_enforced: false
+mutation_eligible: false
+```
+
+The operator record and UART transcript can be self-consistent without proving
+who captured them, when they were captured, or that they came from live
+hardware. The verifier therefore never turns these files into a hardware
+observation claim. It has no live UART, USB, GPIO, block-device, subprocess, or
+network boundary. A future fixed-lane collector needs an independently anchored
+station evidence key and a fresh, single-use control-plane challenge before it
+can emit `hardware_observed:true`.
+
+This offline layer is followed by a separately privileged media stager that can
+overwrite only an operator-selected dedicated disk. Neither offline verifier is
+allowed to carry an OTP or EEPROM programming bundle. The current unfused files
+can support operator correlation, but live hardware provenance and
+customer-signature enforcement remain unproven until the authenticated
+collector and separately reviewed irreversible ceremony exist.

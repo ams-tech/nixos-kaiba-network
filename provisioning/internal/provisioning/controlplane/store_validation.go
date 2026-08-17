@@ -41,6 +41,10 @@ func validateTransaction(transaction Transaction, fenceEpochs map[string]uint64)
 		!validDigest(transaction.ExpectedCustomerKeyHash) || !validDigest(transaction.TransactionDigest) {
 		return corrupt("invalid transaction digest")
 	}
+	if transaction.ExpectedPrestateCustomerKeyHash != UnownedCustomerKeyHash ||
+		transaction.ExpectedCustomerKeyHash == UnownedCustomerKeyHash {
+		return corrupt("transaction does not bind an all-zero unowned prestate to a distinct owned key")
+	}
 	wantDigest, err := transactionDigest(transaction)
 	if err != nil || wantDigest != transaction.TransactionDigest {
 		return corrupt("transaction digest does not match immutable fields")

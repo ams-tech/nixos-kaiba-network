@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/controlplane"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
@@ -24,7 +25,7 @@ var (
 
 const (
 	prestateDigestDomain = "kaiba.provisioning.plan-compiler.prestate.v1alpha1"
-	ZeroCustomerKeyHash  = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	ZeroCustomerKeyHash  = controlplane.UnownedCustomerKeyHash
 )
 
 // DraftInput contains only values that are known before approval. Operation
@@ -73,6 +74,9 @@ func BuildDraft(input DraftInput) (Draft, error) {
 	}
 	if err := input.Release.Validate(); err != nil {
 		return Draft{}, fmt.Errorf("%w: release binding: %v", ErrInvalidDraft, err)
+	}
+	if input.Release.ExpectedCustomerKeyHash == ZeroCustomerKeyHash {
+		return Draft{}, fmt.Errorf("%w: release expected customer key must be nonzero", ErrInvalidDraft)
 	}
 	if input.ApprovalExpiresAt.IsZero() {
 		return Draft{}, fmt.Errorf("%w: approval expiry is required", ErrInvalidDraft)
@@ -149,7 +153,11 @@ func (draft Draft) InitialPrestateDigest() string {
 	if len(draft.plan.Operations) == 0 {
 		return ""
 	}
-	material, err := json.Marshal(draft.plan.Operations[0].ExpectedPrestate)
+	return prestateDigest(draft.plan.Operations[0].ExpectedPrestate)
+}
+
+func prestateDigest(state laneguard.DirectState) string {
+	material, err := json.Marshal(state)
 	if err != nil {
 		panic(fmt.Sprintf("marshal fixed lane prestate: %v", err))
 	}
@@ -166,7 +174,7 @@ func (draft Draft) Snapshot() laneguard.Plan { return clonePlan(draft.plan) }
 
 func validateDraft(draft Draft) error {
 	plan := draft.plan
-	if plan.ApprovalID != "" || plan.IntentReceipt != "" || len(plan.Operations) != len(operations) {
+	if plan.ApprovalID != "" || plan.IntentReceipt != "" || plan.IntentSequence != 0 || len(plan.Operations) != len(operations) {
 		return fmt.Errorf("%w: draft contains authority or the wrong operation count", ErrInvalidDraft)
 	}
 	for index, policy := range operations {

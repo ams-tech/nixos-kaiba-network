@@ -48,13 +48,17 @@ safety fields distinguish reopening from facts the program cannot observe:
 
 Device mode is intentionally destructive to ordinary storage bytes and
 requires root. It accepts only one clean immediate
-`/dev/disk/by-id/<whole-device>` path. Before opening for write, and again after
-locking, it rejects a partition, changed identity or capacity, a mounted
-dependent device, the system/root device, and active swap. Source images are
-opened without following links and fully hashed before the writable target is
-opened; the bytes actually copied are hashed again. The target is opened with
-no-follow, Linux block-device exclusive-open, and a nonblocking exclusive
-lock. Only the declared extents are written, followed by `fsync`.
+`/dev/disk/by-id/<whole-device>` path. It rejects a partition, changed identity
+or capacity, a mounted dependent device, the system/root device, and active
+swap. The target is opened with no-follow, Linux block-device exclusive-open,
+and a nonblocking exclusive lock before source hashing, which pins that kernel
+disk attachment through the operation. Its by-id mapping, device number,
+capacity, and Linux disk sequence are revalidated after hashing and before any
+write. The disk sequence is a boot-local attachment identifier, not persisted
+identity; device-mode staging fails closed when the kernel cannot provide it.
+Source images are opened without following links and fully hashed; the bytes
+actually copied are hashed again. Only the declared extents are written,
+followed by `fsync`.
 
 ```console
 sudo nix run ./nix/provisioning#kaiba-provision-media-stager -- \
@@ -85,4 +89,3 @@ independently parse the primary and backup GPT, inspect a FAT allowlist, run
 `veritysetup verify`, bind a production transaction and release manifest into
 the receipt, or prove cold-power removal. Those are SB-04 exit gates and must
 be completed before this tool is used as ceremony evidence.
-

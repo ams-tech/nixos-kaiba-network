@@ -210,6 +210,7 @@ let
       mutationCapable = false;
       otpCapable = false;
       securityEnforcementClaim = false;
+      signerTrustAnchored = false;
     };
     meta = {
       mainProgram = "kaiba-provision-unfused-compat";
@@ -243,9 +244,9 @@ let
     };
   };
 
-  # This verifier consumes already captured operator and UART evidence.  It
-  # has no live serial, USB, GPIO, block-device, or subprocess boundary and
-  # cannot turn an unfused compatibility result into an enforcement claim.
+  # This verifier re-verifies raw signed capsule inputs and correlates them with
+  # already captured operator and UART records. It has no live serial, USB,
+  # GPIO, block-device, or subprocess boundary and emits no hardware claim.
   unfusedEvidence = pkgs.buildGoModule {
     pname = "kaiba-provision-unfused-evidence";
     inherit version;
@@ -254,19 +255,80 @@ let
     vendorHash = null;
     doCheck = false;
     passthru.kaibaUnfusedEvidence = {
-      evidenceMode = "operator_hardware_observation";
+      evidenceMode = "offline_operator_correlation";
+      captureAuthenticated = false;
       directHardwareAccess = false;
+      hardwareObservationClaim = false;
       mutationCapable = false;
       oneTimeSettingCapable = false;
       otpCapable = false;
       securityEnforcementClaim = false;
+      signerTrustAnchored = false;
     };
     meta = {
       mainProgram = "kaiba-provision-unfused-evidence";
-      description = "Offline verifier for operator-recorded unfused Pi 5 boot evidence";
+      description = "Offline correlator for operator-recorded unfused Pi 5 boot records";
       platforms = lib.platforms.linux;
     };
   };
+
+  # Build both passive unfused verifiers with one immutable signer anchor. The
+  # public key remains an explicit runtime input for offline inspection, but a
+  # caller-selected key cannot become trusted unless its canonical SPKI digest
+  # matches this linker-fixed fingerprint.
+  mkRpi5UnfusedVerifier =
+    {
+      trustedPublicKeyFingerprint,
+      name ? "kaiba-rpi5-unfused-verifier",
+    }:
+    assert lib.assertMsg (canonicalDigest trustedPublicKeyFingerprint)
+      "trustedPublicKeyFingerprint must use canonical sha256:<64 lowercase hex> form";
+    let
+      buildVerifier =
+        {
+          pname,
+          subPackage,
+        }:
+        pkgs.buildGoModule {
+          inherit pname version;
+          src = goSource;
+          subPackages = [ subPackage ];
+          vendorHash = null;
+          doCheck = false;
+          ldflags = [ "-X=main.trustedSignerFingerprint=${trustedPublicKeyFingerprint}" ];
+        };
+      compatibilityVerifier = buildVerifier {
+        pname = "${name}-compatibility";
+        subPackage = "cmd/kaiba-provision-unfused-compat";
+      };
+      evidenceVerifier = buildVerifier {
+        pname = "${name}-evidence";
+        subPackage = "cmd/kaiba-provision-unfused-evidence";
+      };
+    in
+    pkgs.symlinkJoin {
+      inherit name;
+      paths = [
+        compatibilityVerifier
+        evidenceVerifier
+      ];
+      passthru.kaibaUnfusedVerifier = {
+        inherit compatibilityVerifier evidenceVerifier trustedPublicKeyFingerprint;
+        captureAuthenticated = false;
+        directHardwareAccess = false;
+        evidenceMode = "offline_operator_correlation";
+        hardwareObservationClaim = false;
+        mutationCapable = false;
+        oneTimeSettingCapable = false;
+        otpCapable = false;
+        securityEnforcementClaim = false;
+        signerTrustAnchored = true;
+      };
+      meta = {
+        description = "Signer-anchored offline Raspberry Pi 5 unfused compatibility and evidence verifiers";
+        platforms = lib.platforms.linux;
+      };
+    };
 
   servicePackage =
     {
@@ -686,6 +748,7 @@ in
     mediaStager
     mkDevelopmentYubiKeySigning
     mkRpi5PhysicalLaneGuard
+    mkRpi5UnfusedVerifier
     provision
     rehearsal
     rpiboot

@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	operationDigestDomain = "kaiba.provisioning.lane-guard.operation-digest.v1alpha2"
-	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha2"
+	operationDigestDomain = "kaiba.provisioning.lane-guard.operation-digest.v1alpha3"
+	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha3"
 )
 
 type operationDigestMaterial struct {
@@ -68,7 +68,8 @@ func (operation OperationSpec) Digest() (string, error) {
 // CanonicalDigestMaterial returns the deterministic plan representation used
 // for digest derivation. The release binding and canonical UTC approval expiry
 // are included, and operation digests are independently recomputed in order.
-// PlanDigest, ApprovalID, and IntentReceipt are deliberately excluded.
+// PlanDigest, ApprovalID, IntentReceipt, and IntentSequence are deliberately
+// excluded.
 func (plan Plan) CanonicalDigestMaterial() ([]byte, error) {
 	approvalExpiresAt, err := canonicalApprovalExpiry(plan.ApprovalExpiresAt)
 	if err != nil {

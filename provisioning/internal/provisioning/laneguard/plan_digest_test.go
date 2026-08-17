@@ -11,11 +11,11 @@ import (
 
 const (
 	goldenOperationMaterial  = `{"sequence":3,"operation":"owned_readback","classification":"read_only","authorization_id":"authorization-golden","expected_prestate":{"customer_key_hash":"customer-before","eeprom_hash":"eeprom-before","security_state":"owned","power_state":"signed_os"},"expected_poststate":{"customer_key_hash":"customer-after","eeprom_hash":"eeprom-after","security_state":"owned_verified","power_state":"signed_os"},"maximum_duration_nanoseconds":90000000000}`
-	goldenOperationDigest    = "sha256:222415d361388db01f8af8f9637c3abdff0773e25968037ee2f6054dae9f5313"
-	goldenPlanMaterial       = `{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha2","station_id":"golden-station","lane_id":"golden-lane","transaction_id":"golden-transaction","release":{"signed_release_manifest_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","lane_guard_package_digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","compiled_artifact_set_digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","expected_customer_key_hash":"sha256:4444444444444444444444444444444444444444444444444444444444444444","expected_eeprom_digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555","expected_boot_image_digest":"sha256:6666666666666666666666666666666666666666666666666666666666666666"},"target_fingerprint":"golden-target","fence_epoch":42,"approval_expires_at":"2026-08-15T12:34:56.123456789Z","operation_digests":["sha256:222415d361388db01f8af8f9637c3abdff0773e25968037ee2f6054dae9f5313"]}`
-	goldenPlanDigest         = "sha256:b030f7df881ad7c8949a1377dae8f626c01b2d72d10f11f3620be88a49023b81"
+	goldenOperationDigest    = "sha256:a29d5dd8d0c217289c0cf5d095d0db0fe6dbe134790e72ba6e793f7db28096be"
+	goldenPlanMaterial       = `{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha3","station_id":"golden-station","lane_id":"golden-lane","transaction_id":"golden-transaction","release":{"signed_release_manifest_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","lane_guard_package_digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","compiled_artifact_set_digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","expected_customer_key_hash":"sha256:4444444444444444444444444444444444444444444444444444444444444444","expected_eeprom_digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555","expected_boot_image_digest":"sha256:6666666666666666666666666666666666666666666666666666666666666666"},"target_fingerprint":"golden-target","fence_epoch":42,"approval_expires_at":"2026-08-15T12:34:56.123456789Z","operation_digests":["sha256:a29d5dd8d0c217289c0cf5d095d0db0fe6dbe134790e72ba6e793f7db28096be"]}`
+	goldenPlanDigest         = "sha256:bc2cfd4fd92b8a085d894c3da6bd2b04de8906dab149dcb61bbdb5b11088fc33"
 	escapedOperationMaterial = `{"sequence":4,"operation":"test_owned_recovery","classification":"reversible","authorization_id":"auth\u003c\u003e\u0026\"\\雪\u2028","expected_prestate":{"customer_key_hash":"line\nbreak","eeprom_hash":"tab\tvalue","security_state":"café","power_state":"slash/ok"},"expected_poststate":{"customer_key_hash":"quote\"value","eeprom_hash":"backslash\\value","security_state":"owned","power_state":"signed_os"},"maximum_duration_nanoseconds":1}`
-	escapedOperationDigest   = "sha256:2840168db77994fbeb17da9f29f1c3e3aa556ecad482f550bba04ef14d865068"
+	escapedOperationDigest   = "sha256:431d52f56a9ba6193514dffddb5e1e9e8eb8c72f9468f5456d9b33fb3ff72340"
 )
 
 func TestOperationDigestGoldenVector(t *testing.T) {
@@ -180,6 +180,7 @@ func TestPlanDigestCoversEveryBodyField(t *testing.T) {
 		{"plan digest", func(value *Plan) { value.PlanDigest = digest("a") }},
 		{"approval ID", func(value *Plan) { value.ApprovalID = "changed-approval" }},
 		{"intent receipt", func(value *Plan) { value.IntentReceipt = "changed-intent" }},
+		{"intent sequence", func(value *Plan) { value.IntentSequence++ }},
 		{"supplied operation digest", func(value *Plan) { value.Operations[0].OperationDigest = digest("b") }},
 	} {
 		t.Run("excluded "+test.name, func(t *testing.T) {
@@ -407,6 +408,7 @@ func goldenPlan() Plan {
 		FenceEpoch: 42, ApprovalID: "golden-approval",
 		ApprovalExpiresAt: time.Date(2026, 8, 15, 8, 34, 56, 123456789, time.FixedZone("golden-offset", -4*60*60)),
 		IntentReceipt:     "golden-intent",
+		IntentSequence:    1,
 		Operations:        []OperationSpec{goldenOperation()},
 	}
 }

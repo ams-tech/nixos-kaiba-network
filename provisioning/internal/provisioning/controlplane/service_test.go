@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,6 +146,74 @@ func TestFreshTargetPrestateIsDistinctFromApprovedPoststate(t *testing.T) {
 	}
 	if bound.Target == nil || bound.Target.CustomerKeyHash != transaction.ExpectedPrestateCustomerKeyHash {
 		t.Fatalf("fresh target binding = %#v", bound.Target)
+	}
+}
+
+func TestCreateTransactionRequiresAllZeroFreshAndNonzeroOwnedKey(t *testing.T) {
+	fixture := newTestFixture(t, &MemoryStore{})
+	base := CreateTransactionRequest{
+		SchemaVersion: CreateTransactionRequestSchemaVersion, IdempotencyKey: "create-key-transition",
+		TransactionID: "transaction-key-transition", AssetID: "asset-key-transition", IntendedLogicalID: "device-key-transition",
+		ProfileID: "rpi5-v1", BundleDigest: digest("1"), PolicyDigest: digest("2"),
+		ExpectedPrestateCustomerKeyHash: UnownedCustomerKeyHash, ExpectedCustomerKeyHash: digest("3"),
+	}
+	for name, mutate := range map[string]func(*CreateTransactionRequest){
+		"nonzero fresh key": func(request *CreateTransactionRequest) { request.ExpectedPrestateCustomerKeyHash = digest("f") },
+		"zero owned key":    func(request *CreateTransactionRequest) { request.ExpectedCustomerKeyHash = UnownedCustomerKeyHash },
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := base
+			request.IdempotencyKey += "-" + strings.ReplaceAll(name, " ", "-")
+			mutate(&request)
+			if _, err := fixture.service.CreateTransaction(context.Background(), request); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("invalid key transition error = %v", err)
+			}
+		})
+	}
+}
+
+func TestControlStoreRejectsPreKeyInvariantSchema(t *testing.T) {
+	store := &MemoryStore{data: []byte(`{"schema_version":"provisioning.kaiba.network/control-store/v1alpha2","transactions":{},"fence_epochs":{},"idempotency":{}}`)}
+	if _, err := NewService(store); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("old store error = %v", err)
+	}
+}
+
+func TestPersistedTransactionRejectsInvalidFreshToOwnedKeyTransition(t *testing.T) {
+	for name, mutate := range map[string]func(*Transaction){
+		"nonzero fresh key": func(transaction *Transaction) { transaction.ExpectedPrestateCustomerKeyHash = digest("f") },
+		"zero owned key":    func(transaction *Transaction) { transaction.ExpectedCustomerKeyHash = UnownedCustomerKeyHash },
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &MemoryStore{}
+			fixture := newTestFixture(t, store)
+			transaction := fixture.create()
+			data, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var state persistedState
+			if err := DecodeStrict(data, &state); err != nil {
+				t.Fatal(err)
+			}
+			stored := state.Transactions[transaction.ID]
+			mutate(&stored)
+			stored.TransactionDigest, err = transactionDigest(stored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Transactions[transaction.ID] = stored
+			data, err = marshalState(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(data); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewService(store); !errors.Is(err, ErrCorruptStore) {
+				t.Fatalf("invalid persisted key transition error = %v", err)
+			}
+		})
 	}
 }
 
@@ -864,7 +933,7 @@ func (fixture *testFixture) create() Transaction {
 		SchemaVersion: CreateTransactionRequestSchemaVersion, IdempotencyKey: "create-1",
 		TransactionID: "transaction-1", AssetID: "asset-1", IntendedLogicalID: "device-1",
 		ProfileID: "rpi5-v1", BundleDigest: digest("0"), PolicyDigest: digest("1"),
-		ExpectedPrestateCustomerKeyHash: digest("f"), ExpectedCustomerKeyHash: digest("2"),
+		ExpectedPrestateCustomerKeyHash: UnownedCustomerKeyHash, ExpectedCustomerKeyHash: digest("2"),
 	})
 	if err != nil {
 		fixture.t.Fatal(err)

@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	ReportSchemaVersion = "kaiba.secure_boot.integrated_software_rehearsal.v1alpha1"
+	ReportSchemaVersion = "kaiba.secure_boot.integrated_software_rehearsal.v1alpha2"
 	ExecutionMode       = "software_only"
 	AuthorityClass      = "non_authoritative"
 	fixtureDigestDomain = "kaiba.secure_boot.integrated_software_rehearsal.fixture.v1alpha1"
@@ -68,7 +68,10 @@ type AuthoritySummary struct {
 	PlanDigest             string `json:"plan_digest"`
 	ApprovalID             string `json:"approval_id"`
 	IntentReceipt          string `json:"intent_receipt"`
-	ExecuteRequestCount    int    `json:"execute_request_count"`
+	PlanOperationCount     int    `json:"plan_operation_count"`
+	ValidatedIntentCount   int    `json:"validated_intent_count"`
+	ExecutableRequestCount int    `json:"executable_request_count"`
+	PendingSequence        uint32 `json:"pending_sequence"`
 	InitialCustomerKeyHash string `json:"initial_customer_key_hash"`
 	OwnedCustomerKeyHash   string `json:"owned_customer_key_hash"`
 }
@@ -98,7 +101,8 @@ func (report Report) Validate() error {
 	}
 	if report.Authority.TransactionID == "" || report.Authority.ResourceVersion == 0 || report.Authority.FenceEpoch == 0 ||
 		!validDigest(report.Authority.PlanDigest) || report.Authority.ApprovalID == "" ||
-		!validDigest(report.Authority.IntentReceipt) || report.Authority.ExecuteRequestCount != campaign.DevelopmentOperationCount ||
+		!validDigest(report.Authority.IntentReceipt) || report.Authority.PlanOperationCount != campaign.DevelopmentOperationCount ||
+		report.Authority.ValidatedIntentCount != 1 || report.Authority.ExecutableRequestCount != 0 || report.Authority.PendingSequence != 1 ||
 		report.Authority.InitialCustomerKeyHash != plancompiler.ZeroCustomerKeyHash ||
 		!validDigest(report.Authority.OwnedCustomerKeyHash) ||
 		report.Authority.OwnedCustomerKeyHash == report.Authority.InitialCustomerKeyHash {
@@ -116,9 +120,10 @@ func (report Report) Validate() error {
 	return nil
 }
 
-// Run creates real control and audit records, binds them through plancompiler,
-// then invokes only rehearsal.Simulator. It reopens both stores and validates
-// the same authority snapshot before returning.
+// Run creates real control and audit records, verifies their rehearsal-only
+// authority through plancompiler, then invokes only rehearsal.Simulator. It
+// reopens both stores and validates the same authority snapshot before
+// returning. No executable lane plan or request is produced.
 func Run(ctx context.Context, config Config, stores Stores) (Report, error) {
 	if err := config.Validate(); err != nil {
 		return Report{}, err
@@ -161,19 +166,14 @@ func Run(ctx context.Context, config Config, stores Stores) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	bound, err := plancompiler.Bind(fixture.draft, plancompiler.Authority{
+	verified, err := plancompiler.VerifySoftwareRehearsalAuthority(fixture.draft, plancompiler.Authority{
 		Transaction:     transaction,
 		ApprovalReceipt: approvalReceipt, ApprovalRecord: approvalRecord,
 		IntentReceipt: receipt, IntentRecord: record,
 		Now: clock, LeaseSafetyMargin: 30 * time.Second,
 	})
 	if err != nil {
-		return Report{}, fmt.Errorf("bind control and audit authority: %w", err)
-	}
-	plan := bound.Plan()
-	requests := bound.ExecuteRequests()
-	if err := validateBoundCampaign(plan, requests); err != nil {
-		return Report{}, err
+		return Report{}, fmt.Errorf("verify software rehearsal authority: %w", err)
 	}
 
 	simulation, err := rehearsal.Run(ctx, rehearsal.NewContract(config.RehearsalID), simulator)
@@ -184,14 +184,7 @@ func Run(ctx context.Context, config Config, stores Stores) (Report, error) {
 		SchemaVersion: ReportSchemaVersion, RehearsalID: config.RehearsalID,
 		ExecutionMode: ExecutionMode, AuthorityClass: AuthorityClass,
 		ControlAuditExercised: true, HardwareObserved: false, SecurityEnforced: false, MutationEligible: false,
-		Authority: AuthoritySummary{
-			TransactionID: transaction.ID, ResourceVersion: transaction.ResourceVersion,
-			FenceEpoch: transaction.FenceEpoch, PlanDigest: plan.PlanDigest,
-			ApprovalID: plan.ApprovalID, IntentReceipt: plan.IntentReceipt,
-			ExecuteRequestCount:    len(requests),
-			InitialCustomerKeyHash: plan.Operations[0].ExpectedPrestate.CustomerKeyHash,
-			OwnedCustomerKeyHash:   plan.Operations[0].ExpectedPoststate.CustomerKeyHash,
-		},
+		Authority:  authoritySummary(verified),
 		Simulation: simulation,
 		Detail:     "real control and audit authority was exercised; only a software model ran and no hardware security property was observed or enforced",
 	}
@@ -203,6 +196,17 @@ func Run(ctx context.Context, config Config, stores Stores) (Report, error) {
 		return Report{}, err
 	}
 	return report, nil
+}
+
+func authoritySummary(verified plancompiler.RehearsalAuthoritySummary) AuthoritySummary {
+	return AuthoritySummary{
+		TransactionID: verified.TransactionID, ResourceVersion: verified.ResourceVersion,
+		FenceEpoch: verified.FenceEpoch, PlanDigest: verified.PlanDigest,
+		ApprovalID: verified.ApprovalID, IntentReceipt: verified.IntentReceipt,
+		PlanOperationCount: verified.PlanOperationCount, ValidatedIntentCount: verified.ValidatedIntentCount,
+		ExecutableRequestCount: verified.ExecutableRequestCount, PendingSequence: verified.PendingSequence,
+		InitialCustomerKeyHash: verified.InitialCustomerKeyHash, OwnedCustomerKeyHash: verified.OwnedCustomerKeyHash,
+	}
 }
 
 type fixture struct {
@@ -301,7 +305,7 @@ func establishAuthority(ctx context.Context, control *controlplane.Service, audi
 	}
 	approvalReceipt, err := audit.Append(ctx, auditlog.AppendRequest{
 		SchemaVersion: auditlog.AppendRequestSchemaVersion, IdempotencyKey: "approval-audit-" + fixture.transactionID,
-		Event: auditEvent(fixture, fixture.approvalID, "plan_approval", fixture.draft.PlanDigest(), auditlog.Actor{ID: "software-rehearsal-approver", Role: "approver"}),
+		Event: auditEvent(fixture, fixture.approvalID, "plan_approval", fixture.draft.PlanDigest(), auditlog.Actor{ID: "software-rehearsal-approver", Role: "software_rehearsal_approver"}),
 	})
 	if err != nil {
 		return controlplane.Transaction{}, fmt.Errorf("append rehearsal approval audit: %w", err)
@@ -353,21 +357,6 @@ func mutationContext(transaction controlplane.Transaction) controlplane.Mutation
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
 	}
-}
-
-func validateBoundCampaign(plan laneguard.Plan, requests []laneguard.ExecuteRequest) error {
-	operations := campaign.DevelopmentOperations()
-	if len(plan.Operations) != len(operations) || len(requests) != len(operations) {
-		return errors.New("bound rehearsal campaign does not contain seven operations")
-	}
-	for index, operation := range operations {
-		if plan.Operations[index].Operation != operation || requests[index].Sequence != uint32(index+1) ||
-			requests[index].PlanDigest != plan.PlanDigest || requests[index].ApprovalID != plan.ApprovalID ||
-			requests[index].IntentReceipt != plan.IntentReceipt {
-			return fmt.Errorf("bound rehearsal request %d differs from the canonical plan", index+1)
-		}
-	}
-	return nil
 }
 
 func fixtureDigest(rehearsalID, label string) string {

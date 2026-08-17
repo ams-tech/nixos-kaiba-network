@@ -2,11 +2,11 @@ package rehearsalorchestrator
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +16,9 @@ import (
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/plancompiler"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rehearsal"
 )
+
+//go:embed *.go
+var packageSources embed.FS
 
 func TestIntegratedRehearsalUsesRealDurableAuthorityThenOnlySoftwareSimulation(t *testing.T) {
 	directory := t.TempDir()
@@ -36,7 +39,9 @@ func TestIntegratedRehearsalUsesRealDurableAuthorityThenOnlySoftwareSimulation(t
 		report.HardwareObserved || report.SecurityEnforced || report.MutationEligible {
 		t.Fatalf("unsafe report flags = %#v", report)
 	}
-	if report.Authority.ExecuteRequestCount != 7 || report.Authority.InitialCustomerKeyHash != plancompiler.ZeroCustomerKeyHash ||
+	if report.Authority.PlanOperationCount != 7 || report.Authority.ValidatedIntentCount != 1 ||
+		report.Authority.ExecutableRequestCount != 0 || report.Authority.PendingSequence != 1 ||
+		report.Authority.InitialCustomerKeyHash != plancompiler.ZeroCustomerKeyHash ||
 		report.Authority.OwnedCustomerKeyHash == report.Authority.InitialCustomerKeyHash {
 		t.Fatalf("authority summary = %#v", report.Authority)
 	}
@@ -91,6 +96,49 @@ func TestInjectedSoftwareFailuresRemainNonAuthoritative(t *testing.T) {
 				t.Fatalf("report = %#v", report)
 			}
 		})
+	}
+}
+
+func TestRehearsalAuthorityCannotProduceAProductionBoundPlan(t *testing.T) {
+	config := Config{RehearsalID: "isolated-authority", Now: testNow()}
+	clock := config.Now.UTC()
+	control, err := controlplane.NewService(&controlplane.MemoryStore{},
+		controlplane.WithClock(func() time.Time { return clock }),
+		controlplane.WithIDGenerator(func(prefix string) (string, error) { return prefix + "-isolated", nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit, err := auditlog.NewService(&auditlog.MemoryStore{}, auditlog.WithClock(func() time.Time { return clock }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := newFixture(config)
+	transaction, err := establishAuthority(context.Background(), control, audit, fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvalRecord, approvalReceipt, err := eventAuthority(audit, transaction.ID, fixture.approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentRecord, intentReceipt, err := eventAuthority(audit, transaction.ID, fixture.operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := plancompiler.Authority{
+		Transaction: transaction, ApprovalReceipt: approvalReceipt, ApprovalRecord: approvalRecord,
+		IntentReceipt: intentReceipt, IntentRecord: intentRecord, Now: clock, LeaseSafetyMargin: 30 * time.Second,
+	}
+	if _, err := plancompiler.Bind(fixture.draft, authority); !errors.Is(err, plancompiler.ErrInvalidAuditIntent) {
+		t.Fatalf("production Bind rehearsal authority error = %v", err)
+	}
+	verified, err := plancompiler.VerifySoftwareRehearsalAuthority(fixture.draft, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.ExecutableRequestCount != 0 || verified.PlanOperationCount != 7 || verified.ValidatedIntentCount != 1 {
+		t.Fatalf("rehearsal authority summary = %#v", verified)
 	}
 }
 
@@ -168,12 +216,7 @@ func TestInvalidSimulatorConfigDoesNotCreateAuthorityStores(t *testing.T) {
 }
 
 func TestProductionSourcesHaveNoMutationOrTransportDependencies(t *testing.T) {
-	_, current, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate source directory")
-	}
-	directory := filepath.Dir(current)
-	entries, err := os.ReadDir(directory)
+	entries, err := packageSources.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +228,7 @@ func TestProductionSourcesHaveNoMutationOrTransportDependencies(t *testing.T) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		data, err := packageSources.ReadFile(entry.Name())
 		if err != nil {
 			t.Fatal(err)
 		}

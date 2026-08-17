@@ -28,6 +28,12 @@ func validateCreateRequest(request CreateTransactionRequest) error {
 			return invalid(name + " must be a lowercase sha256 digest")
 		}
 	}
+	if request.ExpectedPrestateCustomerKeyHash != UnownedCustomerKeyHash {
+		return invalid("expected_prestate_customer_key_hash must be the all-zero unowned key hash")
+	}
+	if request.ExpectedCustomerKeyHash == UnownedCustomerKeyHash {
+		return invalid("expected_customer_key_hash must identify a nonzero owned key")
+	}
 	return nil
 }
 

@@ -3,6 +3,8 @@ package laneguard
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -74,7 +76,7 @@ func (hardware *fakeHardware) Execute(_ context.Context, _ Config, operation Ope
 }
 
 func TestGuardExecutesApprovedOperationsOnceAndInOrder(t *testing.T) {
-	guard, hardware, _, plan, now := newTestGuard(t)
+	guard, hardware, store, plan, now := newTestGuard(t)
 	request := requestFor(plan, 1, now.Add(10*time.Minute))
 	attempt, err := guard.Execute(context.Background(), request)
 	if err != nil {
@@ -100,8 +102,9 @@ func TestGuardExecutesApprovedOperationsOnceAndInOrder(t *testing.T) {
 		t.Fatalf("hardware executions after replay = %d, want 1", hardware.executeCount)
 	}
 
-	second := requestFor(plan, 2, now.Add(10*time.Minute))
-	if _, err := guard.Execute(context.Background(), second); err != nil {
+	secondGuard, secondPlan := loadTestIntent(t, testConfig(), hardware, store, plan, 2, now)
+	second := requestFor(secondPlan, 2, now.Add(10*time.Minute))
+	if _, err := secondGuard.Execute(context.Background(), second); err != nil {
 		t.Fatalf("execute ordered second operation: %v", err)
 	}
 	if hardware.executeCount != 2 {
@@ -229,6 +232,29 @@ func TestRestartLoadsUncertainAttemptForObservationOnly(t *testing.T) {
 	}
 }
 
+func TestRestartRejectsAuthorityRolledBackBehindVerifiedJournal(t *testing.T) {
+	firstGuard, hardware, store, firstPlan, now := newTestGuard(t)
+	if _, err := firstGuard.Execute(context.Background(), requestFor(firstPlan, 1, now.Add(10*time.Minute))); err != nil {
+		t.Fatalf("execute first operation: %v", err)
+	}
+	secondGuard, secondPlan := loadTestIntent(t, testConfig(), hardware, store, firstPlan, 2, now)
+	if _, err := secondGuard.Execute(context.Background(), requestFor(secondPlan, 2, now.Add(10*time.Minute))); err != nil {
+		t.Fatalf("execute second operation: %v", err)
+	}
+
+	staleGuard, err := NewWithClock(testConfig(), hardware, store, fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observationsBefore := hardware.observeCount
+	if err := staleGuard.LoadPlan(context.Background(), firstPlan); !errors.Is(err, ErrPlanMismatch) {
+		t.Fatalf("rolled-back authority load error = %v", err)
+	}
+	if hardware.observeCount != observationsBefore {
+		t.Fatal("rolled-back authority reached target observation")
+	}
+}
+
 func TestReconcileKeepsIndistinguishableOperationUncertain(t *testing.T) {
 	config := testConfig()
 	plan := testPlan()
@@ -258,6 +284,7 @@ func TestReconcileKeepsIndistinguishableOperationUncertain(t *testing.T) {
 		t.Fatalf("execute prerequisite: %v", err)
 	}
 	hardware.executeErr = errors.New("response lost")
+	guard, plan = loadTestIntent(t, config, hardware, store, plan, 2, now)
 	request := requestFor(plan, 2, now.Add(10*time.Minute))
 	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
 		t.Fatalf("execute indistinguishable operation: %v", err)
@@ -358,6 +385,7 @@ func TestGuardRejectsStaleBindingsBeforeHardware(t *testing.T) {
 		{"approval", func(request *ExecuteRequest) { request.ApprovalID = "other-approval" }},
 		{"approval expiry", func(request *ExecuteRequest) { request.ApprovalExpiresAt = request.ApprovalExpiresAt.Add(time.Second) }},
 		{"intent", func(request *ExecuteRequest) { request.IntentReceipt = "other-receipt" }},
+		{"sequence", func(request *ExecuteRequest) { request.Sequence = 2 }},
 		{"operation", func(request *ExecuteRequest) { request.OperationDigest = digest("8") }},
 		{"authorization", func(request *ExecuteRequest) { request.AuthorizationID = "other-authorization" }},
 		{"prestate", func(request *ExecuteRequest) { request.ExpectedPrestate.SecurityState = "changed" }},
@@ -391,6 +419,7 @@ func TestSamePlanIncludesReleaseAndApprovalExpiry(t *testing.T) {
 	}{
 		{"release", func(value *Plan) { value.Release.ExpectedEEPROMDigest = digest("9") }},
 		{"approval expiry", func(value *Plan) { value.ApprovalExpiresAt = value.ApprovalExpiresAt.Add(time.Second) }},
+		{"intent sequence", func(value *Plan) { value.IntentSequence++ }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			changed := clonePlan(plan)
@@ -403,8 +432,9 @@ func TestSamePlanIncludesReleaseAndApprovalExpiry(t *testing.T) {
 }
 
 func TestGuardRejectsOutOfOrderAndShortLease(t *testing.T) {
-	guard, hardware, _, plan, now := newTestGuard(t)
-	if _, err := guard.Execute(context.Background(), requestFor(plan, 2, now.Add(10*time.Minute))); !errors.Is(err, ErrOutOfOrder) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	outOfOrderGuard, outOfOrderPlan := loadTestIntent(t, testConfig(), hardware, store, plan, 2, now)
+	if _, err := outOfOrderGuard.Execute(context.Background(), requestFor(outOfOrderPlan, 2, now.Add(10*time.Minute))); !errors.Is(err, ErrOutOfOrder) {
 		t.Fatalf("out-of-order error = %v", err)
 	}
 	if _, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(89*time.Second))); !errors.Is(err, ErrLeaseInvalid) {
@@ -412,6 +442,53 @@ func TestGuardRejectsOutOfOrderAndShortLease(t *testing.T) {
 	}
 	if hardware.executeCount != 0 {
 		t.Fatalf("rejected work reached hardware")
+	}
+
+	exactGuard, _, _, exactPlan, exactNow := newTestGuard(t)
+	if _, err := exactGuard.Execute(context.Background(), requestFor(exactPlan, 1, exactNow.Add(90*time.Second))); err != nil {
+		t.Fatalf("exact lease boundary error = %v", err)
+	}
+}
+
+func TestGuardRejectsExpiredClaimWhenDurationArithmeticWouldOverflow(t *testing.T) {
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	for name, expiry := range map[string]time.Time{
+		"future but insufficient": now.Add(time.Hour),
+		"expired":                 now.Add(-time.Second),
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := testConfig()
+			plan := testPlanBody()
+			plan.Operations[0].MaximumDuration = time.Duration(1<<63 - 1)
+			plan = deriveTestPlan(plan)
+			hardware := &fakeHardware{
+				observation: Observation{
+					EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+					TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+				},
+			}
+			journal := &countingStore{}
+			guard, err := NewWithClock(config, hardware, journal, fakeClock{now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := guard.LoadPlan(context.Background(), plan); err != nil {
+				t.Fatal(err)
+			}
+			journal.gets = 0
+			journal.puts = 0
+			observationsBefore := hardware.observeCount
+
+			if _, err := guard.Execute(context.Background(), requestFor(plan, 1, expiry)); !errors.Is(err, ErrLeaseInvalid) {
+				t.Fatalf("overflowing lease error = %v", err)
+			}
+			if hardware.observeCount != observationsBefore || hardware.executeCount != 0 {
+				t.Fatalf("invalid claim reached hardware: observations %d -> %d, executions %d", observationsBefore, hardware.observeCount, hardware.executeCount)
+			}
+			if journal.gets != 0 || journal.puts != 0 {
+				t.Fatalf("invalid claim reached journal: gets=%d puts=%d", journal.gets, journal.puts)
+			}
+		})
 	}
 }
 
@@ -505,6 +582,21 @@ func TestPlanRequiresCompleteDevelopmentCampaign(t *testing.T) {
 	}
 }
 
+func TestPlanRequiresExactlyOneInRangeIntentSequence(t *testing.T) {
+	for name, sequence := range map[string]uint32{
+		"missing":      0,
+		"out of range": uint32(len(testPlan().Operations) + 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			plan := testPlan()
+			plan.IntentSequence = sequence
+			if err := plan.Validate(testConfig()); err == nil {
+				t.Fatalf("plan with intent sequence %d was accepted", sequence)
+			}
+		})
+	}
+}
+
 func TestPlanRejectsDeprecatedStandaloneSignedBootOperation(t *testing.T) {
 	plan := testPlan()
 	plan.Operations[1] = OperationSpec{
@@ -528,7 +620,8 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 	attempt := Attempt{
 		SchemaVersion: ContractSchemaVersion, Key: "transaction/plan/1/1",
 		TransactionID: "transaction", PlanDigest: digest("a"), TargetFingerprint: "target",
-		FenceEpoch: 1, Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM,
+		FenceEpoch: 1, ApprovalID: "approval", IntentReceipt: "intent", IntentSequence: 1,
+		Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM,
 		OperationDigest: digest("b"), Status: AttemptStarted, StartedAt: now, UpdatedAt: now,
 		ObservedState: DirectState{SecurityState: "fresh"}, Detail: "started",
 	}
@@ -556,6 +649,20 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 	}
 }
 
+func TestFileStoreRejectsPreIntentBindingJournalSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attempts.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha2","attempts":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Get("missing"); err == nil || !strings.Contains(err.Error(), "unsupported schema") {
+		t.Fatalf("old journal error = %v", err)
+	}
+}
+
 func newTestGuard(t *testing.T) (*Guard, *fakeHardware, *MemoryStore, Plan, time.Time) {
 	t.Helper()
 	config := testConfig()
@@ -577,6 +684,20 @@ func newTestGuard(t *testing.T) (*Guard, *fakeHardware, *MemoryStore, Plan, time
 		t.Fatal(err)
 	}
 	return guard, hardware, store, plan, now
+}
+
+func loadTestIntent(t *testing.T, config Config, hardware Hardware, store AttemptStore, plan Plan, sequence uint32, now time.Time) (*Guard, Plan) {
+	t.Helper()
+	plan.IntentSequence = sequence
+	plan.IntentReceipt = fmt.Sprintf("receipt-%d", sequence)
+	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	return guard, plan
 }
 
 func testConfig() Config {
@@ -608,7 +729,7 @@ func testPlanBody() Plan {
 		SchemaVersion: ContractSchemaVersion, StationID: "station-1", LaneID: "lane-1",
 		TransactionID: "transaction-1", Release: testReleaseBinding(), TargetFingerprint: "target-1",
 		FenceEpoch: 7, ApprovalID: "approval-1",
-		ApprovalExpiresAt: time.Date(2026, 8, 16, 12, 0, 0, 123456789, time.UTC), IntentReceipt: "receipt-1",
+		ApprovalExpiresAt: time.Date(2026, 8, 16, 12, 0, 0, 123456789, time.UTC), IntentReceipt: "receipt-1", IntentSequence: 1,
 		Operations: []OperationSpec{
 			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: owned, MaximumDuration: time.Minute},
 			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, AuthorizationID: "authorization-2", ExpectedPrestate: owned, ExpectedPoststate: booted, MaximumDuration: time.Minute},

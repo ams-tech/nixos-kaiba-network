@@ -18,6 +18,11 @@ const (
 	exitVerification = 3
 )
 
+// trustedSignerFingerprint is empty in the generic offline-only build and is
+// fixed with -ldflags by the trusted-signer Nix factory. It is deliberately not
+// configurable through flags or the environment.
+var trustedSignerFingerprint string
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -51,7 +56,11 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	var result unfusedcompat.Outcome
 	var err error
 	if subcommand == "verify-signed-offline-fixture" {
-		result, err = unfusedcompat.VerifySignedOfflineFixture(*manifestPath, *capsuleRoot, *fixturePath, *publicKeyPath)
+		var policy unfusedcompat.TrustedSignerPolicy
+		policy, err = unfusedcompat.NewTrustedSignerPolicy(trustedSignerFingerprint)
+		if err == nil {
+			result, err = unfusedcompat.VerifySignedOfflineFixture(*manifestPath, *capsuleRoot, *fixturePath, *publicKeyPath, policy)
+		}
 	} else {
 		result, err = unfusedcompat.VerifyOfflineFixture(*manifestPath, *capsuleRoot, *fixturePath)
 	}

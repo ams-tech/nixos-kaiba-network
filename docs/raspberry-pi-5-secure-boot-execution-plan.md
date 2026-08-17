@@ -77,8 +77,8 @@ The repository already contains useful foundations:
   the hardware adapter;
 - an authority-checking plan compiler and durable integrated software
   rehearsal; and
-- an isolated fixed-extent media-staging prototype, signed capsule verifier,
-  and passive unfused evidence verifier.
+- an isolated fixed-extent media-staging prototype, signer-anchored capsule
+  verifier, and offline unfused record correlator that makes no hardware claim.
 
 The repository does not yet contain a complete signed-release adapter,
 production-complete GPT/FAT/dm-verity NVMe writer and verifier,
@@ -130,11 +130,12 @@ These rules apply to every work item and rehearsal:
 
 The in-progress statuses above reflect implementation, not milestone exit. The
 repository now has a signed four-role capsule verifier, a fixed-extent media
-stager with a regular-file fixture mode, passive unfused hardware-evidence
-verification, and a runnable software-only orchestrator. The orchestrator uses
+stager with a regular-file fixture mode, offline unfused record correlation,
+and a runnable software-only orchestrator. The orchestrator uses
 the real durable control and audit services, derives the closed seven-operation
-plan, authenticates both approval and initial-intent audit records, reopens and
-rebinds persisted state, and executes only the non-authoritative simulator.
+plan, verifies both approval and initial-intent audit records under a distinct
+rehearsal actor policy, reopens and revalidates persisted state, emits no
+executable lane request, and executes only the non-authoritative simulator.
 
 These pieces are packaged in separate capability closures and are described in
 the [non-fusing prototype runbook](non-fusing-secure-boot-prototype.md). They do
@@ -343,23 +344,26 @@ strings and that no shortened campaign can produce `security_applied`.
   covers the immutable operation body but excludes its own
   `operation_digest`. The plan digest covers the immutable plan body and
   ordered operation digests but excludes its own `plan_digest` and later
-  `approval_id` and `intent_receipt` values. Approval and durable intent bind
-  the recomputed plan digest in a separate execution envelope.
+  `approval_id`, `intent_receipt`, and `intent_sequence` values. Approval and
+  durable intent bind the recomputed plan digest in a separate execution
+  envelope.
 - [x] Recompute and compare plan and operation digests at the trusted boundary;
   do not accept syntactically valid caller-supplied digests as proof of content.
 - [x] Publish golden digest vectors and mutate every covered field in tests.
   Every mutation must change the corresponding digest or fail canonical
   decoding. Golden material also pins JSON escaping for control characters,
   HTML-sensitive characters, backslashes, quotes, and non-ASCII text.
-- [ ] Authenticate excluded `approval_id` and `intent_receipt` envelope fields
-  against their independent authorities. The lane rejects a request-only
-  change, but a coordinated root edit of both the plan and request remains
+- [ ] Authenticate the excluded `{plan_digest, approval_id, intent_receipt,
+  intent_sequence}` execution envelope against its independent authorities.
+  The compiler can load its opaque bound plan into a guard and emits only the
+  request for the current durable intent. The lane rejects a request-only
+  change, but coordinated root reconstruction of both plan and request remains
   possible until the authenticated bridge exists.
 
-The release-bound `v1alpha2` digest contract serializes fixed-order JSON
+The release-bound `v1alpha3` digest contract serializes fixed-order JSON
 structs without whitespace. It deliberately supersedes the earlier pre-release
-`v1alpha1` contract rather than changing canonical material under an existing
-version. Operation material contains `sequence`, `operation`,
+contracts rather than changing canonical material under an existing version.
+Operation material contains `sequence`, `operation`,
 `classification`, `authorization_id`, then `customer_key_hash`, `eeprom_hash`,
 `security_state`, and `power_state` within `expected_prestate` and
 `expected_poststate`, followed by `maximum_duration_nanoseconds`; it excludes
@@ -367,12 +371,12 @@ version. Operation material contains `sequence`, `operation`,
 `lane_id`, `transaction_id`, the six-field `release` binding,
 `target_fingerprint`, `fence_epoch`, canonical UTC `approval_expires_at`, and
 the ordered operation digests freshly derived from their bodies; it excludes
-`plan_digest`, `approval_id`, and `intent_receipt`. Every release-binding field
-is a canonical lowercase SHA-256 value. The lowercase plan SHA-256 value is
-computed over the ASCII domain, one NUL byte, and the JSON bytes. The domains
-are
-`kaiba.provisioning.lane-guard.operation-digest.v1alpha2` and
-`kaiba.provisioning.lane-guard.plan-digest.v1alpha2`. The lane guard snapshots
+`plan_digest`, `approval_id`, `intent_receipt`, and `intent_sequence`. Every
+release-binding field is a canonical lowercase SHA-256 value. The lowercase
+plan SHA-256 value is computed over the ASCII domain, one NUL byte, and the
+JSON bytes. The domains are
+`kaiba.provisioning.lane-guard.operation-digest.v1alpha3` and
+`kaiba.provisioning.lane-guard.plan-digest.v1alpha3`. The lane guard snapshots
 the caller-owned operation slice, validates this contract, and compares every
 plan and operation digest claimed by the plan before any target observation.
 The one-shot command also validates all static request bindings against that
@@ -382,6 +386,14 @@ rejects a reapproval that reuses a plan digest while changing its release or
 expiry. Every operation intent persists that plan/release/expiry anchor, so a
 claim transfer or reconciliation cannot erase it, and persisted approvals fail
 closed if their lifetime exceeds 24 hours.
+
+The `v1alpha3` execute-once journal persists the approval ID, current intent
+receipt, and current intent sequence with every attempt. Older journal records
+cannot prove that per-operation binding and are never upgraded into executable
+authority. An empty development journal may be discarded and recreated. A
+nonempty older journal must be drained from service and handled as a manual
+reconciliation or quarantine case after direct board-state inspection; it must
+not be replayed through the new guard.
 
 - [x] Carry and enforce one declared plan binding covering the signed-release
   manifest digest, lane-guard package digest, compiled artifact-set digest,
@@ -428,10 +440,21 @@ The new `plancompiler` closes the in-process conversion boundary: it derives
 the exact operation classes, state chain, operation digests, and plan digest;
 requires the all-zero fresh prestate and release-bound owned powered-off
 poststate; and validates the persisted transaction, active claim, target,
-approval, approval audit record, initial intent, and intent audit record before
-emitting request envelopes. The integrated software rehearsal covers its
-durable restart path. It is not yet the authenticated IPC transport in the
+approval, approval audit record, the current per-operation intent, and its audit
+record before emitting exactly the one request backed by that pending intent.
+A successful operation must be recorded and a fresh per-operation intent bound
+before the next request can be emitted. The integrated software rehearsal uses
+a separate verifier that covers durable restart but cannot return a lane plan
+or request. The compiler is not yet the authenticated IPC transport in the
 unchecked items above and is not wired to physical execution.
+
+Cold restart after a mutation claim expires or transfers is also still a
+deliberate blocker. Claim reconstruction advances the fence and clears the old
+approval, while the forward-mutation binder requires the original live claim
+and approval. The attempt journal prevents redispatch but does not by itself
+provide authenticated reconciliation authority. A separate reconciliation
+binder and durable reconstruction contract are required before physical
+mutation can rely on post-restart reconciliation.
 
 ### Manual boundary limitation
 

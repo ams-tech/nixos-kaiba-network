@@ -20,9 +20,12 @@ type TargetFacts struct {
 	Kind          TargetKind
 	WholeDevice   bool
 	DeviceNumber  uint64
-	FileDevice    uint64
-	Inode         uint64
-	SysfsPath     string
+	// DiskSequence is Linux's boot-local identity for this disk attachment.
+	// It is only compared within one Inspect/open operation, never persisted.
+	DiskSequence uint64
+	FileDevice   uint64
+	Inode        uint64
+	SysfsPath    string
 }
 
 type TargetUsage struct {
@@ -39,6 +42,13 @@ type Inventory interface {
 	Usage(context.Context, TargetFacts, Mode) (TargetUsage, error)
 }
 
+func validateSameTargetFacts(initial, current TargetFacts) error {
+	if current != initial {
+		return fmt.Errorf("%w: inspected target identity changed", ErrTargetMismatch)
+	}
+	return nil
+}
+
 func validateTargetFacts(plan Plan, mode Mode, facts TargetFacts, usage TargetUsage) error {
 	if facts.RequestedPath != plan.Target.Path || facts.ResolvedPath == "" || !cleanAbsolutePath(facts.ResolvedPath) {
 		return fmt.Errorf("%w: inventory resolved a different target path", ErrTargetMismatch)
@@ -50,10 +60,10 @@ func validateTargetFacts(plan Plan, mode Mode, facts TargetFacts, usage TargetUs
 		return fmt.Errorf("%w: target size is %d, expected %d", ErrTargetMismatch, facts.SizeBytes, plan.Target.ExpectedSizeBytes)
 	}
 	if mode == ModeDevice {
-		if facts.Kind != TargetBlockDevice || !facts.WholeDevice || facts.DeviceNumber == 0 || facts.SysfsPath == "" {
+		if facts.Kind != TargetBlockDevice || !facts.WholeDevice || facts.DeviceNumber == 0 || facts.DiskSequence == 0 || facts.SysfsPath == "" {
 			return fmt.Errorf("%w: target is not one verified whole block device", ErrUnsafeTarget)
 		}
-	} else if facts.Kind != TargetRegularFile || facts.WholeDevice || facts.FileDevice == 0 || facts.Inode == 0 {
+	} else if facts.Kind != TargetRegularFile || facts.WholeDevice || facts.DeviceNumber != 0 || facts.DiskSequence != 0 || facts.FileDevice == 0 || facts.Inode == 0 {
 		return fmt.Errorf("%w: fixture target is not one verified regular file", ErrUnsafeTarget)
 	}
 	if usage.Mounted || usage.System || usage.Root || usage.Swap {

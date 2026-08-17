@@ -13,12 +13,13 @@ import (
 
 const maximumUARTLineBytes = 4096
 
-// Verify validates a prior offline compatibility result, a strict operator
-// record, and a bounded UART transcript. It only reads the three named files.
-func Verify(compatibilityOutcomePath, observationPath, uartCapturePath string) (Outcome, error) {
-	var compatibilityOutcome unfusedcompat.Outcome
-	if err := loadStrictJSONFile(compatibilityOutcomePath, maximumCompatibilityOutcomeBytes, &compatibilityOutcome); err != nil {
-		return Outcome{}, fmt.Errorf("load compatibility outcome: %w", err)
+// Verify re-verifies the raw signed compatibility inputs in-process, then
+// checks that a strict operator record and bounded UART transcript correlate
+// with that result. It performs no live hardware capture or authentication.
+func Verify(manifestPath, capsuleRoot, fixturePath, publicKeyPath, observationPath, uartCapturePath string, policy unfusedcompat.TrustedSignerPolicy) (Outcome, error) {
+	compatibilityOutcome, err := unfusedcompat.VerifySignedOfflineFixture(manifestPath, capsuleRoot, fixturePath, publicKeyPath, policy)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("verify signed compatibility fixture: %w", err)
 	}
 	compatibilityDigest, err := CompatibilityOutcomeDigest(compatibilityOutcome)
 	if err != nil {
@@ -33,10 +34,10 @@ func Verify(compatibilityOutcomePath, observationPath, uartCapturePath string) (
 
 	var observation HardwareObservation
 	if err := loadStrictJSONFile(observationPath, maximumObservationBytes, &observation); err != nil {
-		return Outcome{}, fmt.Errorf("load hardware observation: %w", err)
+		return Outcome{}, fmt.Errorf("load operator observation: %w", err)
 	}
 	if err := observation.validate(compatibilityOutcome, compatibilityDigest, uartDigest); err != nil {
-		return Outcome{}, fmt.Errorf("validate hardware observation: %w", err)
+		return Outcome{}, fmt.Errorf("validate operator observation: %w", err)
 	}
 	if err := validateUARTCapture(uartCapture, compatibilityOutcome); err != nil {
 		return Outcome{}, err
@@ -47,8 +48,8 @@ func Verify(compatibilityOutcomePath, observationPath, uartCapturePath string) (
 	}
 
 	return Outcome{
-		SchemaVersion: OutcomeSchemaVersion, Status: StatusCompatibilityPassed,
-		EvidenceMode: EvidenceModeOperatorHardware, ObservationID: observation.ObservationID,
+		SchemaVersion: OutcomeSchemaVersion, Status: StatusRecordConsistent,
+		EvidenceMode: EvidenceModeOfflineOperatorCorrelation, ObservationID: observation.ObservationID,
 		ObservationDigest: observationHash, CompatibilityOutcomeDigest: compatibilityDigest,
 		LaneID: observation.Before.LaneID, TargetFingerprint: observation.Before.TargetFingerprint,
 		CustomerKeyHashBefore: observation.Before.CustomerKeyHash,
@@ -59,10 +60,15 @@ func Verify(compatibilityOutcomePath, observationPath, uartCapturePath string) (
 		BootPublicKeyFingerprint:     compatibilityOutcome.BootPublicKeyFingerprint,
 		SignatureVerificationReceipt: compatibilityOutcome.SignatureVerificationReceipt,
 		SignatureVerified:            compatibilityOutcome.SignatureVerified,
+		SignerTrustAnchored:          compatibilityOutcome.SignerTrustAnchored,
+		SignerTrustPolicyDigest:      compatibilityOutcome.SignerTrustPolicyDigest,
 		RootDataDigest:               compatibilityOutcome.RootDataDigest,
 		RootHashDigest:               compatibilityOutcome.RootHashDigest,
 		UARTCaptureDigest:            uartDigest,
-		HardwareObserved:             true, SecurityEnforced: false, MutationEligible: false,
+		RecordConsistent:             true,
+		CaptureAuthenticated:         false,
+		FreshnessEstablished:         false,
+		HardwareObserved:             false, SecurityEnforced: false, MutationEligible: false,
 	}, nil
 }
 

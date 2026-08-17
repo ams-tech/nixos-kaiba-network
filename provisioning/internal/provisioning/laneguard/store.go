@@ -30,6 +30,9 @@ type Attempt struct {
 	PlanDigest        string          `json:"plan_digest"`
 	TargetFingerprint string          `json:"target_fingerprint"`
 	FenceEpoch        uint64          `json:"fence_epoch"`
+	ApprovalID        string          `json:"approval_id"`
+	IntentReceipt     string          `json:"intent_receipt"`
+	IntentSequence    uint32          `json:"intent_sequence"`
 	Sequence          uint32          `json:"sequence"`
 	Operation         Operation       `json:"operation"`
 	OperationDigest   string          `json:"operation_digest"`
@@ -207,7 +210,7 @@ func (store *FileStore) save(attempts map[string]Attempt) error {
 }
 
 func validateAttempt(attempt Attempt) error {
-	if attempt.SchemaVersion != ContractSchemaVersion || attempt.Key == "" || attempt.TransactionID == "" || attempt.PlanDigest == "" || attempt.TargetFingerprint == "" || attempt.FenceEpoch == 0 || attempt.Sequence == 0 || attempt.OperationDigest == "" {
+	if attempt.SchemaVersion != ContractSchemaVersion || attempt.Key == "" || attempt.TransactionID == "" || attempt.PlanDigest == "" || attempt.TargetFingerprint == "" || attempt.FenceEpoch == 0 || attempt.ApprovalID == "" || attempt.IntentReceipt == "" || attempt.IntentSequence == 0 || attempt.IntentSequence != attempt.Sequence || attempt.Sequence == 0 || attempt.OperationDigest == "" {
 		return errors.New("attempt is missing required immutable bindings")
 	}
 	if _, allowed := operationClass(attempt.Operation); !allowed {
@@ -225,7 +228,7 @@ func validateAttempt(attempt Attempt) error {
 }
 
 func validAttemptTransition(existing, next Attempt) error {
-	if existing.Key != next.Key || existing.TransactionID != next.TransactionID || existing.PlanDigest != next.PlanDigest || existing.TargetFingerprint != next.TargetFingerprint || existing.FenceEpoch != next.FenceEpoch || existing.Sequence != next.Sequence || existing.Operation != next.Operation || existing.OperationDigest != next.OperationDigest || existing.StartedAt != next.StartedAt {
+	if existing.Key != next.Key || existing.TransactionID != next.TransactionID || existing.PlanDigest != next.PlanDigest || existing.TargetFingerprint != next.TargetFingerprint || existing.FenceEpoch != next.FenceEpoch || existing.ApprovalID != next.ApprovalID || existing.IntentReceipt != next.IntentReceipt || existing.IntentSequence != next.IntentSequence || existing.Sequence != next.Sequence || existing.Operation != next.Operation || existing.OperationDigest != next.OperationDigest || existing.StartedAt != next.StartedAt {
 		return errors.New("attempt immutable bindings cannot change")
 	}
 	if existing.Status == AttemptVerified || existing.Status == AttemptQuarantined {

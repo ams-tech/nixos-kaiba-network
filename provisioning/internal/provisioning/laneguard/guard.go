@@ -102,7 +102,7 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	if !current.Before(plan.ApprovalExpiresAt) {
 		return Attempt{}, ErrApprovalExpired
 	}
-	if remaining := request.ClaimExpiresAt.Sub(current); remaining < operation.MaximumDuration+guard.config.LeaseSafetyMargin {
+	if !LeaseCoversOperation(current, request.ClaimExpiresAt, operation.MaximumDuration, guard.config.LeaseSafetyMargin) {
 		return Attempt{}, ErrLeaseInvalid
 	}
 	key := attemptKey(plan, operation.Sequence)
@@ -111,6 +111,9 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 		return Attempt{}, fmt.Errorf("read execute-once journal: %w", err)
 	}
 	if found {
+		if !attemptMatchesIntent(existing, plan, operation) {
+			return Attempt{}, ErrPlanMismatch
+		}
 		switch existing.Status {
 		case AttemptVerified:
 			return existing, nil
@@ -141,6 +144,7 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 		SchemaVersion: ContractSchemaVersion, Key: key,
 		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest,
 		TargetFingerprint: plan.TargetFingerprint, FenceEpoch: plan.FenceEpoch,
+		ApprovalID: plan.ApprovalID, IntentReceipt: plan.IntentReceipt, IntentSequence: plan.IntentSequence,
 		Sequence: operation.Sequence, Operation: operation.Operation,
 		OperationDigest: operation.OperationDigest, Status: AttemptStarted,
 		StartedAt: now, UpdatedAt: now, ObservedState: observation.State,
@@ -199,6 +203,9 @@ func (guard *Guard) Reconcile(ctx context.Context, request ExecuteRequest) (Atte
 	}
 	if !found {
 		return Attempt{}, errors.New("no operation attempt exists to reconcile")
+	}
+	if !attemptMatchesIntent(attempt, plan, operation) {
+		return Attempt{}, ErrPlanMismatch
 	}
 	switch attempt.Status {
 	case AttemptVerified:
@@ -306,7 +313,7 @@ func matchPlanRequest(plan Plan, request ExecuteRequest) (OperationSpec, error) 
 		request.TargetFingerprint != plan.TargetFingerprint || request.FenceEpoch != plan.FenceEpoch ||
 		request.ApprovalID != plan.ApprovalID || !request.ApprovalExpiresAt.Equal(plan.ApprovalExpiresAt) ||
 		request.IntentReceipt != plan.IntentReceipt ||
-		request.Sequence == 0 || int(request.Sequence) > len(plan.Operations) {
+		request.Sequence == 0 || request.Sequence != plan.IntentSequence || int(request.Sequence) > len(plan.Operations) {
 		return OperationSpec{}, ErrPlanMismatch
 	}
 	operation := plan.Operations[request.Sequence-1]
@@ -339,10 +346,17 @@ func (guard *Guard) restartStates(plan Plan) ([]DirectState, bool, error) {
 			break
 		}
 		foundAttempt = true
+		if operation.Sequence > plan.IntentSequence {
+			return nil, false, ErrPlanMismatch
+		}
 		if attempt.TransactionID != plan.TransactionID || attempt.PlanDigest != plan.PlanDigest ||
 			attempt.TargetFingerprint != plan.TargetFingerprint || attempt.FenceEpoch != plan.FenceEpoch ||
+			attempt.ApprovalID != plan.ApprovalID ||
 			attempt.Sequence != operation.Sequence || attempt.Operation != operation.Operation ||
 			attempt.OperationDigest != operation.OperationDigest {
+			return nil, false, ErrPlanMismatch
+		}
+		if operation.Sequence == plan.IntentSequence && !attemptMatchesIntent(attempt, plan, operation) {
 			return nil, false, ErrPlanMismatch
 		}
 		switch attempt.Status {
@@ -378,6 +392,11 @@ func (guard *Guard) restartStates(plan Plan) ([]DirectState, bool, error) {
 	return expected, closed, nil
 }
 
+func attemptMatchesIntent(attempt Attempt, plan Plan, operation OperationSpec) bool {
+	return attempt.ApprovalID == plan.ApprovalID && attempt.IntentReceipt == plan.IntentReceipt &&
+		attempt.IntentSequence == plan.IntentSequence && attempt.Sequence == operation.Sequence
+}
+
 func stateAllowed(actual DirectState, expected []DirectState) bool {
 	for _, candidate := range expected {
 		if actual == candidate {
@@ -409,7 +428,7 @@ func clonePlan(plan Plan) Plan {
 }
 
 func samePlan(left, right Plan) bool {
-	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID || left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release || left.TargetFingerprint != right.TargetFingerprint || left.FenceEpoch != right.FenceEpoch || left.ApprovalID != right.ApprovalID || !left.ApprovalExpiresAt.Equal(right.ApprovalExpiresAt) || left.IntentReceipt != right.IntentReceipt || len(left.Operations) != len(right.Operations) {
+	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID || left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release || left.TargetFingerprint != right.TargetFingerprint || left.FenceEpoch != right.FenceEpoch || left.ApprovalID != right.ApprovalID || !left.ApprovalExpiresAt.Equal(right.ApprovalExpiresAt) || left.IntentReceipt != right.IntentReceipt || left.IntentSequence != right.IntentSequence || len(left.Operations) != len(right.Operations) {
 		return false
 	}
 	for index := range left.Operations {

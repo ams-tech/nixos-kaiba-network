@@ -38,7 +38,8 @@ func TestCommandVerifiesOfflineFixture(t *testing.T) {
 	if result.Status != unfusedcompat.StatusCompatibilityPassed || result.EvidenceMode != unfusedcompat.EvidenceModeOfflineFixture {
 		t.Fatalf("unexpected outcome: %#v", result)
 	}
-	if result.HardwareObserved || result.SecurityEnforced || result.MutationEligible {
+	if result.SignatureVerified || result.SignerTrustAnchored || result.SignerTrustPolicyDigest != "" ||
+		result.HardwareObserved || result.SecurityEnforced || result.MutationEligible {
 		t.Fatalf("offline command emitted a prohibited policy claim: %#v", result)
 	}
 	if result.BootImageDigest == "" || result.BootSignatureDigest == "" || result.RootDataDigest == "" || result.RootHashDigest == "" {
@@ -47,7 +48,8 @@ func TestCommandVerifiesOfflineFixture(t *testing.T) {
 }
 
 func TestCommandVerifiesSignedOfflineFixture(t *testing.T) {
-	manifestPath, root, fixturePath, publicKeyPath := signedCommandFixture(t)
+	manifestPath, root, fixturePath, publicKeyPath, signerFingerprint := signedCommandFixture(t)
+	setTrustedSignerFingerprintForTest(t, signerFingerprint)
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
 		"verify-signed-offline-fixture",
@@ -64,8 +66,28 @@ func TestCommandVerifiesSignedOfflineFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !result.SignatureVerified || result.SignatureVerificationReceipt == "" ||
-		result.BootPublicKeyFingerprint == "" || result.SecurityEnforced || result.MutationEligible {
+		result.BootPublicKeyFingerprint != signerFingerprint || !result.SignerTrustAnchored ||
+		result.SignerTrustPolicyDigest == "" || result.SecurityEnforced || result.MutationEligible {
 		t.Fatalf("signed outcome = %#v", result)
+	}
+}
+
+func TestCommandRejectsSignedFixtureWithoutBuildTimeTrustAnchor(t *testing.T) {
+	manifestPath, root, fixturePath, publicKeyPath, signerFingerprint := signedCommandFixture(t)
+	setTrustedSignerFingerprintForTest(t, "")
+	// A similarly named environment variable must not become an alternate trust
+	// source for the generic build.
+	t.Setenv("KAIBA_TRUSTED_SIGNER_FINGERPRINT", signerFingerprint)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"verify-signed-offline-fixture",
+		"--manifest", manifestPath,
+		"--capsule-root", root,
+		"--fixture", fixturePath,
+		"--public-key", publicKeyPath,
+	}, &stdout, &stderr)
+	if code != exitVerification || stdout.Len() != 0 || !strings.Contains(stderr.String(), "trusted signer policy") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -78,6 +100,7 @@ func TestCommandRejectsIncompleteOrExpandedInterface(t *testing.T) {
 		{"verify-offline-fixture", "--manifest", manifestPath, "--capsule-root", root},
 		{"verify-offline-fixture", "--manifest", manifestPath, "--capsule-root", root, "--fixture", fixturePath, "extra"},
 		{"verify-offline-fixture", "--manifest", manifestPath, "--capsule-root", root, "--fixture", fixturePath, "--device", "/dev/example"},
+		{"verify-offline-fixture", "--manifest", manifestPath, "--capsule-root", root, "--fixture", fixturePath, "--trusted-signer-fingerprint", commandDigest([]byte("untrusted"))},
 	}
 	for _, arguments := range tests {
 		var stdout, stderr bytes.Buffer
@@ -172,7 +195,7 @@ func commandFixture(t *testing.T) (string, string, string) {
 	return manifestPath, root, fixturePath
 }
 
-func signedCommandFixture(t *testing.T) (string, string, string, string) {
+func signedCommandFixture(t *testing.T) (string, string, string, string, string) {
 	t.Helper()
 	manifestPath, root, fixturePath := commandFixture(t)
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -225,7 +248,16 @@ func signedCommandFixture(t *testing.T) (string, string, string, string) {
 	if err := os.WriteFile(publicKeyPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return manifestPath, root, fixturePath, publicKeyPath
+	return manifestPath, root, fixturePath, publicKeyPath, commandDigest(der)
+}
+
+func setTrustedSignerFingerprintForTest(t *testing.T, fingerprint string) {
+	t.Helper()
+	previous := trustedSignerFingerprint
+	trustedSignerFingerprint = fingerprint
+	t.Cleanup(func() {
+		trustedSignerFingerprint = previous
+	})
 }
 
 func writeCommandJSON(t *testing.T, filePath string, value any) {

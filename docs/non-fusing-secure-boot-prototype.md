@@ -9,6 +9,13 @@ one-time setting. Its terminal result is deliberately non-authoritative.
 
 Choose a new state path for each run. Reusing a prior path fails closed.
 
+The current control store is `v1alpha3`: it requires the all-zero unowned
+customer-key prestate and a distinct nonzero intended owned key. Older control
+stores are not auto-migrated into this stronger authority model. Archive and
+remove old software-only rehearsal directories before rerunning. If an older
+store was ever associated with physical work, do not convert or resume it;
+retain it as evidence and require manual reconciliation or quarantine.
+
 ```console
 nix run ./nix/provisioning#kaiba-provision-integrated-rehearsal -- \
   --state-dir /tmp/kaiba-integrated-rehearsal-1 \
@@ -17,10 +24,11 @@ nix run ./nix/provisioning#kaiba-provision-integrated-rehearsal -- \
 
 The command creates mode-`0600` control and append-only audit stores, records a
 synthetic fresh target with the all-zero customer-key hash, derives the exact
-seven-operation release-bound plan, authenticates the approval and initial
-intent against their durable audit records, closes and reopens both stores,
-and rebinds the same authority. Only then does it run the deterministic
-software simulator.
+seven-operation release-bound plan, verifies the approval and initial intent
+against their durable audit records under an explicitly rehearsal-only actor
+policy, closes and reopens both stores, and verifies the same authority. The
+rehearsal verifier returns scalar summary evidence and zero executable lane
+requests. Only then does it run the deterministic software simulator.
 
 A successful report must include:
 
@@ -32,7 +40,13 @@ A successful report must include:
   "persistence_revalidated": true,
   "hardware_observed": false,
   "security_enforced": false,
-  "mutation_eligible": false
+  "mutation_eligible": false,
+  "authority": {
+    "plan_operation_count": 7,
+    "validated_intent_count": 1,
+    "executable_request_count": 0,
+    "pending_sequence": 1
+  }
 }
 ```
 
@@ -58,15 +72,16 @@ nix run ./nix/provisioning#kaiba-provision-integrated-rehearsal -- \
 | --- | --- | --- | --- |
 | Integrated authority rehearsal | `kaiba-provision-integrated-rehearsal` | Fresh local JSON stores only | Software-only, non-authoritative |
 | Standalone campaign model | `kaiba-provision-rehearsal` | Nothing | Synthetic campaign evidence |
-| Signed capsule verification | `kaiba-provision-unfused-compat` | Nothing | Offline signature and exact-tree verification |
+| Signed capsule verification | signer-anchored `kaiba-provision-unfused-compat` | Nothing | Offline signature and exact-tree verification |
 | Media fixture staging | `kaiba-provision-media-stager fixture-*` | One explicitly named regular file | Reopened extent-digest receipt |
 | Device media staging | `kaiba-provision-media-stager` | One explicitly approved whole block device | Reopened extent-digest receipt; no cold-power claim |
-| Unfused boot evidence | `kaiba-provision-unfused-evidence` | Nothing; consumes captured files | Operator-observed compatibility, never enforcement |
+| Unfused boot correlation | signer-anchored `kaiba-provision-unfused-evidence` | Nothing; consumes captured files | Consistent offline records; no hardware or enforcement claim |
 
 The integrated package is a separate Nix closure from the physical lane guard.
 It contains no RPIBOOT binary, Pi adapter, GPIO selector, UART selector, block
 device selector, subprocess runner, or network listener. It cannot emit
-`security_applied` or invoke `laneguard.Guard`.
+`security_applied`, construct a production `BoundPlan`, emit an
+`ExecuteRequest`, or invoke `laneguard.Guard`.
 
 ## Optional read-only and reversible next layers
 
@@ -80,12 +95,13 @@ a dedicated device. The fixture path runs the same extent preflight, write,
 fsync, reopen, and digest comparison while rejecting every path beneath
 `/dev`. See [Target-media staging prototype](target-media-staging-prototype.md).
 
-An optional physical compatibility run uses a fresh unfused Pi, never supplies
-an OTP- or EEPROM-programming bundle, and records the all-zero customer-key
-hash before and after the run. The passive verifier accepts exact operator and
-UART evidence as described in the unfused compatibility document. It continues
-to emit `security_enforced:false` because an unfused board cannot prove
-customer-key enforcement.
+An optional physical compatibility exercise uses a fresh unfused Pi, never
+supplies an OTP- or EEPROM-programming bundle, and records the all-zero
+customer-key hash before and after the run. The passive verifier correlates the
+operator-authored record and UART transcript with an in-process, signer-anchored
+capsule verification. Because neither capture is authenticated or fresh, it
+emits `record_consistent:true` but keeps `hardware_observed:false`,
+`security_enforced:false`, and `mutation_eligible:false`.
 
 ## Boundary before any real ownership ceremony
 
@@ -96,4 +112,3 @@ digests, verified GPT/FAT and dm-verity media layout, a qualified BOOTSEL/power
 lane, authenticated service transport around the compiler, the complete
 crash/failure campaign, live development-token evidence, and an explicit
 go/no-go review for one sacrificial board.
-

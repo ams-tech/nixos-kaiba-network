@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	SignatureReceiptSchemaVersion   = "provisioning.kaiba.network/rpi5-unfused-signature-receipt/v1alpha1"
-	SignatureAlgorithmRSA2048SHA256 = "rsa2048-sha256"
-	maximumPublicKeyBytes           = 16 * 1024
+	SignatureReceiptSchemaVersion    = "provisioning.kaiba.network/rpi5-unfused-signature-receipt/v1alpha2"
+	TrustedSignerPolicySchemaVersion = "provisioning.kaiba.network/rpi5-unfused-trusted-signer-policy/v1alpha1"
+	SignatureAlgorithmRSA2048SHA256  = "rsa2048-sha256"
+	maximumPublicKeyBytes            = 16 * 1024
 )
 
 // SignatureReceipt proves only offline cryptographic verification. It does
@@ -31,10 +32,20 @@ type SignatureReceipt struct {
 	BootImageDigest          string `json:"boot_image_digest"`
 	BootSignatureDigest      string `json:"boot_signature_digest"`
 	BootPublicKeyFingerprint string `json:"boot_public_key_fingerprint"`
+	SignerTrustPolicyDigest  string `json:"signer_trust_policy_digest"`
+	SignerTrustAnchored      bool   `json:"signer_trust_anchored"`
 	Algorithm                string `json:"algorithm"`
 	SignatureValid           bool   `json:"signature_valid"`
 	SecurityEnforced         bool   `json:"security_enforced"`
 	ReceiptDigest            string `json:"receipt_digest"`
+}
+
+// TrustedSignerPolicy is supplied by an immutable caller boundary. A public
+// key file is accepted only when its canonical SPKI fingerprint matches this
+// independently configured value.
+type TrustedSignerPolicy struct {
+	SchemaVersion                string `json:"schema_version"`
+	ExpectedPublicKeyFingerprint string `json:"expected_public_key_fingerprint"`
 }
 
 type signatureReceiptMaterial struct {
@@ -44,15 +55,52 @@ type signatureReceiptMaterial struct {
 	BootImageDigest          string `json:"boot_image_digest"`
 	BootSignatureDigest      string `json:"boot_signature_digest"`
 	BootPublicKeyFingerprint string `json:"boot_public_key_fingerprint"`
+	SignerTrustPolicyDigest  string `json:"signer_trust_policy_digest"`
+	SignerTrustAnchored      bool   `json:"signer_trust_anchored"`
 	Algorithm                string `json:"algorithm"`
 	SignatureValid           bool   `json:"signature_valid"`
 	SecurityEnforced         bool   `json:"security_enforced"`
 }
 
+// NewTrustedSignerPolicy validates one immutable signer trust anchor.
+func NewTrustedSignerPolicy(expectedPublicKeyFingerprint string) (TrustedSignerPolicy, error) {
+	policy := TrustedSignerPolicy{
+		SchemaVersion:                TrustedSignerPolicySchemaVersion,
+		ExpectedPublicKeyFingerprint: expectedPublicKeyFingerprint,
+	}
+	if err := policy.validate(); err != nil {
+		return TrustedSignerPolicy{}, err
+	}
+	return policy, nil
+}
+
+func (policy TrustedSignerPolicy) validate() error {
+	if policy.SchemaVersion != TrustedSignerPolicySchemaVersion || !validDigest(policy.ExpectedPublicKeyFingerprint) {
+		return errors.New("trusted signer policy requires a canonical pinned public-key fingerprint")
+	}
+	return nil
+}
+
+func (policy TrustedSignerPolicy) digest() (string, error) {
+	if err := policy.validate(); err != nil {
+		return "", err
+	}
+	material, err := json.Marshal(policy)
+	if err != nil {
+		return "", fmt.Errorf("encode trusted signer policy: %w", err)
+	}
+	return domainDigest("kaiba.rpi5.unfused-trusted-signer-policy.v1", material), nil
+}
+
 // VerifyDetachedSignature verifies the exact manifest-bound boot image and
-// detached signature with a reviewed RSA-2048 public key. It opens only
-// regular files with O_NOFOLLOW and performs no subprocess or device access.
-func VerifyDetachedSignature(manifestPath, capsuleRoot, publicKeyPath string) (SignatureReceipt, error) {
+// detached signature with an RSA-2048 public key authorized by policy. It opens
+// only regular files with O_NOFOLLOW and performs no subprocess or device
+// access.
+func VerifyDetachedSignature(manifestPath, capsuleRoot, publicKeyPath string, policy TrustedSignerPolicy) (SignatureReceipt, error) {
+	policyDigest, err := policy.digest()
+	if err != nil {
+		return SignatureReceipt{}, err
+	}
 	var manifest CapsuleManifest
 	if err := loadStrictJSONFile(manifestPath, maximumManifestBytes, &manifest); err != nil {
 		return SignatureReceipt{}, fmt.Errorf("load capsule manifest: %w", err)
@@ -68,6 +116,9 @@ func VerifyDetachedSignature(manifestPath, capsuleRoot, publicKeyPath string) (S
 	publicKey, fingerprint, err := loadRSAPublicKey(publicKeyPath)
 	if err != nil {
 		return SignatureReceipt{}, err
+	}
+	if fingerprint != policy.ExpectedPublicKeyFingerprint {
+		return SignatureReceipt{}, errors.New("reviewed public key is not authorized by the trusted signer policy")
 	}
 	bootImagePath := filepath.Join(capsuleRoot, filepath.FromSlash(manifest.BootImagePath))
 	bootDigest, err := hashRegularFile(bootImagePath, roles.bootImage.SizeBytes)
@@ -94,7 +145,8 @@ func VerifyDetachedSignature(manifestPath, capsuleRoot, publicKeyPath string) (S
 		SchemaVersion: SignatureReceiptSchemaVersion,
 		CapsuleID:     manifest.CapsuleID, CapsuleDigest: manifest.CapsuleDigest,
 		BootImageDigest: roles.bootImage.SHA256, BootSignatureDigest: roles.bootSignature.SHA256,
-		BootPublicKeyFingerprint: fingerprint, Algorithm: SignatureAlgorithmRSA2048SHA256,
+		BootPublicKeyFingerprint: fingerprint, SignerTrustPolicyDigest: policyDigest,
+		SignerTrustAnchored: true, Algorithm: SignatureAlgorithmRSA2048SHA256,
 		SignatureValid: true, SecurityEnforced: false,
 	}
 	material, err := json.Marshal(signatureReceiptMaterial{
@@ -102,24 +154,26 @@ func VerifyDetachedSignature(manifestPath, capsuleRoot, publicKeyPath string) (S
 		CapsuleDigest: receipt.CapsuleDigest, BootImageDigest: receipt.BootImageDigest,
 		BootSignatureDigest:      receipt.BootSignatureDigest,
 		BootPublicKeyFingerprint: receipt.BootPublicKeyFingerprint,
+		SignerTrustPolicyDigest:  receipt.SignerTrustPolicyDigest,
+		SignerTrustAnchored:      receipt.SignerTrustAnchored,
 		Algorithm:                receipt.Algorithm, SignatureValid: receipt.SignatureValid,
 		SecurityEnforced: receipt.SecurityEnforced,
 	})
 	if err != nil {
 		return SignatureReceipt{}, fmt.Errorf("encode signature receipt: %w", err)
 	}
-	receipt.ReceiptDigest = domainDigest("kaiba.rpi5.unfused-signature-receipt.v1", material)
+	receipt.ReceiptDigest = domainDigest("kaiba.rpi5.unfused-signature-receipt.v2", material)
 	return receipt, nil
 }
 
 // VerifySignedOfflineFixture combines exact capsule verification, the complete
 // offline compatibility sequence, and detached-signature verification.
-func VerifySignedOfflineFixture(manifestPath, capsuleRoot, fixturePath, publicKeyPath string) (Outcome, error) {
+func VerifySignedOfflineFixture(manifestPath, capsuleRoot, fixturePath, publicKeyPath string, policy TrustedSignerPolicy) (Outcome, error) {
 	outcome, err := VerifyOfflineFixture(manifestPath, capsuleRoot, fixturePath)
 	if err != nil {
 		return Outcome{}, err
 	}
-	receipt, err := VerifyDetachedSignature(manifestPath, capsuleRoot, publicKeyPath)
+	receipt, err := VerifyDetachedSignature(manifestPath, capsuleRoot, publicKeyPath, policy)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -130,6 +184,8 @@ func VerifySignedOfflineFixture(manifestPath, capsuleRoot, fixturePath, publicKe
 	outcome.BootPublicKeyFingerprint = receipt.BootPublicKeyFingerprint
 	outcome.SignatureVerificationReceipt = receipt.ReceiptDigest
 	outcome.SignatureVerified = true
+	outcome.SignerTrustAnchored = receipt.SignerTrustAnchored
+	outcome.SignerTrustPolicyDigest = receipt.SignerTrustPolicyDigest
 	return outcome, nil
 }
 

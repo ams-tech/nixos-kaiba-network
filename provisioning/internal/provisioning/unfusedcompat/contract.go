@@ -19,7 +19,7 @@ import (
 const (
 	ManifestSchemaVersion = "provisioning.kaiba.network/rpi5-unfused-capsule-manifest/v1alpha1"
 	FixtureSchemaVersion  = "provisioning.kaiba.network/rpi5-unfused-compatibility-fixture/v1alpha1"
-	OutcomeSchemaVersion  = "provisioning.kaiba.network/rpi5-unfused-compatibility-result/v1alpha1"
+	OutcomeSchemaVersion  = "provisioning.kaiba.network/rpi5-unfused-compatibility-result/v1alpha2"
 
 	EvidenceModeOfflineFixture = "offline_fixture"
 	BootModeRAMDisk            = "boot_ramdisk"
@@ -72,9 +72,9 @@ type OfflineFixture struct {
 	CompatibilityMarkerObserved bool   `json:"compatibility_marker_observed"`
 }
 
-// Outcome is the only successful result. Its false policy fields are not
-// caller-controlled and prevent fixture verification from becoming an
-// enrollment or enforcement claim.
+// Outcome is the only successful result. Hardware observation, enforcement,
+// and mutation eligibility remain false. Signer trust is asserted only when
+// signed verification matches an independently supplied trust policy.
 type Outcome struct {
 	SchemaVersion                string `json:"schema_version"`
 	Status                       string `json:"status"`
@@ -90,6 +90,8 @@ type Outcome struct {
 	BootPublicKeyFingerprint     string `json:"boot_public_key_fingerprint,omitempty"`
 	SignatureVerificationReceipt string `json:"signature_verification_receipt,omitempty"`
 	SignatureVerified            bool   `json:"signature_verified"`
+	SignerTrustAnchored          bool   `json:"signer_trust_anchored"`
+	SignerTrustPolicyDigest      string `json:"signer_trust_policy_digest,omitempty"`
 	FixtureDigest                string `json:"fixture_digest"`
 	FilesVerified                int    `json:"files_verified"`
 	HardwareObserved             bool   `json:"hardware_observed"`

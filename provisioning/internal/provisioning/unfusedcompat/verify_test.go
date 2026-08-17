@@ -41,7 +41,8 @@ func TestVerifyOfflineFixtureProducesNonEnforcementOutcome(t *testing.T) {
 	if result.ManifestDigest == "" || result.FixtureDigest == "" {
 		t.Fatalf("result lacks derived evidence digests: %#v", result)
 	}
-	if result.HardwareObserved || result.SecurityEnforced || result.MutationEligible {
+	if result.SignatureVerified || result.SignerTrustAnchored || result.SignerTrustPolicyDigest != "" ||
+		result.HardwareObserved || result.SecurityEnforced || result.MutationEligible {
 		t.Fatalf("offline fixture acquired a prohibited policy claim: %#v", result)
 	}
 }

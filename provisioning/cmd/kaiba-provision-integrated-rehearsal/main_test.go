@@ -3,10 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"embed"
 	"encoding/json"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +13,9 @@ import (
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rehearsal"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rehearsalorchestrator"
 )
+
+//go:embed *.go
+var commandSources embed.FS
 
 func TestRunEmitsExplicitSoftwareOnlyReport(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -95,19 +97,25 @@ func TestRunRejectsUnsafeOrReusedState(t *testing.T) {
 }
 
 func TestCommandSourceHasNoExecutionOrTransportDependency(t *testing.T) {
-	_, current, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate command source")
-	}
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(current), "main.go"))
+	entries, err := commandSources.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{
+	forbidden := []string{
 		`"os/exec"`, `"net"`, "physicalrpi5", "laneguard", "rpiboot", `"/dev/`, `"/sys/`,
-	} {
-		if strings.Contains(string(data), forbidden) {
-			t.Fatalf("command source contains forbidden dependency %q", forbidden)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		data, err := commandSources.ReadFile(entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range forbidden {
+			if strings.Contains(string(data), value) {
+				t.Fatalf("command source %s contains forbidden dependency %q", entry.Name(), value)
+			}
 		}
 	}
 }

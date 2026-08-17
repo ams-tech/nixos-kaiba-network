@@ -1,6 +1,7 @@
 package plancompiler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,8 +22,10 @@ var (
 	ErrInvalidAuditIntent = errors.New("invalid durable lane plan audit intent")
 )
 
-// Authority is one authenticated snapshot read from the control and audit
-// services immediately before lane-plan installation.
+// Authority is one control/audit snapshot read immediately before lane-plan
+// installation. Bind validates its internal bindings; the caller remains
+// responsible for authenticating the services and obtaining Now from a trusted
+// clock.
 type Authority struct {
 	Transaction       controlplane.Transaction
 	ApprovalReceipt   auditlog.Receipt
@@ -33,17 +36,70 @@ type Authority struct {
 	LeaseSafetyMargin time.Duration
 }
 
-// BoundPlan is immutable authority plus ordered request templates. A caller
-// must fetch and Bind fresh authority again after a claim or approval change.
+// BoundPlan is immutable authority for one currently pending operation. A
+// caller must fetch and Bind fresh authority after every successful operation,
+// claim change, or approval change.
 type BoundPlan struct {
 	plan           laneguard.Plan
 	claimExpiresAt time.Time
+	operationIndex int
 }
 
+// RehearsalAuthoritySummary proves that the software-only rehearsal exercised
+// the expected control/audit bindings without exposing an executable plan or
+// request.
+type RehearsalAuthoritySummary struct {
+	TransactionID          string
+	ResourceVersion        uint64
+	FenceEpoch             uint64
+	PlanDigest             string
+	ApprovalID             string
+	IntentReceipt          string
+	PlanOperationCount     int
+	ValidatedIntentCount   int
+	ExecutableRequestCount int
+	PendingSequence        uint32
+	InitialCustomerKeyHash string
+	OwnedCustomerKeyHash   string
+}
+
+type actorPolicy struct {
+	approvalRole string
+	intentRole   string
+}
+
+var (
+	productionActors = actorPolicy{approvalRole: "approver", intentRole: "provisioning_station"}
+	rehearsalActors  = actorPolicy{approvalRole: "software_rehearsal_approver", intentRole: "software_rehearsal"}
+)
+
 // Bind authenticates the draft's previously approved digest and the separate
-// durable audit intent. The initial control operation intent must still be
-// pending; completed, failed, uncertain, or additional operations are rejected.
+// durable audit intent for exactly one currently pending operation.
 func Bind(draft Draft, authority Authority) (BoundPlan, error) {
+	return bindWithActorPolicy(draft, authority, productionActors)
+}
+
+// VerifySoftwareRehearsalAuthority validates the deliberately synthetic actor
+// provenance used by the software-only rehearsal. It returns scalar evidence
+// only, so rehearsal authority cannot be passed to the lane guard.
+func VerifySoftwareRehearsalAuthority(draft Draft, authority Authority) (RehearsalAuthoritySummary, error) {
+	bound, err := bindWithActorPolicy(draft, authority, rehearsalActors)
+	if err != nil {
+		return RehearsalAuthoritySummary{}, err
+	}
+	plan := bound.plan
+	return RehearsalAuthoritySummary{
+		TransactionID: authority.Transaction.ID, ResourceVersion: authority.Transaction.ResourceVersion,
+		FenceEpoch: plan.FenceEpoch, PlanDigest: plan.PlanDigest,
+		ApprovalID: plan.ApprovalID, IntentReceipt: plan.IntentReceipt,
+		PlanOperationCount: len(plan.Operations), ValidatedIntentCount: 1, ExecutableRequestCount: 0,
+		PendingSequence:        plan.Operations[bound.operationIndex].Sequence,
+		InitialCustomerKeyHash: plan.Operations[0].ExpectedPrestate.CustomerKeyHash,
+		OwnedCustomerKeyHash:   plan.Operations[0].ExpectedPoststate.CustomerKeyHash,
+	}, nil
+}
+
+func bindWithActorPolicy(draft Draft, authority Authority, actors actorPolicy) (BoundPlan, error) {
 	if err := validateDraft(draft); err != nil {
 		return BoundPlan{}, err
 	}
@@ -77,16 +133,6 @@ func Bind(draft Draft, authority Authority) (BoundPlan, error) {
 	if !containsExactCampaign(claim.AllowedStages) {
 		return BoundPlan{}, fmt.Errorf("%w: claim does not authorize the complete campaign", ErrStaleClaim)
 	}
-	maximumDuration := time.Duration(0)
-	for _, operation := range plan.Operations {
-		if operation.MaximumDuration > maximumDuration {
-			maximumDuration = operation.MaximumDuration
-		}
-	}
-	if claim.ExpiresAt.Sub(now) < maximumDuration+authority.LeaseSafetyMargin {
-		return BoundPlan{}, ErrStaleClaim
-	}
-
 	target := transaction.Target
 	if target == nil || target.Fingerprint != plan.TargetFingerprint || target.FenceEpoch != plan.FenceEpoch ||
 		target.CustomerKeyHash != transaction.ExpectedPrestateCustomerKeyHash ||
@@ -108,56 +154,114 @@ func Bind(draft Draft, authority Authority) (BoundPlan, error) {
 	if !now.Before(approval.ExpiresAt) {
 		return BoundPlan{}, ErrApprovalExpired
 	}
-	if err := validateAuditApproval(plan, approval, authority.ApprovalReceipt, authority.ApprovalRecord, now); err != nil {
+	if err := validateAuditApproval(plan, approval, authority.ApprovalReceipt, authority.ApprovalRecord, now, actors.approvalRole); err != nil {
 		return BoundPlan{}, err
 	}
 
-	if len(transaction.Operations) != 1 {
-		return BoundPlan{}, fmt.Errorf("%w: expected exactly one initial pending intent", ErrAuthorityMismatch)
-	}
-	intent := transaction.Operations[0]
-	first := plan.Operations[0]
-	if intent.ID == "" || intent.Operation != string(first.Operation) || intent.Status != controlplane.OperationIntentRecorded ||
-		intent.PlanDigest != plan.PlanDigest || intent.Release != plan.Release || !intent.ApprovalExpiresAt.Equal(plan.ApprovalExpiresAt) ||
-		intent.InputDigest != plan.PlanDigest || intent.PrestateDigest != draft.InitialPrestateDigest() ||
-		intent.IntentFenceEpoch != plan.FenceEpoch || intent.IntentAt.IsZero() || intent.IntentAt.After(now) {
-		return BoundPlan{}, fmt.Errorf("%w: initial control intent", ErrAuthorityMismatch)
-	}
-	if err := validateAuditIntent(plan, intent, authority.IntentReceipt, authority.IntentRecord, now); err != nil {
+	operationIndex, intent, err := validateControlOperations(plan, transaction.Operations, now)
+	if err != nil {
 		return BoundPlan{}, err
+	}
+	operation := plan.Operations[operationIndex]
+	if !laneguard.LeaseCoversOperation(now, claim.ExpiresAt, operation.MaximumDuration, authority.LeaseSafetyMargin) {
+		return BoundPlan{}, ErrStaleClaim
+	}
+	if err := validateAuditIntent(plan, operation, intent, authority.IntentReceipt, authority.IntentRecord, now, actors.intentRole); err != nil {
+		return BoundPlan{}, err
+	}
+	if authority.ApprovalRecord.Sequence >= authority.IntentRecord.Sequence ||
+		approval.ApprovedAt.After(authority.IntentRecord.RecordedAt) {
+		return BoundPlan{}, fmt.Errorf("%w: approval and intent record ordering", ErrInvalidAuditIntent)
 	}
 
 	bound := clonePlan(plan)
 	bound.ApprovalID = approval.ID
 	bound.IntentReceipt = authority.IntentReceipt.ReceiptID
-	return BoundPlan{plan: bound, claimExpiresAt: claim.ExpiresAt.UTC()}, nil
+	bound.IntentSequence = operation.Sequence
+	return BoundPlan{plan: bound, claimExpiresAt: claim.ExpiresAt.UTC(), operationIndex: operationIndex}, nil
 }
 
-// Plan returns a defensive copy of the fully bound lane plan.
-func (bound BoundPlan) Plan() laneguard.Plan { return clonePlan(bound.plan) }
+// Load installs the opaque, authority-bound plan directly into a lane guard.
+// Callers receive only the current ExecuteRequest, not a mutable plan envelope.
+func (bound BoundPlan) Load(ctx context.Context, guard *laneguard.Guard) error {
+	if guard == nil {
+		return errors.New("lane guard is required")
+	}
+	return guard.LoadPlan(ctx, clonePlan(bound.plan))
+}
 
-// ExecuteRequests returns exact request envelopes in canonical operation order.
-func (bound BoundPlan) ExecuteRequests() []laneguard.ExecuteRequest {
-	requests := make([]laneguard.ExecuteRequest, len(bound.plan.Operations))
-	for index, operation := range bound.plan.Operations {
-		requests[index] = laneguard.ExecuteRequest{
-			SchemaVersion: laneguard.ContractSchemaVersion,
-			StationID:     bound.plan.StationID, LaneID: bound.plan.LaneID,
-			TransactionID: bound.plan.TransactionID, PlanDigest: bound.plan.PlanDigest,
-			Release: bound.plan.Release, TargetFingerprint: bound.plan.TargetFingerprint,
-			FenceEpoch: bound.plan.FenceEpoch, ApprovalID: bound.plan.ApprovalID,
-			ApprovalExpiresAt: bound.plan.ApprovalExpiresAt, IntentReceipt: bound.plan.IntentReceipt,
-			Sequence: operation.Sequence, OperationDigest: operation.OperationDigest,
-			AuthorizationID: operation.AuthorizationID, ExpectedPrestate: operation.ExpectedPrestate,
-			ClaimExpiresAt: bound.claimExpiresAt,
+// ExecuteRequest returns the one request whose durable control/audit intent is
+// currently pending. A successful operation must be recorded and a new intent
+// bound before the next sequence can be emitted.
+func (bound BoundPlan) ExecuteRequest() (laneguard.ExecuteRequest, error) {
+	if bound.operationIndex < 0 || bound.operationIndex >= len(bound.plan.Operations) {
+		return laneguard.ExecuteRequest{}, fmt.Errorf("%w: bound plan has no current operation", ErrAuthorityMismatch)
+	}
+	operation := bound.plan.Operations[bound.operationIndex]
+	return laneguard.ExecuteRequest{
+		SchemaVersion: laneguard.ContractSchemaVersion,
+		StationID:     bound.plan.StationID, LaneID: bound.plan.LaneID,
+		TransactionID: bound.plan.TransactionID, PlanDigest: bound.plan.PlanDigest,
+		Release: bound.plan.Release, TargetFingerprint: bound.plan.TargetFingerprint,
+		FenceEpoch: bound.plan.FenceEpoch, ApprovalID: bound.plan.ApprovalID,
+		ApprovalExpiresAt: bound.plan.ApprovalExpiresAt, IntentReceipt: bound.plan.IntentReceipt,
+		Sequence: operation.Sequence, OperationDigest: operation.OperationDigest,
+		AuthorizationID: operation.AuthorizationID, ExpectedPrestate: operation.ExpectedPrestate,
+		ClaimExpiresAt: bound.claimExpiresAt,
+	}, nil
+}
+
+func validateControlOperations(plan laneguard.Plan, records []controlplane.OperationRecord, now time.Time) (int, controlplane.OperationRecord, error) {
+	if len(records) == 0 || len(records) > len(plan.Operations) {
+		return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: expected one pending operation after a successful plan prefix", ErrAuthorityMismatch)
+	}
+	seenIDs := make(map[string]struct{}, len(records))
+	for index, record := range records {
+		operation := plan.Operations[index]
+		if record.ID == "" || record.Operation != string(operation.Operation) ||
+			record.PlanDigest != plan.PlanDigest || record.Release != plan.Release ||
+			!record.ApprovalExpiresAt.Equal(plan.ApprovalExpiresAt) || record.InputDigest != plan.PlanDigest ||
+			record.PrestateDigest != prestateDigest(operation.ExpectedPrestate) || !validDigest(record.IntentAuditReceiptID) ||
+			record.IntentFenceEpoch != plan.FenceEpoch || record.IntentAt.IsZero() || record.IntentAt.After(now) {
+			return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: control operation %d binding", ErrAuthorityMismatch, index+1)
+		}
+		if _, duplicate := seenIDs[record.ID]; duplicate {
+			return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: duplicate control operation ID", ErrAuthorityMismatch)
+		}
+		seenIDs[record.ID] = struct{}{}
+		if index == len(records)-1 {
+			if record.Status != controlplane.OperationIntentRecorded || record.OutputDigest != "" || record.ObservationDigest != "" ||
+				record.EvidenceAuditReceiptID != "" || record.EvidenceAt != nil || record.ReconciliationAuditReceiptID != "" {
+				return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: final control operation is not one clean pending intent", ErrAuthorityMismatch)
+			}
+			return index, record, nil
+		}
+		if record.Status != controlplane.OperationSucceeded && record.Status != controlplane.OperationConfirmedApplied {
+			return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: prior control operation %d is not successfully closed", ErrAuthorityMismatch, index+1)
+		}
+		if !validDigest(record.OutputDigest) || !validDigest(record.ObservationDigest) || record.EvidenceAt == nil ||
+			record.EvidenceAt.Before(record.IntentAt) || record.EvidenceAt.After(now) {
+			return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: prior control operation %d evidence", ErrAuthorityMismatch, index+1)
+		}
+		if record.Status == controlplane.OperationSucceeded && !validDigest(record.EvidenceAuditReceiptID) {
+			return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: prior control operation %d evidence receipt", ErrAuthorityMismatch, index+1)
+		}
+		if record.Status == controlplane.OperationConfirmedApplied && !validDigest(record.ReconciliationAuditReceiptID) {
+			return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: prior control operation %d reconciliation receipt", ErrAuthorityMismatch, index+1)
+		}
+		if records[index+1].IntentAt.Before(*record.EvidenceAt) {
+			return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: control operation %d ordering", ErrAuthorityMismatch, index+1)
 		}
 	}
-	return requests
+	return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: no pending control operation", ErrAuthorityMismatch)
 }
 
-func validateAuditApproval(plan laneguard.Plan, approval *controlplane.Approval, receipt auditlog.Receipt, record auditlog.Record, now time.Time) error {
+func validateAuditApproval(plan laneguard.Plan, approval *controlplane.Approval, receipt auditlog.Receipt, record auditlog.Record, now time.Time, expectedRole string) error {
 	if err := validateAuditReceipt(receipt, record, approval.AuditReceiptID, now); err != nil {
 		return fmt.Errorf("%w: approval %v", ErrInvalidAuditIntent, err)
+	}
+	if approval.ApprovedAt.Before(record.RecordedAt) {
+		return fmt.Errorf("%w: approval control record predates its audit record", ErrInvalidAuditIntent)
 	}
 	event := record.Event
 	if event.SchemaVersion != auditlog.EventSchemaVersion || event.PolicyVersion != auditlog.DefaultPolicyVersion ||
@@ -165,13 +269,13 @@ func validateAuditApproval(plan laneguard.Plan, approval *controlplane.Approval,
 		event.StationID != plan.StationID || event.LaneID != plan.LaneID ||
 		event.Stage != "plan_approval" || event.FenceEpoch != plan.FenceEpoch ||
 		event.InputDigest != plan.PlanDigest || event.OutputDigest != "" || event.Result != auditlog.ResultIntentRecorded ||
-		len(event.Actors) != 1 || event.Actors[0].ID != approval.ApproverID || event.Actors[0].Role != "approver" {
+		len(event.Actors) != 1 || event.Actors[0].ID != approval.ApproverID || event.Actors[0].Role != expectedRole {
 		return fmt.Errorf("%w: approval event does not bind the plan and approver", ErrInvalidAuditIntent)
 	}
 	return nil
 }
 
-func validateAuditIntent(plan laneguard.Plan, intent controlplane.OperationRecord, receipt auditlog.Receipt, record auditlog.Record, now time.Time) error {
+func validateAuditIntent(plan laneguard.Plan, operation laneguard.OperationSpec, intent controlplane.OperationRecord, receipt auditlog.Receipt, record auditlog.Record, now time.Time, expectedRole string) error {
 	if err := validateAuditReceipt(receipt, record, intent.IntentAuditReceiptID, now); err != nil {
 		return fmt.Errorf("%w: intent %v", ErrInvalidAuditIntent, err)
 	}
@@ -181,9 +285,10 @@ func validateAuditIntent(plan laneguard.Plan, intent controlplane.OperationRecor
 	event := record.Event
 	if event.SchemaVersion != auditlog.EventSchemaVersion || event.PolicyVersion != auditlog.DefaultPolicyVersion || event.EventID != intent.ID ||
 		event.TransactionID != plan.TransactionID || event.StationID != plan.StationID || event.LaneID != plan.LaneID ||
-		event.Stage != string(plan.Operations[0].Operation) || event.FenceEpoch != plan.FenceEpoch ||
-		event.InputDigest != plan.PlanDigest || event.OutputDigest != "" || event.Result != auditlog.ResultIntentRecorded {
-		return fmt.Errorf("%w: event does not bind the initial plan intent", ErrInvalidAuditIntent)
+		event.Stage != string(operation.Operation) || event.FenceEpoch != plan.FenceEpoch ||
+		event.InputDigest != plan.PlanDigest || event.OutputDigest != "" || event.Result != auditlog.ResultIntentRecorded ||
+		len(event.Actors) != 1 || event.Actors[0].ID != plan.StationID || event.Actors[0].Role != expectedRole {
+		return fmt.Errorf("%w: event does not bind the current plan intent and actor", ErrInvalidAuditIntent)
 	}
 	return nil
 }

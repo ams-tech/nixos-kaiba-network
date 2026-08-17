@@ -52,6 +52,7 @@ func VerifyOfflineFixture(manifestPath, capsuleRoot, fixturePath string) (Outcom
 		BootSignatureDigest: roles.bootSignature.SHA256,
 		RootDataDigest:      roles.rootData.SHA256, RootHashDigest: roles.rootHash.SHA256,
 		FixtureDigest: fixtureHash, FilesVerified: len(manifest.Files),
+		SignatureVerified: false, SignerTrustAnchored: false,
 		HardwareObserved: false, SecurityEnforced: false, MutationEligible: false,
 	}, nil
 }

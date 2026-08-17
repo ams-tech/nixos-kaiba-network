@@ -12,9 +12,8 @@ import (
 )
 
 const (
-	maximumCompatibilityOutcomeBytes = 64 * 1024
-	maximumObservationBytes          = 64 * 1024
-	maximumUARTCaptureBytes          = 256 * 1024
+	maximumObservationBytes = 64 * 1024
+	maximumUARTCaptureBytes = 256 * 1024
 )
 
 func loadStrictJSONFile(filePath string, maximum int64, target any) error {
