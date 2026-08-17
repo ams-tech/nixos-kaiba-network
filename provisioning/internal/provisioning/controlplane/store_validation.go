@@ -101,6 +101,14 @@ func validateTransaction(transaction Transaction, fenceEpochs map[string]uint64)
 		transaction.SecurityApplied.ReleaseClassification != "development_asset" || transaction.SecurityApplied.RecordedAt.IsZero()) {
 		return corrupt("invalid security-applied record")
 	}
+	if transaction.Status == StatusSecurityApplied {
+		if transaction.Approval == nil {
+			return corrupt("security-applied transaction has no campaign approval")
+		}
+		if err := validateCompletedDevelopmentCampaign(transaction.Operations, transaction.Approval); err != nil {
+			return corrupt("security-applied transaction does not contain complete campaign evidence")
+		}
+	}
 	if (transaction.Status == StatusAborted) != (transaction.Abort != nil) {
 		return corrupt("abort terminal record does not match status")
 	}
@@ -148,6 +156,9 @@ func validateStoredApproval(approval Approval, transaction Transaction) error {
 	}
 	if err := validateStringSet("allowed_operations", approval.AllowedOperations, 1, 32); err != nil {
 		return corrupt("invalid approval operations")
+	}
+	if err := validateDevelopmentOperationNames(approval.AllowedOperations); err != nil {
+		return corrupt("approval does not contain the complete development secure-boot campaign")
 	}
 	return nil
 }

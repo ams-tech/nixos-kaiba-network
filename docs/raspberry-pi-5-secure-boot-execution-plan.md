@@ -64,12 +64,17 @@ The repository already contains useful foundations:
 - durable control and independent audit services;
 - a root-only execute-once lane guard and physical Pi adapter;
 - a loopback live-station state machine; and
-- tests for the individual contracts and simulated failure behavior.
+- tests for the individual contracts and simulated failure behavior;
+- one canonical seven-operation development campaign, enforced independently at
+  control-plane approval, lane-plan validation, persisted-state loading, and
+  `security_applied` finalization; and
+- domain-separated, deterministic operation and plan digests that the lane
+  guard independently recomputes before observing a target.
 
 The repository does not yet contain a complete signed-release adapter, target
 NVMe writer, mutation-capable station backend, authenticated control-to-guard
-bridge, complete-campaign enforcement, or a proven RPIBOOT-to-normal-boot lane
-transition.
+bridge, authoritative control-side plan construction, or a proven
+RPIBOOT-to-normal-boot lane transition.
 
 ## Safety invariants
 
@@ -105,7 +110,7 @@ These rules apply to every work item and rehearsal:
 | SB-02 | Development signing root | Not started | The development YubiKey and signing service pass the live key, PIN, touch, token-binding, and failure tests. |
 | SB-03 | Complete signed release | Not started | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
 | SB-04 | Target-media staging | Not started | The exact NVMe layout is written and cold-read back with matching digests. |
-| SB-05 | Enforced transaction plan | Not started | The control plane and lane guard require the complete ordered campaign and verify all plan, approval, and artifact bindings. |
+| SB-05 | Enforced transaction plan | In progress | The control plane and lane guard require the complete ordered campaign and verify all plan, approval, and artifact bindings. |
 | SB-06 | Qualified physical lane | Not started | USB, UART, power, and boot-selection behavior pass the combined physical acceptance tests. |
 | SB-07 | Rehearsal and failure campaign | Not started | Fake-lane and non-OTP physical rehearsals pass every required failure drill. |
 | SB-08 | Sacrificial ownership ceremony | Blocked by SB-01 through SB-07 | One approved one-shot commit completes or the target is quarantined; no retry path exists. |
@@ -307,25 +312,49 @@ strings and that no shortened campaign can produce `security_applied`.
 
 ### Deliverables
 
-- [ ] Define one canonical serialization and domain-separated digest algorithm
+- [x] Define one canonical serialization and domain-separated digest algorithm
   for the complete lane plan and for each operation.
-- [ ] Define the non-circular digest payloads explicitly. An operation digest
+- [x] Define the non-circular digest payloads explicitly. An operation digest
   covers the immutable operation body but excludes its own
   `operation_digest`. The plan digest covers the immutable plan body and
   ordered operation digests but excludes its own `plan_digest` and later
   `approval_id` and `intent_receipt` values. Approval and durable intent bind
   the recomputed plan digest in a separate execution envelope.
-- [ ] Recompute and compare plan and operation digests at the trusted boundary;
+- [x] Recompute and compare plan and operation digests at the trusted boundary;
   do not accept syntactically valid caller-supplied digests as proof of content.
-- [ ] Publish golden digest vectors and mutate every covered field in tests.
+- [x] Publish golden digest vectors and mutate every covered field in tests.
   Every mutation must change the corresponding digest or fail canonical
-  decoding; changing excluded envelope fields must instead invalidate the
-  approval or intent binding.
+  decoding. Golden material also pins JSON escaping for control characters,
+  HTML-sensitive characters, backslashes, quotes, and non-ASCII text.
+- [ ] Authenticate excluded `approval_id` and `intent_receipt` envelope fields
+  against their independent authorities. The lane rejects a request-only
+  change, but a coordinated root edit of both the plan and request remains
+  possible until the authenticated bridge exists.
+
+The implemented `v1alpha1` digest contract serializes fixed-order JSON structs,
+without whitespace. Operation material contains `sequence`, `operation`,
+`classification`, `authorization_id`, then `customer_key_hash`, `eeprom_hash`,
+`security_state`, and `power_state` within `expected_prestate` and
+`expected_poststate`, followed by `maximum_duration_nanoseconds`; it excludes
+`operation_digest`. Plan
+material contains `schema_version`, `station_id`, `lane_id`, `transaction_id`,
+`target_fingerprint`, `fence_epoch`, and the ordered operation digests freshly
+derived from their bodies; it excludes `plan_digest`, `approval_id`, and
+`intent_receipt`. The lowercase SHA-256 value is computed over the ASCII domain,
+one NUL byte, and the JSON bytes. The domains are
+`kaiba.provisioning.lane-guard.operation-digest.v1alpha1` and
+`kaiba.provisioning.lane-guard.plan-digest.v1alpha1`. The lane guard snapshots
+the caller-owned operation slice, validates this contract, and compares every
+plan and operation digest claimed by the plan before any target observation.
+The one-shot command also validates all static request bindings against that
+plan before constructing the hardware adapter; the guard repeats the comparison
+and separately checks lease sufficiency immediately before execution.
+
 - [ ] Bind the plan to the signed-release manifest digest, immutable lane-guard
   package, compiled artifact paths and digests, expected customer-key hash,
   expected EEPROM digest, expected boot-image digest, target fingerprint,
   station, lane, transaction, fence epoch, and approval expiry.
-- [ ] Require the development operation sequence to contain, in order:
+- [x] Require the development operation sequence to contain, in order:
   1. `program_customer_key_and_eeprom`;
   2. `cold_power_cycle`, including complete power removal and signed cold boot;
   3. `owned_readback`;
@@ -333,10 +362,10 @@ strings and that no shortened campaign can produce `security_applied`.
   5. `post_recovery_readback`;
   6. `test_negative_boot`, covering the complete negative-source campaign; and
   7. `test_root_integrity`.
-- [ ] Reject a missing, duplicate, reordered, or extra operation.
-- [ ] Enforce that exact campaign independently when approval is recorded, when
+- [x] Reject a missing, duplicate, reordered, or extra operation.
+- [x] Enforce that exact campaign independently when approval is recorded, when
   the lane guard loads a plan, and when the terminal state is requested.
-- [ ] Change the `security_applied` transition so it requires successful,
+- [x] Change the `security_applied` transition so it requires successful,
   authoritative evidence for the policy-defined complete sequence, not merely
   every operation in an arbitrary approved subset.
 - [ ] Implement a dedicated authenticated IPC or capability bridge that
@@ -356,17 +385,18 @@ strings and that no shortened campaign can produce `security_applied`.
 
 Root-installed plan and request JSON may be used for non-mutating development
 and failure rehearsal, but it cannot satisfy SB-05 or authorize SB-08. A root
-operator can currently invent an opaque digest, approval identifier, or
-shortened plan, which contradicts this workstream's exit criteria. The
-authenticated bridge and independently recomputed bindings are therefore
-required before a real ownership commit. Any separate experiment that accepts
-root as the approval authority is outside this plan and must not claim its
-milestones or terminal state.
+operator can construct a different self-consistent plan, recompute its content
+digests, and invent approval-envelope identifiers. The lane guard now detects
+stale or forged digest claims, but a digest proves consistency rather than
+authorization. The authenticated bridge and an independently approved digest
+are therefore required before a real ownership commit. Any separate experiment
+that accepts root as the approval authority is outside this plan and must not
+claim its milestones or terminal state.
 
 ### Exit criteria
 
-No unauthenticated UI, root-edited opaque digest, shortened operation list,
-stale approval, or stale fence can cause a device write or a successful
+No unauthenticated UI, root-edited self-consistent plan, shortened operation
+list, stale approval, or stale fence can cause a device write or a successful
 terminal classification.
 
 ## Workstream 6: qualify the complete physical lane

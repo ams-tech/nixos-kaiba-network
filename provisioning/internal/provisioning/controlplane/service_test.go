@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/campaign"
 )
 
 type testFixture struct {
@@ -35,30 +37,36 @@ func newTestFixture(t *testing.T, store Store) *testFixture {
 func TestSecurityAppliedWorkflowIsDurableAndIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.json")
 	fixture := newTestFixture(t, FileStore{Path: path})
-	transaction := fixture.createClaimBindApprove([]string{"commit_security"})
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBindApprove(operations)
 
-	intentRequest := RecordIntentRequest{
-		SchemaVersion: RecordIntentRequestSchemaVersion, IdempotencyKey: "intent-1",
-		MutationContext: contextFor(transaction), ApprovalID: transaction.Approval.ID,
-		OperationID: "operation-1", Operation: "commit_security", PlanDigest: transaction.Approval.PlanDigest,
-		InputDigest: digest("6"), PrestateDigest: digest("7"), AuditReceiptID: digest("8"),
-	}
-	transaction = fixture.intent(intentRequest)
-	if transaction.Status != StatusMutationInProgress {
-		t.Fatalf("intent status = %q", transaction.Status)
-	}
-	evidenceRequest := RecordEvidenceRequest{
-		SchemaVersion: RecordEvidenceRequestSchemaVersion, IdempotencyKey: "evidence-1",
-		MutationContext: contextFor(transaction), OperationID: "operation-1", Result: EvidenceSucceeded,
-		OutputDigest: digest("9"), ObservationDigest: digest("a"), AuditReceiptID: digest("b"),
-	}
-	transaction = fixture.evidence(evidenceRequest)
-	replayed, err := fixture.service.RecordEvidence(context.Background(), evidenceRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if replayed.ResourceVersion != transaction.ResourceVersion {
-		t.Fatalf("idempotent replay changed version: %d != %d", replayed.ResourceVersion, transaction.ResourceVersion)
+	for index, operation := range operations {
+		sequence := number(index + 1)
+		intentRequest := RecordIntentRequest{
+			SchemaVersion: RecordIntentRequestSchemaVersion, IdempotencyKey: "intent-" + sequence,
+			MutationContext: contextFor(transaction), ApprovalID: transaction.Approval.ID,
+			OperationID: "operation-" + sequence, Operation: operation, PlanDigest: transaction.Approval.PlanDigest,
+			InputDigest: digest("6"), PrestateDigest: digest("7"), AuditReceiptID: digest("8"),
+		}
+		transaction = fixture.intent(intentRequest)
+		if transaction.Status != StatusMutationInProgress {
+			t.Fatalf("intent %d status = %q", index+1, transaction.Status)
+		}
+		evidenceRequest := RecordEvidenceRequest{
+			SchemaVersion: RecordEvidenceRequestSchemaVersion, IdempotencyKey: "evidence-" + sequence,
+			MutationContext: contextFor(transaction), OperationID: "operation-" + sequence, Result: EvidenceSucceeded,
+			OutputDigest: digest("9"), ObservationDigest: digest("a"), AuditReceiptID: digest("b"),
+		}
+		transaction = fixture.evidence(evidenceRequest)
+		if index == 0 {
+			replayed, err := fixture.service.RecordEvidence(context.Background(), evidenceRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replayed.ResourceVersion != transaction.ResourceVersion {
+				t.Fatalf("idempotent replay changed version: %d != %d", replayed.ResourceVersion, transaction.ResourceVersion)
+			}
+		}
 	}
 	securityRequest := SecurityAppliedRequest{
 		SchemaVersion: SecurityAppliedRequestSchemaVersion, IdempotencyKey: "security-applied-1",
@@ -66,7 +74,7 @@ func TestSecurityAppliedWorkflowIsDurableAndIdempotent(t *testing.T) {
 		EvidenceDigest: digest("c"), AuditReceiptID: digest("d"),
 		RollbackStatus: "rollback_unimplemented", ReleaseClassification: "development_asset",
 	}
-	transaction, err = fixture.service.MarkSecurityApplied(context.Background(), securityRequest)
+	transaction, err := fixture.service.MarkSecurityApplied(context.Background(), securityRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,16 +107,242 @@ func TestSecurityAppliedWorkflowIsDurableAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestRecordApprovalRequiresCompleteDevelopmentCampaign(t *testing.T) {
+	canonical := developmentCampaignNames()
+	tests := []struct {
+		name   string
+		mutate func([]string) []string
+	}{
+		{
+			name: "truncated",
+			mutate: func(operations []string) []string {
+				return operations[:len(operations)-1]
+			},
+		},
+		{
+			name: "reordered",
+			mutate: func(operations []string) []string {
+				operations[2], operations[3] = operations[3], operations[2]
+				return operations
+			},
+		},
+		{
+			name: "duplicated",
+			mutate: func(operations []string) []string {
+				operations[3] = operations[2]
+				return operations
+			},
+		},
+		{
+			name: "inserted",
+			mutate: func(operations []string) []string {
+				return append(operations, "inserted_operation")
+			},
+		},
+		{
+			name: "renamed",
+			mutate: func(operations []string) []string {
+				operations[4] = "renamed_operation"
+				return operations
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			transaction := fixture.createClaimBind(canonical)
+			operations := append([]string(nil), canonical...)
+			request := fixture.approvalRequest(transaction, test.mutate(operations), "approval-invalid")
+			if _, err := fixture.service.RecordApproval(context.Background(), request); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("error = %v, want invalid request", err)
+			}
+			persisted, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.ResourceVersion != transaction.ResourceVersion || persisted.Status != StatusTargetBound || persisted.Approval != nil {
+				t.Fatalf("rejected approval changed transaction: %#v", persisted)
+			}
+		})
+	}
+}
+
+func TestMarkSecurityAppliedRejectsPartialCampaign(t *testing.T) {
+	fixture := newTestFixture(t, &MemoryStore{})
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBindApprove(operations)
+	transaction = fixture.recordSuccessfulOperation(transaction, operations[0], 1)
+	request := fixture.securityAppliedRequest(transaction, "security-applied-partial")
+	if _, err := fixture.service.MarkSecurityApplied(context.Background(), request); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("partial campaign finalization error = %v", err)
+	}
+	persisted, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ResourceVersion != transaction.ResourceVersion || persisted.Status != StatusCommitApproved || persisted.SecurityApplied != nil {
+		t.Fatalf("partial finalization changed transaction: %#v", persisted)
+	}
+}
+
+func TestPersistedTruncatedApprovalFailsClosed(t *testing.T) {
+	store := &MemoryStore{}
+	fixture := newTestFixture(t, store)
+	transaction := fixture.createClaimBindApprove(developmentCampaignNames())
+	data, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state persistedState
+	if err := DecodeStrict(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	stored := state.Transactions[transaction.ID]
+	stored.Approval.AllowedOperations = stored.Approval.AllowedOperations[:len(stored.Approval.AllowedOperations)-1]
+	state.Transactions[transaction.ID] = stored
+	data, err = marshalState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(data); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService(store); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("truncated persisted approval error = %v, want corrupt store", err)
+	}
+}
+
+func TestMarkSecurityAppliedRevalidatesCampaignAndEvidence(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Transaction)
+	}{
+		{
+			name: "truncated approval",
+			mutate: func(transaction *Transaction) {
+				transaction.Approval.AllowedOperations = transaction.Approval.AllowedOperations[:len(transaction.Approval.AllowedOperations)-1]
+			},
+		},
+		{
+			name: "reordered approval",
+			mutate: func(transaction *Transaction) {
+				operations := transaction.Approval.AllowedOperations
+				operations[2], operations[3] = operations[3], operations[2]
+			},
+		},
+		{
+			name: "duplicated approval",
+			mutate: func(transaction *Transaction) {
+				transaction.Approval.AllowedOperations[3] = transaction.Approval.AllowedOperations[2]
+			},
+		},
+		{
+			name: "inserted approval",
+			mutate: func(transaction *Transaction) {
+				transaction.Approval.AllowedOperations = append(transaction.Approval.AllowedOperations, "inserted_operation")
+			},
+		},
+		{
+			name: "renamed approval",
+			mutate: func(transaction *Transaction) {
+				transaction.Approval.AllowedOperations[4] = "renamed_operation"
+			},
+		},
+		{
+			name: "truncated evidence",
+			mutate: func(transaction *Transaction) {
+				transaction.Operations = transaction.Operations[:len(transaction.Operations)-1]
+			},
+		},
+		{
+			name: "reordered evidence",
+			mutate: func(transaction *Transaction) {
+				transaction.Operations[2], transaction.Operations[3] = transaction.Operations[3], transaction.Operations[2]
+			},
+		},
+		{
+			name: "duplicated evidence",
+			mutate: func(transaction *Transaction) {
+				transaction.Operations[3].Operation = transaction.Operations[2].Operation
+			},
+		},
+		{
+			name: "inserted evidence",
+			mutate: func(transaction *Transaction) {
+				transaction.Operations = append(transaction.Operations, transaction.Operations[len(transaction.Operations)-1])
+			},
+		},
+		{
+			name: "renamed evidence",
+			mutate: func(transaction *Transaction) {
+				transaction.Operations[4].Operation = "renamed_operation"
+			},
+		},
+		{
+			name: "different plan evidence",
+			mutate: func(transaction *Transaction) {
+				transaction.Operations[4].PlanDigest = digest("e")
+			},
+		},
+		{
+			name: "nonterminal evidence",
+			mutate: func(transaction *Transaction) {
+				transaction.Operations[4].Status = OperationIntentRecorded
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			transaction := fixture.createClaimBindApprove(developmentCampaignNames())
+			transaction = fixture.completeCampaign(transaction)
+			stored, err := cloneTransaction(fixture.service.state.Transactions[transaction.ID])
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&stored)
+			fixture.service.state.Transactions[transaction.ID] = stored
+
+			request := fixture.securityAppliedRequest(transaction, "security-applied-invalid")
+			if _, err := fixture.service.MarkSecurityApplied(context.Background(), request); !errors.Is(err, ErrIllegalTransition) {
+				t.Fatalf("finalization error = %v, want illegal transition", err)
+			}
+		})
+	}
+}
+
+func TestCompletedCampaignAllowsConclusiveReadbackNoOpBeforeRetry(t *testing.T) {
+	operations := developmentCampaignNames()
+	approval := &Approval{PlanDigest: digest("5"), AllowedOperations: operations}
+	records := make([]OperationRecord, 0, len(operations)+1)
+	for index, operation := range operations {
+		if index == 2 {
+			records = append(records, OperationRecord{
+				Operation: operation, PlanDigest: approval.PlanDigest, Status: OperationConfirmedNotApplied,
+			})
+		}
+		records = append(records, OperationRecord{
+			Operation: operation, PlanDigest: approval.PlanDigest, Status: OperationSucceeded,
+		})
+	}
+	if err := validateCompletedDevelopmentCampaign(records, approval); err != nil {
+		t.Fatalf("conclusive readback no-op followed by retry was rejected: %v", err)
+	}
+}
+
 func TestTransferIncrementsFenceAndInvalidatesApproval(t *testing.T) {
 	fixture := newTestFixture(t, &MemoryStore{})
-	transaction := fixture.createClaimBindApprove([]string{"commit_security"})
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBindApprove(operations)
 	oldClaim := *transaction.ActiveClaim
 	transfer := TransferClaimRequest{
 		SchemaVersion: TransferClaimRequestSchemaVersion, IdempotencyKey: "transfer-1",
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		ClaimID: oldClaim.ID, FenceEpoch: oldClaim.FenceEpoch,
 		NewStationID: "station-2", NewLaneID: "lane-2", Mode: ClaimModeMutation,
-		AllowedStages: []string{"commit_security"}, LeaseDurationSeconds: 300,
+		AllowedStages: operations, LeaseDurationSeconds: 300,
 	}
 	transaction, err := fixture.service.TransferClaim(context.Background(), transfer)
 	if err != nil {
@@ -120,14 +354,14 @@ func TestTransferIncrementsFenceAndInvalidatesApproval(t *testing.T) {
 	stale := RecordIntentRequest{
 		SchemaVersion: RecordIntentRequestSchemaVersion, IdempotencyKey: "stale-intent",
 		MutationContext: MutationContext{TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion, ClaimID: oldClaim.ID, FenceEpoch: oldClaim.FenceEpoch},
-		ApprovalID:      "approval-1", OperationID: "operation-1", Operation: "commit_security",
+		ApprovalID:      "approval-1", OperationID: "operation-1", Operation: operations[0],
 		PlanDigest: digest("5"), InputDigest: digest("6"), PrestateDigest: digest("7"), AuditReceiptID: digest("8"),
 	}
 	if _, err := fixture.service.RecordIntent(context.Background(), stale); !errors.Is(err, ErrStaleFence) && !errors.Is(err, ErrIllegalTransition) {
 		t.Fatalf("stale intent error = %v", err)
 	}
 
-	approval := fixture.approvalRequest(transaction, []string{"commit_security"}, "approval-2")
+	approval := fixture.approvalRequest(transaction, operations, "approval-2")
 	if _, err := fixture.service.RecordApproval(context.Background(), approval); !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("approval without current-epoch reidentification error = %v", err)
 	}
@@ -151,11 +385,12 @@ func TestTransferIncrementsFenceAndInvalidatesApproval(t *testing.T) {
 
 func TestExpiredInFlightClaimEntersReadOnlyReconciliationAndUnknownQuarantines(t *testing.T) {
 	fixture := newTestFixture(t, &MemoryStore{})
-	transaction := fixture.createClaimBindApprove([]string{"commit_security"})
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBindApprove(operations)
 	transaction = fixture.intent(RecordIntentRequest{
 		SchemaVersion: RecordIntentRequestSchemaVersion, IdempotencyKey: "intent-1",
 		MutationContext: contextFor(transaction), ApprovalID: transaction.Approval.ID,
-		OperationID: "operation-1", Operation: "commit_security", PlanDigest: transaction.Approval.PlanDigest,
+		OperationID: "operation-1", Operation: operations[0], PlanDigest: transaction.Approval.PlanDigest,
 		InputDigest: digest("6"), PrestateDigest: digest("7"), AuditReceiptID: digest("8"),
 	})
 	fixture.now = fixture.now.Add(10 * time.Minute)
@@ -187,7 +422,7 @@ func TestExpiredInFlightClaimEntersReadOnlyReconciliationAndUnknownQuarantines(t
 	intent := RecordIntentRequest{
 		SchemaVersion: RecordIntentRequestSchemaVersion, IdempotencyKey: "forbidden-retry",
 		MutationContext: contextFor(transaction), ApprovalID: "approval-2", OperationID: "operation-2",
-		Operation: "commit_security", PlanDigest: digest("5"), InputDigest: digest("6"),
+		Operation: operations[0], PlanDigest: digest("5"), InputDigest: digest("6"),
 		PrestateDigest: digest("7"), AuditReceiptID: digest("8"),
 	}
 	if _, err := fixture.service.RecordIntent(context.Background(), intent); err == nil {
@@ -202,7 +437,7 @@ func TestOptimisticVersionAndIdempotencyConflictsFailClosed(t *testing.T) {
 		SchemaVersion: AcquireClaimRequestSchemaVersion, IdempotencyKey: "claim-1",
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		StationID: "station-1", LaneID: "lane-1", Mode: ClaimModeMutation,
-		AllowedStages: []string{"commit_security"}, LeaseDurationSeconds: 300,
+		AllowedStages: developmentCampaignNames(), LeaseDurationSeconds: 300,
 	}
 	claimed, err := fixture.service.AcquireClaim(context.Background(), request)
 	if err != nil {
@@ -246,9 +481,18 @@ func (fixture *testFixture) create() Transaction {
 
 func (fixture *testFixture) createClaimBindApprove(operations []string) Transaction {
 	fixture.t.Helper()
+	transaction := fixture.createClaimBind(operations)
+	transaction, err := fixture.service.RecordApproval(context.Background(), fixture.approvalRequest(transaction, operations, "approval-1"))
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	return transaction
+}
+
+func (fixture *testFixture) createClaimBind(operations []string) Transaction {
+	fixture.t.Helper()
 	transaction := fixture.create()
-	var err error
-	transaction, err = fixture.service.AcquireClaim(context.Background(), AcquireClaimRequest{
+	transaction, err := fixture.service.AcquireClaim(context.Background(), AcquireClaimRequest{
 		SchemaVersion: AcquireClaimRequestSchemaVersion, IdempotencyKey: "claim-1",
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		StationID: "station-1", LaneID: "lane-1", Mode: ClaimModeMutation,
@@ -262,10 +506,6 @@ func (fixture *testFixture) createClaimBindApprove(operations []string) Transact
 		MutationContext: contextFor(transaction), TargetFingerprint: digest("3"),
 		ObservationDigest: digest("4"), CustomerKeyHash: digest("2"),
 	})
-	if err != nil {
-		fixture.t.Fatal(err)
-	}
-	transaction, err = fixture.service.RecordApproval(context.Background(), fixture.approvalRequest(transaction, operations, "approval-1"))
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
@@ -300,11 +540,54 @@ func (fixture *testFixture) evidence(request RecordEvidenceRequest) Transaction 
 	return transaction
 }
 
+func (fixture *testFixture) recordSuccessfulOperation(transaction Transaction, operation string, sequence int) Transaction {
+	fixture.t.Helper()
+	identifier := number(sequence)
+	transaction = fixture.intent(RecordIntentRequest{
+		SchemaVersion: RecordIntentRequestSchemaVersion, IdempotencyKey: "intent-" + identifier,
+		MutationContext: contextFor(transaction), ApprovalID: transaction.Approval.ID,
+		OperationID: "operation-" + identifier, Operation: operation, PlanDigest: transaction.Approval.PlanDigest,
+		InputDigest: digest("6"), PrestateDigest: digest("7"), AuditReceiptID: digest("8"),
+	})
+	return fixture.evidence(RecordEvidenceRequest{
+		SchemaVersion: RecordEvidenceRequestSchemaVersion, IdempotencyKey: "evidence-" + identifier,
+		MutationContext: contextFor(transaction), OperationID: "operation-" + identifier, Result: EvidenceSucceeded,
+		OutputDigest: digest("9"), ObservationDigest: digest("a"), AuditReceiptID: digest("b"),
+	})
+}
+
+func (fixture *testFixture) completeCampaign(transaction Transaction) Transaction {
+	fixture.t.Helper()
+	for index, operation := range developmentCampaignNames() {
+		transaction = fixture.recordSuccessfulOperation(transaction, operation, index+1)
+	}
+	return transaction
+}
+
+func (fixture *testFixture) securityAppliedRequest(transaction Transaction, idempotencyKey string) SecurityAppliedRequest {
+	fixture.t.Helper()
+	return SecurityAppliedRequest{
+		SchemaVersion: SecurityAppliedRequestSchemaVersion, IdempotencyKey: idempotencyKey,
+		MutationContext: contextFor(transaction), PlanDigest: transaction.Approval.PlanDigest,
+		EvidenceDigest: digest("c"), AuditReceiptID: digest("d"),
+		RollbackStatus: "rollback_unimplemented", ReleaseClassification: "development_asset",
+	}
+}
+
 func contextFor(transaction Transaction) MutationContext {
 	return MutationContext{
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
 	}
+}
+
+func developmentCampaignNames() []string {
+	operations := campaign.DevelopmentOperations()
+	names := make([]string, len(operations))
+	for index, operation := range operations {
+		names[index] = string(operation)
+	}
+	return names
 }
 
 func digest(character string) string {

@@ -54,7 +54,7 @@ func TestMutualTLSHandlerBindsAcquireClaimStationAndLane(t *testing.T) {
 				SchemaVersion: AcquireClaimRequestSchemaVersion, IdempotencyKey: "claim-http-1",
 				TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 				StationID: "station-1", LaneID: "lane-1", Mode: ClaimModeMutation,
-				AllowedStages: []string{"commit_security"}, LeaseDurationSeconds: 300,
+				AllowedStages: developmentCampaignNames(), LeaseDurationSeconds: 300,
 			}
 			request := controlCommandRequest(t, "acquire_claim", claim)
 			request.TLS = controlVerifiedTLSState(t, "station-1/lane-1", test.identityURIs...)
@@ -84,7 +84,7 @@ func TestMutualTLSHandlerBindsClaimScopedRequestsAndTransferHandoff(t *testing.T
 		SchemaVersion: AcquireClaimRequestSchemaVersion, IdempotencyKey: "claim-direct-1",
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		StationID: "station-1", LaneID: "lane-1", Mode: ClaimModeMutation,
-		AllowedStages: []string{"commit_security"}, LeaseDurationSeconds: 300,
+		AllowedStages: developmentCampaignNames(), LeaseDurationSeconds: 300,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestMutualTLSHandlerBindsClaimScopedRequestsAndTransferHandoff(t *testing.T
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
 		NewStationID: "station-2", NewLaneID: "lane-2", Mode: ClaimModeMutation,
-		AllowedStages: []string{"commit_security"}, LeaseDurationSeconds: 300,
+		AllowedStages: developmentCampaignNames(), LeaseDurationSeconds: 300,
 	}
 	transferRequest := controlCommandRequest(t, "transfer_claim", transfer)
 	transferRequest.TLS = controlVerifiedTLSState(t, "ignored", "spiffe://kaiba.network/station/station-1/lane/lane-1")
@@ -165,7 +165,7 @@ func TestLoopbackPlaintextControlHandlerPreservesDevelopmentMode(t *testing.T) {
 		SchemaVersion: AcquireClaimRequestSchemaVersion, IdempotencyKey: "claim-http-1",
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		StationID: "station-1", LaneID: "lane-1", Mode: ClaimModeMutation,
-		AllowedStages: []string{"commit_security"}, LeaseDurationSeconds: 300,
+		AllowedStages: developmentCampaignNames(), LeaseDurationSeconds: 300,
 	})
 	response := httptest.NewRecorder()
 

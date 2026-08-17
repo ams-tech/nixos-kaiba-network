@@ -61,6 +61,9 @@ func NewWithClock(config Config, hardware Hardware, store AttemptStore, clock Cl
 // LoadPlan binds this guard instance to one approved plan. A different plan,
 // target, transaction, or epoch requires a fresh guard after lane teardown.
 func (guard *Guard) LoadPlan(ctx context.Context, plan Plan) error {
+	// Freeze caller-owned slice storage before validation so the body that is
+	// checked is exactly the body retained after target observation.
+	plan = clonePlan(plan)
 	if err := plan.Validate(guard.config); err != nil {
 		return err
 	}
@@ -83,8 +86,7 @@ func (guard *Guard) LoadPlan(ctx context.Context, plan Plan) error {
 	if !stateAllowed(observation.State, expectedStates) {
 		return ErrPrestateMismatch
 	}
-	copy := clonePlan(plan)
-	guard.plan = &copy
+	guard.plan = &plan
 	guard.lockedOut = lockedOut
 	return nil
 }
@@ -285,19 +287,27 @@ func (guard *Guard) matchRequest(request ExecuteRequest) (Plan, OperationSpec, e
 		return Plan{}, OperationSpec{}, ErrQuarantined
 	}
 	plan := *guard.plan
+	operation, err := matchPlanRequest(plan, request)
+	if err != nil {
+		return Plan{}, OperationSpec{}, err
+	}
+	return plan, operation, nil
+}
+
+func matchPlanRequest(plan Plan, request ExecuteRequest) (OperationSpec, error) {
 	if request.SchemaVersion != ContractSchemaVersion ||
 		request.StationID != plan.StationID || request.LaneID != plan.LaneID ||
 		request.TransactionID != plan.TransactionID || request.PlanDigest != plan.PlanDigest ||
 		request.TargetFingerprint != plan.TargetFingerprint || request.FenceEpoch != plan.FenceEpoch ||
 		request.ApprovalID != plan.ApprovalID || request.IntentReceipt != plan.IntentReceipt ||
 		request.Sequence == 0 || int(request.Sequence) > len(plan.Operations) {
-		return Plan{}, OperationSpec{}, ErrPlanMismatch
+		return OperationSpec{}, ErrPlanMismatch
 	}
 	operation := plan.Operations[request.Sequence-1]
 	if request.OperationDigest != operation.OperationDigest || request.AuthorizationID != operation.AuthorizationID || request.ExpectedPrestate != operation.ExpectedPrestate {
-		return Plan{}, OperationSpec{}, ErrPlanMismatch
+		return OperationSpec{}, ErrPlanMismatch
 	}
-	return plan, operation, nil
+	return operation, nil
 }
 
 func (guard *Guard) restartStates(plan Plan) ([]DirectState, bool, error) {

@@ -3,6 +3,8 @@ package controlplane
 import (
 	"fmt"
 	"time"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/campaign"
 )
 
 func validateCreateRequest(request CreateTransactionRequest) error {
@@ -122,6 +124,9 @@ func validateRecordApprovalRequest(request RecordApprovalRequest, now time.Time)
 	}
 	if err := validateStringSet("allowed_operations", request.AllowedOperations, 1, 32); err != nil {
 		return err
+	}
+	if err := validateDevelopmentOperationNames(request.AllowedOperations); err != nil {
+		return invalid("allowed_operations: " + err.Error())
 	}
 	if !request.ExpiresAt.After(now) || request.ExpiresAt.After(now.Add(maximumApprovalLifetime)) {
 		return invalid("approval expiry must be in the future and no more than 24 hours away")
@@ -286,6 +291,14 @@ func validateStringSet(name string, values []string, minimum, maximum int) error
 		seen[value] = struct{}{}
 	}
 	return nil
+}
+
+func validateDevelopmentOperationNames(values []string) error {
+	operations := make([]campaign.Operation, len(values))
+	for index, value := range values {
+		operations[index] = campaign.Operation(value)
+	}
+	return campaign.ValidateDevelopmentOperations(operations)
 }
 
 func contains(values []string, want string) bool {

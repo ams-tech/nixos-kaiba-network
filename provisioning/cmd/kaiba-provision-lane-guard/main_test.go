@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +103,27 @@ func TestOneShotCommandUsesDurableJournalAndNoCallerArtifactPaths(t *testing.T) 
 	}
 }
 
+func TestCommandRejectsMismatchedRequestBeforeConstructingHardware(t *testing.T) {
+	restoreCommandGlobals(t)
+	effectiveUID = func() int { return 0 }
+	plan, request := commandPlanAndRequest()
+	request.OperationDigest = commandDigest("9")
+	buildHardware = func(physicalrpi5.Config) (laneguard.Hardware, error) {
+		t.Fatal("mismatched request reached hardware construction")
+		return nil, nil
+	}
+	directory := t.TempDir()
+	err := run(context.Background(), []string{
+		"--enable-mutations",
+		"--plan", writeJSON(t, directory, "plan.json", plan),
+		"--request", writeJSON(t, directory, "request.json", request),
+		"--journal", filepath.Join(directory, "journal.json"),
+	})
+	if !errors.Is(err, laneguard.ErrPlanMismatch) {
+		t.Fatalf("error = %v, want plan mismatch", err)
+	}
+}
+
 func TestStrictInputRejectsDuplicateFieldsAndSymlinks(t *testing.T) {
 	directory := t.TempDir()
 	duplicatePath := filepath.Join(directory, "duplicate.json")
@@ -126,15 +148,58 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 	poststate := laneguard.DirectState{CustomerKeyHash: strings.Repeat("1", 64), EEPROMHash: strings.Repeat("e", 64), SecurityState: "owned", PowerState: "rpiboot"}
 	plan := laneguard.Plan{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: "development-station", LaneID: "lane-1",
-		TransactionID: "transaction-1", PlanDigest: commandDigest("a"), TargetFingerprint: "target-1",
+		TransactionID: "transaction-1", TargetFingerprint: "target-1",
 		FenceEpoch: 1, ApprovalID: "approval-1", IntentReceipt: "intent-1",
-		Operations: []laneguard.OperationSpec{{
-			Sequence: 1, Operation: laneguard.OperationProgramCustomerKeyAndEEPROM,
-			Classification: laneguard.ClassIrreversible, OperationDigest: commandDigest("b"),
-			AuthorizationID: "authorization-1", ExpectedPrestate: prestate,
-			ExpectedPoststate: poststate, MaximumDuration: time.Minute,
-		}},
+		Operations: []laneguard.OperationSpec{
+			{
+				Sequence: 1, Operation: laneguard.OperationProgramCustomerKeyAndEEPROM,
+				Classification:  laneguard.ClassIrreversible,
+				AuthorizationID: "authorization-1", ExpectedPrestate: prestate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 2, Operation: laneguard.OperationColdPowerCycle,
+				Classification:  laneguard.ClassReversible,
+				AuthorizationID: "authorization-2", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 3, Operation: laneguard.OperationOwnedReadback,
+				Classification:  laneguard.ClassReadOnly,
+				AuthorizationID: "authorization-3", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 4, Operation: laneguard.OperationTestOwnedRecovery,
+				Classification:  laneguard.ClassReversible,
+				AuthorizationID: "authorization-4", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 5, Operation: laneguard.OperationPostRecoveryReadback,
+				Classification:  laneguard.ClassReadOnly,
+				AuthorizationID: "authorization-5", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 6, Operation: laneguard.OperationTestNegativeBoot,
+				Classification:  laneguard.ClassReversible,
+				AuthorizationID: "authorization-6", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 7, Operation: laneguard.OperationTestRootIntegrity,
+				Classification:  laneguard.ClassReversible,
+				AuthorizationID: "authorization-7", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+		},
 	}
+	derived, err := plan.WithDerivedDigests()
+	if err != nil {
+		panic(err)
+	}
+	plan = derived
 	request := laneguard.ExecuteRequest{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
 		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest, TargetFingerprint: plan.TargetFingerprint,
