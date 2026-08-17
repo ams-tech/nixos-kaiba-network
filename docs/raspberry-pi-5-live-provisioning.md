@@ -209,7 +209,11 @@ when the TLS listener itself is on loopback.
 foundation, not a mutation-capable orchestrator. It deliberately rejects
 `--enable-mutations`. The privileged lane guard is a separate, manually
 started one-shot service whose approved plan and request must be installed by
-root below `/var/lib/kaiba-provision-lane-guard` before each invocation.
+root below `/var/lib/kaiba-provision-lane-guard` before each invocation. It
+recomputes the domain-separated digest of every operation and of the ordered
+plan before observing a target, so stale or forged digest claims fail closed.
+That consistency check does not make a root-authored plan authoritative: root
+can also construct a different plan and derive matching digests.
 
 Do not run the HTTP station process as root or give it direct access to the
 lane-guard state directory or device nodes. Completing that bridge requires a

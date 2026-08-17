@@ -23,6 +23,7 @@ var (
 
 	ErrNoPlan                 = errors.New("no approved plan is loaded")
 	ErrPlanMismatch           = errors.New("request does not match the approved plan")
+	ErrDigestMismatch         = errors.New("derived digest does not match the approved plan")
 	ErrPlanLocked             = errors.New("the approved plan is locked")
 	ErrTargetContinuity       = errors.New("target continuity check failed")
 	ErrPrestateMismatch       = errors.New("direct target prestate does not match the approved plan")
@@ -214,9 +215,36 @@ func (plan Plan) Validate(config Config) error {
 		if index > 0 && operation.ExpectedPrestate != previousPoststate {
 			return errors.New("an operation prestate does not match the preceding postcondition")
 		}
+		derivedDigest, err := operation.Digest()
+		if err != nil {
+			return err
+		}
+		if operation.OperationDigest != derivedDigest {
+			return fmt.Errorf("%w: operation %d", ErrDigestMismatch, index+1)
+		}
 		previousPoststate = operation.ExpectedPoststate
 	}
+	derivedDigest, err := plan.Digest()
+	if err != nil {
+		return err
+	}
+	if plan.PlanDigest != derivedDigest {
+		return fmt.Errorf("%w: plan", ErrDigestMismatch)
+	}
 	return nil
+}
+
+// ValidatePlanRequest validates the plan body and then proves that the request
+// is bound to one exact operation in that plan. Callers can use this preflight
+// before constructing hardware or observing a target; Guard repeats the same
+// request comparison at execution time.
+func ValidatePlanRequest(config Config, plan Plan, request ExecuteRequest) error {
+	plan = clonePlan(plan)
+	if err := plan.Validate(config); err != nil {
+		return err
+	}
+	_, err := matchPlanRequest(plan, request)
+	return err
 }
 
 // ExecuteRequest repeats every security-relevant binding. Physical paths and

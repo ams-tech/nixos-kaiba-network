@@ -108,10 +108,13 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if err := loadStrictJSON(*requestPath, 128*1024, &request); err != nil {
 		return fmt.Errorf("load operation request: %w", err)
 	}
+	if err := laneguard.ValidatePlanRequest(laneConfig, plan, request); err != nil {
+		return fmt.Errorf("validate approved plan and operation request: %w", err)
+	}
 	initialMode := physicalrpi5.ModeFresh
 	if *mode == "reconcile" {
 		initialMode = physicalrpi5.ModeAuto
-	} else if request.ExpectedPrestate.CustomerKeyHash != zeroHash {
+	} else if plan.Operations[request.Sequence-1].ExpectedPrestate.CustomerKeyHash != zeroHash {
 		initialMode = physicalrpi5.ModeOwned
 	}
 	physicalConfig := physicalrpi5.Config{

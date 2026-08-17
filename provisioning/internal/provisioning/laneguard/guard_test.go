@@ -22,7 +22,9 @@ type fakeHardware struct {
 	observeErr    error
 	executeErr    error
 	executeCount  int
+	observeCount  int
 	after         map[Operation]DirectState
+	beforeObserve func()
 	beforeExecute func(Operation)
 	replaceTarget bool
 }
@@ -30,6 +32,10 @@ type fakeHardware struct {
 func (hardware *fakeHardware) Observe(context.Context, Config) (Observation, error) {
 	hardware.mu.Lock()
 	defer hardware.mu.Unlock()
+	hardware.observeCount++
+	if hardware.beforeObserve != nil {
+		hardware.beforeObserve()
+	}
 	return hardware.observation, hardware.observeErr
 }
 
@@ -92,6 +98,7 @@ func TestOperationResultBindingChangesWithApprovedTransaction(t *testing.T) {
 	result := OperationResult{OutputDigest: digest("f"), Detail: "same device evidence"}
 	first := bindOperationResult(plan, plan.Operations[0], result)
 	plan.TransactionID = "transaction-2"
+	plan = deriveTestPlan(plan)
 	second := bindOperationResult(plan, plan.Operations[0], result)
 	if first.OutputDigest != second.OutputDigest || first.BindingDigest == second.BindingDigest {
 		t.Fatalf("bindings do not isolate transactions: first=%#v second=%#v", first, second)
@@ -177,6 +184,7 @@ func TestReconcileKeepsIndistinguishableOperationUncertain(t *testing.T) {
 		plan.Operations[index].ExpectedPrestate = plan.Operations[1].ExpectedPoststate
 		plan.Operations[index].ExpectedPoststate = plan.Operations[1].ExpectedPoststate
 	}
+	plan = deriveTestPlan(plan)
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	hardware := &fakeHardware{
 		observation: Observation{EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate},
@@ -495,22 +503,34 @@ func testConfig() Config {
 }
 
 func testPlan() Plan {
+	return deriveTestPlan(testPlanBody())
+}
+
+func deriveTestPlan(plan Plan) Plan {
+	derived, err := plan.WithDerivedDigests()
+	if err != nil {
+		panic(err)
+	}
+	return derived
+}
+
+func testPlanBody() Plan {
 	zero := DirectState{CustomerKeyHash: strings.Repeat("0", 64), EEPROMHash: "sha256:factory", SecurityState: "fresh", PowerState: "rpiboot"}
 	owned := DirectState{CustomerKeyHash: strings.Repeat("1", 64), EEPROMHash: digest("e"), SecurityState: "owned", PowerState: "rpiboot"}
 	booted := owned
 	booted.PowerState = "signed_os"
 	return Plan{
 		SchemaVersion: ContractSchemaVersion, StationID: "station-1", LaneID: "lane-1",
-		TransactionID: "transaction-1", PlanDigest: digest("a"), TargetFingerprint: "target-1",
+		TransactionID: "transaction-1", TargetFingerprint: "target-1",
 		FenceEpoch: 7, ApprovalID: "approval-1", IntentReceipt: "receipt-1",
 		Operations: []OperationSpec{
-			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, OperationDigest: digest("b"), AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: owned, MaximumDuration: time.Minute},
-			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, OperationDigest: digest("c"), AuthorizationID: "authorization-2", ExpectedPrestate: owned, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 3, Operation: OperationOwnedReadback, Classification: ClassReadOnly, OperationDigest: digest("d"), AuthorizationID: "authorization-3", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 4, Operation: OperationTestOwnedRecovery, Classification: ClassReversible, OperationDigest: digest("e"), AuthorizationID: "authorization-4", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 5, Operation: OperationPostRecoveryReadback, Classification: ClassReadOnly, OperationDigest: digest("f"), AuthorizationID: "authorization-5", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 6, Operation: OperationTestNegativeBoot, Classification: ClassReversible, OperationDigest: digest("0"), AuthorizationID: "authorization-6", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 7, Operation: OperationTestRootIntegrity, Classification: ClassReversible, OperationDigest: digest("1"), AuthorizationID: "authorization-7", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: owned, MaximumDuration: time.Minute},
+			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, AuthorizationID: "authorization-2", ExpectedPrestate: owned, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 3, Operation: OperationOwnedReadback, Classification: ClassReadOnly, AuthorizationID: "authorization-3", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 4, Operation: OperationTestOwnedRecovery, Classification: ClassReversible, AuthorizationID: "authorization-4", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 5, Operation: OperationPostRecoveryReadback, Classification: ClassReadOnly, AuthorizationID: "authorization-5", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 6, Operation: OperationTestNegativeBoot, Classification: ClassReversible, AuthorizationID: "authorization-6", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 7, Operation: OperationTestRootIntegrity, Classification: ClassReversible, AuthorizationID: "authorization-7", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
 		},
 	}
 }
