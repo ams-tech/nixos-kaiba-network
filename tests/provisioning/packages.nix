@@ -216,7 +216,9 @@ let
           ${built.goSource}/schemas/signing-request-v1alpha1.schema.json \
           ${built.goSource}/schemas/unsigned-artifact-set-v1alpha1.schema.json \
           ${built.goSource}/schemas/yubikey-signing-policy-v1alpha1.schema.json
+        # Resolve cross-schema references from the immutable source tree.
         check-jsonschema \
+          --base-uri file://${built.goSource}/schemas/ \
           --schemafile ${built.goSource}/schemas/signing-grant-registry-v1alpha1.schema.json \
           ${signingGrantFixture}
 
