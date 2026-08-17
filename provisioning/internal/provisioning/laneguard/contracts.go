@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/campaign"
 )
 
 const ContractSchemaVersion = "provisioning.kaiba.network/lane-guard/v1alpha1"
@@ -33,21 +35,21 @@ var (
 
 // Operation is a closed allowlist. The hardware adapter maps these values to
 // build-time-pinned artifacts and implementations.
-type Operation string
+type Operation = campaign.Operation
 
 const (
-	OperationProgramCustomerKeyAndEEPROM Operation = "program_customer_key_and_eeprom"
-	OperationColdPowerCycle              Operation = "cold_power_cycle"
+	OperationProgramCustomerKeyAndEEPROM = campaign.OperationProgramCustomerKeyAndEEPROM
+	OperationColdPowerCycle              = campaign.OperationColdPowerCycle
 	// OperationVerifySignedBoot is retained as a deprecated wire identifier so
 	// old inputs fail with an explicit unsupported-operation error. It is not
 	// part of the accepted plan vocabulary; cold_power_cycle captures and
 	// validates the signed-boot evidence atomically.
 	OperationVerifySignedBoot     Operation = "verify_signed_boot"
-	OperationOwnedReadback        Operation = "owned_readback"
-	OperationTestOwnedRecovery    Operation = "test_owned_recovery"
-	OperationPostRecoveryReadback Operation = "post_recovery_readback"
-	OperationTestNegativeBoot     Operation = "test_negative_boot"
-	OperationTestRootIntegrity    Operation = "test_root_integrity"
+	OperationOwnedReadback                  = campaign.OperationOwnedReadback
+	OperationTestOwnedRecovery              = campaign.OperationTestOwnedRecovery
+	OperationPostRecoveryReadback           = campaign.OperationPostRecoveryReadback
+	OperationTestNegativeBoot               = campaign.OperationTestNegativeBoot
+	OperationTestRootIntegrity              = campaign.OperationTestRootIntegrity
 )
 
 type OperationClass string
@@ -57,16 +59,6 @@ const (
 	ClassReversible   OperationClass = "reversible"
 	ClassIrreversible OperationClass = "irreversible"
 )
-
-var operationOrder = map[Operation]int{
-	OperationProgramCustomerKeyAndEEPROM: 10,
-	OperationColdPowerCycle:              20,
-	OperationOwnedReadback:               40,
-	OperationTestOwnedRecovery:           50,
-	OperationPostRecoveryReadback:        60,
-	OperationTestNegativeBoot:            70,
-	OperationTestRootIntegrity:           80,
-}
 
 func operationClass(operation Operation) (OperationClass, bool) {
 	switch operation {
@@ -194,20 +186,22 @@ func (plan Plan) Validate(config Config) error {
 	if plan.FenceEpoch == 0 || plan.ApprovalID == "" || plan.IntentReceipt == "" {
 		return errors.New("plan requires a fence epoch, approval, and durable intent receipt")
 	}
-	if len(plan.Operations) == 0 || len(plan.Operations) > len(operationOrder) {
-		return errors.New("plan has an invalid operation count")
+	operations := make([]campaign.Operation, len(plan.Operations))
+	for index, operation := range plan.Operations {
+		if _, allowed := operationClass(operation.Operation); !allowed {
+			return errors.New("plan contains an unknown operation")
+		}
+		operations[index] = operation.Operation
 	}
-	previousRank := 0
+	if err := campaign.ValidateDevelopmentOperations(operations); err != nil {
+		return fmt.Errorf("plan operations: %w", err)
+	}
 	var previousPoststate DirectState
 	for index, operation := range plan.Operations {
 		if operation.Sequence != uint32(index+1) {
 			return errors.New("plan operation sequences must be contiguous and one-based")
 		}
-		class, allowed := operationClass(operation.Operation)
-		rank := operationOrder[operation.Operation]
-		if !allowed || rank <= previousRank {
-			return errors.New("plan contains an unknown, duplicate, or out-of-order operation")
-		}
+		class, _ := operationClass(operation.Operation)
 		if operation.Classification != class {
 			return errors.New("operation classification does not match the closed allowlist")
 		}
@@ -220,11 +214,7 @@ func (plan Plan) Validate(config Config) error {
 		if index > 0 && operation.ExpectedPrestate != previousPoststate {
 			return errors.New("an operation prestate does not match the preceding postcondition")
 		}
-		previousRank = rank
 		previousPoststate = operation.ExpectedPoststate
-	}
-	if plan.Operations[0].Operation != OperationProgramCustomerKeyAndEEPROM {
-		return errors.New("the initial secure-boot plan must begin with the ownership commit")
 	}
 	return nil
 }

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/campaign"
 )
 
 type fakeClock struct{ now time.Time }
@@ -171,6 +173,10 @@ func TestReconcileKeepsIndistinguishableOperationUncertain(t *testing.T) {
 	config := testConfig()
 	plan := testPlan()
 	plan.Operations[1].ExpectedPoststate = plan.Operations[1].ExpectedPrestate
+	for index := 2; index < len(plan.Operations); index++ {
+		plan.Operations[index].ExpectedPrestate = plan.Operations[1].ExpectedPoststate
+		plan.Operations[index].ExpectedPoststate = plan.Operations[1].ExpectedPoststate
+	}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	hardware := &fakeHardware{
 		observation: Observation{EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate},
@@ -341,6 +347,71 @@ func TestLoadPlanRequiresExactLaneAndFreshTarget(t *testing.T) {
 	}
 }
 
+func TestPlanRequiresCompleteDevelopmentCampaign(t *testing.T) {
+	canonical := testPlan()
+	if err := canonical.Validate(testConfig()); err != nil {
+		t.Fatalf("canonical plan rejected: %v", err)
+	}
+
+	tests := []struct {
+		name              string
+		mutate            func(*Plan)
+		wantCampaignError bool
+	}{
+		{
+			name: "truncated",
+			mutate: func(plan *Plan) {
+				plan.Operations = plan.Operations[:len(plan.Operations)-1]
+			},
+			wantCampaignError: true,
+		},
+		{
+			name: "reordered",
+			mutate: func(plan *Plan) {
+				plan.Operations[2], plan.Operations[3] = plan.Operations[3], plan.Operations[2]
+			},
+			wantCampaignError: true,
+		},
+		{
+			name: "duplicated",
+			mutate: func(plan *Plan) {
+				plan.Operations[3].Operation = plan.Operations[2].Operation
+			},
+			wantCampaignError: true,
+		},
+		{
+			name: "inserted",
+			mutate: func(plan *Plan) {
+				inserted := plan.Operations[len(plan.Operations)-1]
+				inserted.Sequence++
+				plan.Operations = append(plan.Operations, inserted)
+			},
+			wantCampaignError: true,
+		},
+		{
+			name: "renamed",
+			mutate: func(plan *Plan) {
+				plan.Operations[4].Operation = "renamed_operation"
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := canonical
+			plan.Operations = append([]OperationSpec(nil), canonical.Operations...)
+			test.mutate(&plan)
+			err := plan.Validate(testConfig())
+			if err == nil {
+				t.Fatal("altered campaign was accepted")
+			}
+			if test.wantCampaignError && !errors.Is(err, campaign.ErrInvalidDevelopmentCampaign) {
+				t.Fatalf("error = %v, want invalid development campaign", err)
+			}
+		})
+	}
+}
+
 func TestPlanRejectsDeprecatedStandaloneSignedBootOperation(t *testing.T) {
 	plan := testPlan()
 	plan.Operations[1] = OperationSpec{
@@ -435,6 +506,11 @@ func testPlan() Plan {
 		Operations: []OperationSpec{
 			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, OperationDigest: digest("b"), AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: owned, MaximumDuration: time.Minute},
 			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, OperationDigest: digest("c"), AuthorizationID: "authorization-2", ExpectedPrestate: owned, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 3, Operation: OperationOwnedReadback, Classification: ClassReadOnly, OperationDigest: digest("d"), AuthorizationID: "authorization-3", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 4, Operation: OperationTestOwnedRecovery, Classification: ClassReversible, OperationDigest: digest("e"), AuthorizationID: "authorization-4", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 5, Operation: OperationPostRecoveryReadback, Classification: ClassReadOnly, OperationDigest: digest("f"), AuthorizationID: "authorization-5", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 6, Operation: OperationTestNegativeBoot, Classification: ClassReversible, OperationDigest: digest("0"), AuthorizationID: "authorization-6", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 7, Operation: OperationTestRootIntegrity, Classification: ClassReversible, OperationDigest: digest("1"), AuthorizationID: "authorization-7", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
 		},
 	}
 }

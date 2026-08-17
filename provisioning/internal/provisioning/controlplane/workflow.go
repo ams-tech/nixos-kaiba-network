@@ -278,8 +278,8 @@ func (s *Service) MarkSecurityApplied(_ context.Context, request SecurityApplied
 		if err != nil {
 			return err
 		}
-		if completedApprovedOperations(transaction.Operations) != len(approval.AllowedOperations) {
-			return fmt.Errorf("%w: not all approved operations have authoritative successful evidence", ErrIllegalTransition)
+		if err := validateCompletedDevelopmentCampaign(transaction.Operations, approval); err != nil {
+			return err
 		}
 		transaction.Status = StatusSecurityApplied
 		transaction.SecurityApplied = &SecurityAppliedRecord{
@@ -314,6 +314,42 @@ func completedApprovedOperations(operations []OperationRecord) int {
 		}
 	}
 	return completed
+}
+
+func validateCompletedDevelopmentCampaign(operations []OperationRecord, approval *Approval) error {
+	if approval == nil {
+		return fmt.Errorf("%w: finalization requires a campaign approval", ErrIllegalTransition)
+	}
+	if err := validateDevelopmentOperationNames(approval.AllowedOperations); err != nil {
+		return fmt.Errorf("%w: approval is not the complete development secure-boot campaign: %v", ErrIllegalTransition, err)
+	}
+
+	next := 0
+	for index, operation := range operations {
+		if next >= len(approval.AllowedOperations) {
+			return fmt.Errorf("%w: operation record %d follows the completed campaign", ErrIllegalTransition, index+1)
+		}
+		if operation.PlanDigest != approval.PlanDigest {
+			return fmt.Errorf("%w: operation record %d has a different plan digest", ErrIllegalTransition, index+1)
+		}
+		if operation.Operation != approval.AllowedOperations[next] {
+			return fmt.Errorf("%w: operation record %d is out of campaign order", ErrIllegalTransition, index+1)
+		}
+		switch operation.Status {
+		case OperationSucceeded, OperationConfirmedApplied:
+			next++
+		case OperationConfirmedNotApplied:
+			// A conclusive no-op does not satisfy this campaign step. The
+			// existing reconciliation flow may later record a new successful
+			// intent for the same logical operation.
+		default:
+			return fmt.Errorf("%w: operation record %d lacks authoritative terminal evidence", ErrIllegalTransition, index+1)
+		}
+	}
+	if next != len(approval.AllowedOperations) {
+		return fmt.Errorf("%w: campaign completed %d of %d required operations", ErrIllegalTransition, next, len(approval.AllowedOperations))
+	}
+	return nil
 }
 
 func findOperation(operations []OperationRecord, id string) *OperationRecord {

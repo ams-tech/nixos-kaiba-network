@@ -64,12 +64,15 @@ The repository already contains useful foundations:
 - durable control and independent audit services;
 - a root-only execute-once lane guard and physical Pi adapter;
 - a loopback live-station state machine; and
-- tests for the individual contracts and simulated failure behavior.
+- tests for the individual contracts and simulated failure behavior;
+- one canonical seven-operation development campaign, enforced independently at
+  control-plane approval, lane-plan validation, persisted-state loading, and
+  `security_applied` finalization.
 
 The repository does not yet contain a complete signed-release adapter, target
 NVMe writer, mutation-capable station backend, authenticated control-to-guard
-bridge, complete-campaign enforcement, or a proven RPIBOOT-to-normal-boot lane
-transition.
+bridge, derived plan and operation digests, or a proven RPIBOOT-to-normal-boot
+lane transition.
 
 ## Safety invariants
 
@@ -105,7 +108,7 @@ These rules apply to every work item and rehearsal:
 | SB-02 | Development signing root | Not started | The development YubiKey and signing service pass the live key, PIN, touch, token-binding, and failure tests. |
 | SB-03 | Complete signed release | Not started | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
 | SB-04 | Target-media staging | Not started | The exact NVMe layout is written and cold-read back with matching digests. |
-| SB-05 | Enforced transaction plan | Not started | The control plane and lane guard require the complete ordered campaign and verify all plan, approval, and artifact bindings. |
+| SB-05 | Enforced transaction plan | In progress | The control plane and lane guard require the complete ordered campaign and verify all plan, approval, and artifact bindings. |
 | SB-06 | Qualified physical lane | Not started | USB, UART, power, and boot-selection behavior pass the combined physical acceptance tests. |
 | SB-07 | Rehearsal and failure campaign | Not started | Fake-lane and non-OTP physical rehearsals pass every required failure drill. |
 | SB-08 | Sacrificial ownership ceremony | Blocked by SB-01 through SB-07 | One approved one-shot commit completes or the target is quarantined; no retry path exists. |
@@ -325,7 +328,7 @@ strings and that no shortened campaign can produce `security_applied`.
   package, compiled artifact paths and digests, expected customer-key hash,
   expected EEPROM digest, expected boot-image digest, target fingerprint,
   station, lane, transaction, fence epoch, and approval expiry.
-- [ ] Require the development operation sequence to contain, in order:
+- [x] Require the development operation sequence to contain, in order:
   1. `program_customer_key_and_eeprom`;
   2. `cold_power_cycle`, including complete power removal and signed cold boot;
   3. `owned_readback`;
@@ -333,10 +336,10 @@ strings and that no shortened campaign can produce `security_applied`.
   5. `post_recovery_readback`;
   6. `test_negative_boot`, covering the complete negative-source campaign; and
   7. `test_root_integrity`.
-- [ ] Reject a missing, duplicate, reordered, or extra operation.
-- [ ] Enforce that exact campaign independently when approval is recorded, when
+- [x] Reject a missing, duplicate, reordered, or extra operation.
+- [x] Enforce that exact campaign independently when approval is recorded, when
   the lane guard loads a plan, and when the terminal state is requested.
-- [ ] Change the `security_applied` transition so it requires successful,
+- [x] Change the `security_applied` transition so it requires successful,
   authoritative evidence for the policy-defined complete sequence, not merely
   every operation in an arbitrary approved subset.
 - [ ] Implement a dedicated authenticated IPC or capability bridge that
@@ -356,12 +359,12 @@ strings and that no shortened campaign can produce `security_applied`.
 
 Root-installed plan and request JSON may be used for non-mutating development
 and failure rehearsal, but it cannot satisfy SB-05 or authorize SB-08. A root
-operator can currently invent an opaque digest, approval identifier, or
-shortened plan, which contradicts this workstream's exit criteria. The
-authenticated bridge and independently recomputed bindings are therefore
-required before a real ownership commit. Any separate experiment that accepts
-root as the approval authority is outside this plan and must not claim its
-milestones or terminal state.
+operator can currently invent opaque digest and approval identifiers for an
+otherwise policy-complete plan, which contradicts this workstream's exit
+criteria. The authenticated bridge and independently recomputed bindings are
+therefore required before a real ownership commit. Any separate experiment that
+accepts root as the approval authority is outside this plan and must not claim
+its milestones or terminal state.
 
 ### Exit criteria
 

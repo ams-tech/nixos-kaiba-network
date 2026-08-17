@@ -128,12 +128,50 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: "development-station", LaneID: "lane-1",
 		TransactionID: "transaction-1", PlanDigest: commandDigest("a"), TargetFingerprint: "target-1",
 		FenceEpoch: 1, ApprovalID: "approval-1", IntentReceipt: "intent-1",
-		Operations: []laneguard.OperationSpec{{
-			Sequence: 1, Operation: laneguard.OperationProgramCustomerKeyAndEEPROM,
-			Classification: laneguard.ClassIrreversible, OperationDigest: commandDigest("b"),
-			AuthorizationID: "authorization-1", ExpectedPrestate: prestate,
-			ExpectedPoststate: poststate, MaximumDuration: time.Minute,
-		}},
+		Operations: []laneguard.OperationSpec{
+			{
+				Sequence: 1, Operation: laneguard.OperationProgramCustomerKeyAndEEPROM,
+				Classification: laneguard.ClassIrreversible, OperationDigest: commandDigest("b"),
+				AuthorizationID: "authorization-1", ExpectedPrestate: prestate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 2, Operation: laneguard.OperationColdPowerCycle,
+				Classification: laneguard.ClassReversible, OperationDigest: commandDigest("c"),
+				AuthorizationID: "authorization-2", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 3, Operation: laneguard.OperationOwnedReadback,
+				Classification: laneguard.ClassReadOnly, OperationDigest: commandDigest("d"),
+				AuthorizationID: "authorization-3", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 4, Operation: laneguard.OperationTestOwnedRecovery,
+				Classification: laneguard.ClassReversible, OperationDigest: commandDigest("e"),
+				AuthorizationID: "authorization-4", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 5, Operation: laneguard.OperationPostRecoveryReadback,
+				Classification: laneguard.ClassReadOnly, OperationDigest: commandDigest("f"),
+				AuthorizationID: "authorization-5", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 6, Operation: laneguard.OperationTestNegativeBoot,
+				Classification: laneguard.ClassReversible, OperationDigest: commandDigest("0"),
+				AuthorizationID: "authorization-6", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+			{
+				Sequence: 7, Operation: laneguard.OperationTestRootIntegrity,
+				Classification: laneguard.ClassReversible, OperationDigest: commandDigest("1"),
+				AuthorizationID: "authorization-7", ExpectedPrestate: poststate,
+				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+			},
+		},
 	}
 	request := laneguard.ExecuteRequest{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
