@@ -852,6 +852,7 @@ let
     pkgs.runCommand "kaiba-provisioning-test-result-${pkgs.stdenv.hostPlatform.system}"
       {
         nativeBuildInputs = [
+          pkgs.binutils
           pkgs.check-jsonschema
           pkgs.jq
         ];
@@ -867,6 +868,91 @@ let
         test -x ${built.serviceSuite}/bin/kaiba-provision-station
         test -x ${built.serviceSuite}/bin/kaiba-provision-yubikey-wrapper
         test -x ${built.provision}/bin/kaiba-provision
+        test -x ${built.rehearsal}/bin/kaiba-provision-rehearsal
+        test '${built.rehearsal.kaibaRehearsal.authority}' = \
+          'rehearsal_only_non_authoritative'
+        test '${toString built.rehearsal.kaibaRehearsal.hardwareAccess}' = 'false'
+        test '${toString built.rehearsal.kaibaRehearsal.mutationCapable}' = 'false'
+        test '${toString built.rehearsal.kaibaRehearsal.otpCapable}' = 'false'
+        ${built.rehearsal}/bin/kaiba-provision-rehearsal \
+          --rehearsal-id nix-contract > "$TMPDIR/rehearsal.json"
+        jq -e '
+          .authority == "rehearsal_only_non_authoritative"
+          and .safety_mode == "software_only_no_otp"
+          and .outcome == "rehearsal_passed"
+          and .state.physical_mutation_performed == false
+          and .state.otp_write_count == 0
+          and (.evidence | length) == 7
+          and ([.evidence[].physical_action_attempted] | all(. == false))
+          and ([.evidence[].otp_write_attempted] | all(. == false))
+        ' "$TMPDIR/rehearsal.json" > /dev/null
+        if strings ${built.rehearsal}/bin/kaiba-provision-rehearsal \
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)'; then
+          echo 'software rehearsal binary links a physical provisioning package' >&2
+          exit 1
+        fi
+        test -x ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal
+        test '${built.integratedRehearsal.kaibaIntegratedRehearsal.authority}' = 'non_authoritative'
+        test '${built.integratedRehearsal.kaibaIntegratedRehearsal.executionMode}' = 'software_only'
+        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.directHardwareAccess}' = 'false'
+        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.mutationCapable}' = 'false'
+        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.oneTimeSettingCapable}' = 'false'
+        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.otpCapable}' = 'false'
+        ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal \
+          --state-dir "$TMPDIR/integrated-rehearsal-state" \
+          --rehearsal-id nix-integrated > "$TMPDIR/integrated-rehearsal.json"
+        jq -e '
+          .execution_mode == "software_only"
+          and .authority_class == "non_authoritative"
+          and .control_audit_exercised == true
+          and .persistence_revalidated == true
+          and .hardware_observed == false
+          and .security_enforced == false
+          and .mutation_eligible == false
+          and .authority.execute_request_count == 7
+          and .simulation.outcome == "rehearsal_passed"
+        ' "$TMPDIR/integrated-rehearsal.json" > /dev/null
+        if strings ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal \
+          | grep -E 'internal/provisioning/(physicalrpi5|rpi5)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          echo 'integrated rehearsal links a live physical provisioning capability' >&2
+          exit 1
+        fi
+        test -x ${built.unfusedCompat}/bin/kaiba-provision-unfused-compat
+        test '${built.unfusedCompat.kaibaUnfusedCompatibility.evidenceMode}' = \
+          'offline_fixture'
+        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.hardwareAccess}' = 'false'
+        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.mutationCapable}' = 'false'
+        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.otpCapable}' = 'false'
+        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.securityEnforcementClaim}' = 'false'
+        if strings ${built.unfusedCompat}/bin/kaiba-provision-unfused-compat \
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset'; then
+          echo 'unfused compatibility verifier links a physical provisioning capability' >&2
+          exit 1
+        fi
+        test -x ${built.unfusedEvidence}/bin/kaiba-provision-unfused-evidence
+        test '${built.unfusedEvidence.kaibaUnfusedEvidence.evidenceMode}' = \
+          'operator_hardware_observation'
+        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.directHardwareAccess}' = 'false'
+        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.mutationCapable}' = 'false'
+        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.oneTimeSettingCapable}' = 'false'
+        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.otpCapable}' = 'false'
+        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.securityEnforcementClaim}' = 'false'
+        if strings ${built.unfusedEvidence}/bin/kaiba-provision-unfused-evidence \
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          echo 'unfused evidence verifier links a live physical provisioning capability' >&2
+          exit 1
+        fi
+        test -x ${built.mediaStager}/bin/kaiba-provision-media-stager
+        test '${toString built.mediaStager.kaibaMediaStager.blockDeviceWriteCapable}' = 'true'
+        test '${toString built.mediaStager.kaibaMediaStager.oneTimeSettingCapable}' = 'false'
+        test '${toString built.mediaStager.kaibaMediaStager.otpCapable}' = 'false'
+        test '${toString built.mediaStager.kaibaMediaStager.eepromProgrammingCapable}' = 'false'
+        test '${toString built.mediaStager.kaibaMediaStager.fixtureModeAvailable}' = 'true'
+        if strings ${built.mediaStager}/bin/kaiba-provision-media-stager \
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset'; then
+          echo 'media stager links a Pi ownership or lane-control capability' >&2
+          exit 1
+        fi
         test -x ${physicalLaneGuardFixture}/bin/kaiba-provision-lane-guard
         ${physicalLaneGuardFixture}/bin/kaiba-provision-lane-guard \
           --print-release-binding > "$TMPDIR/physical-lane-release-binding.json"

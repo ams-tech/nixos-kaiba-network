@@ -145,6 +145,129 @@ let
     doCheck = false;
   };
 
+  # Keep the software-only rehearsal in its own derivation.  In particular,
+  # do not symlink it from serviceSuite: that output also contains the lane
+  # guard and would make the closure boundary impossible to audit.
+  rehearsal = pkgs.buildGoModule {
+    pname = "kaiba-provision-rehearsal";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-rehearsal" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaRehearsal = {
+      authority = "rehearsal_only_non_authoritative";
+      hardwareAccess = false;
+      mutationCapable = false;
+      otpCapable = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-rehearsal";
+      description = "Software-only Kaiba secure-boot campaign rehearsal";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  # This closure exercises the real durable control/audit/plan-binding code,
+  # but its only executor is the software rehearsal simulator. Keep it apart
+  # from serviceSuite so the lane guard and physical adapter are not available
+  # as sibling binaries at runtime.
+  integratedRehearsal = pkgs.buildGoModule {
+    pname = "kaiba-provision-integrated-rehearsal";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-integrated-rehearsal" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaIntegratedRehearsal = {
+      authority = "non_authoritative";
+      executionMode = "software_only";
+      directHardwareAccess = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-integrated-rehearsal";
+      description = "Durable control/audit secure-boot rehearsal with a software-only executor";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  # Offline verification of an unfused compatibility capsule is also kept in
+  # a dedicated closure.  It deliberately has no device runner or subprocess
+  # boundary; later media and lane tools consume only its verified receipts.
+  unfusedCompat = pkgs.buildGoModule {
+    pname = "kaiba-provision-unfused-compat";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-unfused-compat" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaUnfusedCompatibility = {
+      evidenceMode = "offline_fixture";
+      hardwareAccess = false;
+      mutationCapable = false;
+      otpCapable = false;
+      securityEnforcementClaim = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-unfused-compat";
+      description = "Offline verifier for unfused Raspberry Pi 5 compatibility capsules";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  # The media stager is intentionally not part of serviceSuite or any station
+  # image.  It can overwrite an explicitly approved block device, so operators
+  # must opt into this dedicated closure and its narrow CLI.  It carries no Pi
+  # OTP, EEPROM, RPIBOOT, GPIO, or lane-guard implementation.
+  mediaStager = pkgs.buildGoModule {
+    pname = "kaiba-provision-media-stager";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-media-stager" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaMediaStager = {
+      blockDeviceWriteCapable = true;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      eepromProgrammingCapable = false;
+      fixtureModeAvailable = true;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-media-stager";
+      description = "Fail-closed target-media writer with reopened digest readback";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  # This verifier consumes already captured operator and UART evidence.  It
+  # has no live serial, USB, GPIO, block-device, or subprocess boundary and
+  # cannot turn an unfused compatibility result into an enforcement claim.
+  unfusedEvidence = pkgs.buildGoModule {
+    pname = "kaiba-provision-unfused-evidence";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-unfused-evidence" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaUnfusedEvidence = {
+      evidenceMode = "operator_hardware_observation";
+      directHardwareAccess = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      securityEnforcementClaim = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-unfused-evidence";
+      description = "Offline verifier for operator-recorded unfused Pi 5 boot evidence";
+      platforms = lib.platforms.linux;
+    };
+  };
+
   servicePackage =
     {
       binary,
@@ -557,17 +680,22 @@ in
     audit
     control
     goSource
+    integratedRehearsal
     laneGuard
     liveStation
+    mediaStager
     mkDevelopmentYubiKeySigning
     mkRpi5PhysicalLaneGuard
     provision
+    rehearsal
     rpiboot
     rpibootSource
     rpi5ProbeBundle
     stationDemo
     stationGraphGenerator
     stationPages
+    unfusedCompat
+    unfusedEvidence
     serviceSuite
     signerFoundation
     signingClientFoundation

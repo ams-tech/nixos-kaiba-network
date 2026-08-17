@@ -172,7 +172,7 @@ func TestObserveUsesFixedFreshReadbackAndExactUSBPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observation.EligibleTargets != 1 || observation.RPIBootSysfsPath != lane.RPIBootSysfsPath || observation.State.SecurityState != "fresh" || observation.State.CustomerKeyHash != zeroCustomerKey {
+	if observation.EligibleTargets != 1 || observation.RPIBootSysfsPath != lane.RPIBootSysfsPath || observation.State.SecurityState != "fresh" || observation.State.CustomerKeyHash != "sha256:"+zeroCustomerKey {
 		t.Fatalf("observation = %#v", observation)
 	}
 	if len(runner.calls) != 1 || runner.calls[0].executable != "/immutable/rpiboot" || strings.Join(runner.calls[0].arguments, " ") != "-p 1-1 -d /immutable/fresh-readback" {
@@ -233,7 +233,7 @@ func TestCommitRequiresCompleteAuthoritativeMetadata(t *testing.T) {
 		t.Fatalf("commit = %#v, %v", result, err)
 	}
 	observation, err := adapter.Observe(context.Background(), lane)
-	if err != nil || observation.State.CustomerKeyHash != expectedKey || observation.State.EEPROMHash != expectedEEPROM || observation.State.SecurityState != "owned" {
+	if err != nil || observation.State.CustomerKeyHash != "sha256:"+expectedKey || observation.State.EEPROMHash != "sha256:"+expectedEEPROM || observation.State.SecurityState != "owned" {
 		t.Fatalf("owned observation = %#v, %v", observation, err)
 	}
 	if len(runner.calls) != 3 || runner.calls[2].arguments[len(runner.calls[2].arguments)-1] != "/immutable/owned-readback" {

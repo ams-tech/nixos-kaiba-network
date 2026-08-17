@@ -14,7 +14,7 @@ const (
 	StoreSchemaVersion       = "provisioning.kaiba.network/control-store/v1alpha2"
 	CommandSchemaVersion     = "provisioning.kaiba.network/control-command/v1alpha1"
 
-	CreateTransactionRequestSchemaVersion    = "provisioning.kaiba.network/create-transaction-request/v1alpha1"
+	CreateTransactionRequestSchemaVersion    = "provisioning.kaiba.network/create-transaction-request/v1alpha2"
 	AcquireClaimRequestSchemaVersion         = "provisioning.kaiba.network/acquire-claim-request/v1alpha1"
 	RenewClaimRequestSchemaVersion           = "provisioning.kaiba.network/renew-claim-request/v1alpha1"
 	TransferClaimRequestSchemaVersion        = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
@@ -167,40 +167,42 @@ type AbortRecord struct {
 }
 
 type Transaction struct {
-	SchemaVersion           string                 `json:"schema_version"`
-	ID                      string                 `json:"id"`
-	ResourceVersion         uint64                 `json:"resource_version"`
-	Status                  TransactionStatus      `json:"status"`
-	AssetID                 string                 `json:"asset_id"`
-	IntendedLogicalID       string                 `json:"intended_logical_id"`
-	ProfileID               string                 `json:"profile_id"`
-	BundleDigest            string                 `json:"bundle_digest"`
-	PolicyDigest            string                 `json:"policy_digest"`
-	ExpectedCustomerKeyHash string                 `json:"expected_customer_key_hash"`
-	TransactionDigest       string                 `json:"transaction_digest"`
-	FenceEpoch              uint64                 `json:"fence_epoch"`
-	ActiveClaim             *Claim                 `json:"active_claim,omitempty"`
-	ClaimHistory            []Claim                `json:"claim_history"`
-	Target                  *TargetBinding         `json:"target,omitempty"`
-	Approval                *Approval              `json:"approval,omitempty"`
-	Operations              []OperationRecord      `json:"operations"`
-	Quarantine              *QuarantineRecord      `json:"quarantine,omitempty"`
-	SecurityApplied         *SecurityAppliedRecord `json:"security_applied,omitempty"`
-	Abort                   *AbortRecord           `json:"abort,omitempty"`
-	CreatedAt               time.Time              `json:"created_at"`
-	UpdatedAt               time.Time              `json:"updated_at"`
+	SchemaVersion                   string                 `json:"schema_version"`
+	ID                              string                 `json:"id"`
+	ResourceVersion                 uint64                 `json:"resource_version"`
+	Status                          TransactionStatus      `json:"status"`
+	AssetID                         string                 `json:"asset_id"`
+	IntendedLogicalID               string                 `json:"intended_logical_id"`
+	ProfileID                       string                 `json:"profile_id"`
+	BundleDigest                    string                 `json:"bundle_digest"`
+	PolicyDigest                    string                 `json:"policy_digest"`
+	ExpectedPrestateCustomerKeyHash string                 `json:"expected_prestate_customer_key_hash"`
+	ExpectedCustomerKeyHash         string                 `json:"expected_customer_key_hash"`
+	TransactionDigest               string                 `json:"transaction_digest"`
+	FenceEpoch                      uint64                 `json:"fence_epoch"`
+	ActiveClaim                     *Claim                 `json:"active_claim,omitempty"`
+	ClaimHistory                    []Claim                `json:"claim_history"`
+	Target                          *TargetBinding         `json:"target,omitempty"`
+	Approval                        *Approval              `json:"approval,omitempty"`
+	Operations                      []OperationRecord      `json:"operations"`
+	Quarantine                      *QuarantineRecord      `json:"quarantine,omitempty"`
+	SecurityApplied                 *SecurityAppliedRecord `json:"security_applied,omitempty"`
+	Abort                           *AbortRecord           `json:"abort,omitempty"`
+	CreatedAt                       time.Time              `json:"created_at"`
+	UpdatedAt                       time.Time              `json:"updated_at"`
 }
 
 type CreateTransactionRequest struct {
-	SchemaVersion           string `json:"schema_version"`
-	IdempotencyKey          string `json:"idempotency_key"`
-	TransactionID           string `json:"transaction_id"`
-	AssetID                 string `json:"asset_id"`
-	IntendedLogicalID       string `json:"intended_logical_id"`
-	ProfileID               string `json:"profile_id"`
-	BundleDigest            string `json:"bundle_digest"`
-	PolicyDigest            string `json:"policy_digest"`
-	ExpectedCustomerKeyHash string `json:"expected_customer_key_hash"`
+	SchemaVersion                   string `json:"schema_version"`
+	IdempotencyKey                  string `json:"idempotency_key"`
+	TransactionID                   string `json:"transaction_id"`
+	AssetID                         string `json:"asset_id"`
+	IntendedLogicalID               string `json:"intended_logical_id"`
+	ProfileID                       string `json:"profile_id"`
+	BundleDigest                    string `json:"bundle_digest"`
+	PolicyDigest                    string `json:"policy_digest"`
+	ExpectedPrestateCustomerKeyHash string `json:"expected_prestate_customer_key_hash"`
+	ExpectedCustomerKeyHash         string `json:"expected_customer_key_hash"`
 }
 
 type AcquireClaimRequest struct {

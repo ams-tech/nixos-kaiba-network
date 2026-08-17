@@ -159,5 +159,7 @@ repository contains reviewed read-only hardware-qualification evidence,
 deterministic unsigned boot and dm-verity artifacts, an evaluated immutable
 target, and development signing, control, audit, and lane-guard foundations.
 It still lacks the complete signed release, authenticated control-to-guard
-bridge, target-media writer, live-token evidence, and physical failure campaign
-required before an irreversible ownership ceremony.
+transport, production GPT/FAT/dm-verity media verification, live-token
+evidence, and physical failure campaign required before an irreversible
+ownership ceremony. An isolated fixed-extent media stager and a durable
+software-only plan rehearsal are available as non-ceremony prototypes.

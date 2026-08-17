@@ -37,6 +37,7 @@ func validateTransaction(transaction Transaction, fenceEpochs map[string]uint64)
 		return corrupt("invalid transaction version or timestamps")
 	}
 	if !validDigest(transaction.BundleDigest) || !validDigest(transaction.PolicyDigest) ||
+		!validDigest(transaction.ExpectedPrestateCustomerKeyHash) ||
 		!validDigest(transaction.ExpectedCustomerKeyHash) || !validDigest(transaction.TransactionDigest) {
 		return corrupt("invalid transaction digest")
 	}
@@ -65,7 +66,7 @@ func validateTransaction(transaction Transaction, fenceEpochs map[string]uint64)
 	}
 	if transaction.Target != nil {
 		if !validDigest(transaction.Target.Fingerprint) || !validDigest(transaction.Target.ObservationDigest) ||
-			transaction.Target.CustomerKeyHash != transaction.ExpectedCustomerKeyHash || transaction.Target.BoundAt.IsZero() ||
+			transaction.Target.CustomerKeyHash != transaction.ExpectedPrestateCustomerKeyHash || transaction.Target.BoundAt.IsZero() ||
 			transaction.Target.FenceEpoch == 0 || transaction.Target.FenceEpoch > transaction.FenceEpoch {
 			return corrupt("invalid target binding")
 		}

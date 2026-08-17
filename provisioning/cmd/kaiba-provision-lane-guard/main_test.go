@@ -206,8 +206,8 @@ func TestStrictInputRejectsDuplicateFieldsAndSymlinks(t *testing.T) {
 }
 
 func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
-	prestate := laneguard.DirectState{CustomerKeyHash: zeroHash, EEPROMHash: strings.Repeat("f", 64), SecurityState: "fresh", PowerState: "rpiboot"}
-	poststate := laneguard.DirectState{CustomerKeyHash: strings.Repeat("1", 64), EEPROMHash: strings.Repeat("e", 64), SecurityState: "owned", PowerState: "rpiboot"}
+	prestate := laneguard.DirectState{CustomerKeyHash: zeroHash, EEPROMHash: commandDigest("f"), SecurityState: "fresh", PowerState: "powered_off"}
+	poststate := laneguard.DirectState{CustomerKeyHash: commandDigest("1"), EEPROMHash: commandDigest("e"), SecurityState: "owned", PowerState: "powered_off"}
 	plan := laneguard.Plan{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: "development-station", LaneID: "lane-1",
 		TransactionID: "transaction-1", Release: commandReleaseBinding(), TargetFingerprint: "target-1",

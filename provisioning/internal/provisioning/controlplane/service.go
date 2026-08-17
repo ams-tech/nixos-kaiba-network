@@ -138,8 +138,9 @@ func (s *Service) CreateTransaction(_ context.Context, request CreateTransaction
 		ResourceVersion: 1, Status: StatusCreated, AssetID: request.AssetID,
 		IntendedLogicalID: request.IntendedLogicalID, ProfileID: request.ProfileID,
 		BundleDigest: request.BundleDigest, PolicyDigest: request.PolicyDigest,
-		ExpectedCustomerKeyHash: request.ExpectedCustomerKeyHash,
-		ClaimHistory:            []Claim{}, Operations: []OperationRecord{}, CreatedAt: now, UpdatedAt: now,
+		ExpectedPrestateCustomerKeyHash: request.ExpectedPrestateCustomerKeyHash,
+		ExpectedCustomerKeyHash:         request.ExpectedCustomerKeyHash,
+		ClaimHistory:                    []Claim{}, Operations: []OperationRecord{}, CreatedAt: now, UpdatedAt: now,
 	}
 	transaction.TransactionDigest, err = transactionDigest(transaction)
 	if err != nil {
@@ -418,13 +419,14 @@ func randomID(prefix string) (string, error) {
 }
 
 type transactionDigestMaterial struct {
-	ID                      string `json:"id"`
-	AssetID                 string `json:"asset_id"`
-	IntendedLogicalID       string `json:"intended_logical_id"`
-	ProfileID               string `json:"profile_id"`
-	BundleDigest            string `json:"bundle_digest"`
-	PolicyDigest            string `json:"policy_digest"`
-	ExpectedCustomerKeyHash string `json:"expected_customer_key_hash"`
+	ID                              string `json:"id"`
+	AssetID                         string `json:"asset_id"`
+	IntendedLogicalID               string `json:"intended_logical_id"`
+	ProfileID                       string `json:"profile_id"`
+	BundleDigest                    string `json:"bundle_digest"`
+	PolicyDigest                    string `json:"policy_digest"`
+	ExpectedPrestateCustomerKeyHash string `json:"expected_prestate_customer_key_hash"`
+	ExpectedCustomerKeyHash         string `json:"expected_customer_key_hash"`
 }
 
 func transactionDigest(transaction Transaction) (string, error) {
@@ -432,7 +434,8 @@ func transactionDigest(transaction Transaction) (string, error) {
 		ID: transaction.ID, AssetID: transaction.AssetID,
 		IntendedLogicalID: transaction.IntendedLogicalID, ProfileID: transaction.ProfileID,
 		BundleDigest: transaction.BundleDigest, PolicyDigest: transaction.PolicyDigest,
-		ExpectedCustomerKeyHash: transaction.ExpectedCustomerKeyHash,
+		ExpectedPrestateCustomerKeyHash: transaction.ExpectedPrestateCustomerKeyHash,
+		ExpectedCustomerKeyHash:         transaction.ExpectedCustomerKeyHash,
 	})
 }
 

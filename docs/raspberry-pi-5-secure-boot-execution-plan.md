@@ -74,12 +74,16 @@ The repository already contains useful foundations:
   and lane plan, while the plan separately binds the approval expiry; and
 - a physical guard build that embeds the declared release binding, can report
   it for build-time verification, and rejects a mismatch before constructing
-  the hardware adapter.
+  the hardware adapter;
+- an authority-checking plan compiler and durable integrated software
+  rehearsal; and
+- an isolated fixed-extent media-staging prototype, signed capsule verifier,
+  and passive unfused evidence verifier.
 
-The repository does not yet contain a complete signed-release adapter, target
-NVMe writer, mutation-capable station backend, authenticated control-to-guard
-bridge, authoritative control-side plan construction, or a proven
-RPIBOOT-to-normal-boot lane transition.
+The repository does not yet contain a complete signed-release adapter,
+production-complete GPT/FAT/dm-verity NVMe writer and verifier,
+mutation-capable station backend, authenticated control-to-guard transport, or
+a proven RPIBOOT-to-normal-boot lane transition.
 
 ## Safety invariants
 
@@ -113,14 +117,30 @@ These rules apply to every work item and rehearsal:
 | SB-00 | Read-only hardware qualification | Complete | Reviewed record is checked in and bound to the frozen profile and probe inputs. |
 | SB-01 | Baseline and documentation closeout | Not started | The profile decision, deferred target checks, documentation, and current-revision CI evidence are reviewed. |
 | SB-02 | Development signing root | Not started | The development YubiKey and signing service pass the live key, PIN, touch, token-binding, and failure tests. |
-| SB-03 | Complete signed release | Not started | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
-| SB-04 | Target-media staging | Not started | The exact NVMe layout is written and cold-read back with matching digests. |
+| SB-03 | Complete signed release | In progress | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
+| SB-04 | Target-media staging | In progress | The exact NVMe layout is written and cold-read back with matching digests. |
 | SB-05 | Enforced transaction plan | In progress | The control plane and lane guard require the complete ordered campaign and verify all plan, approval, and artifact bindings. |
 | SB-06 | Qualified physical lane | Not started | USB, UART, power, and boot-selection behavior pass the combined physical acceptance tests. |
-| SB-07 | Rehearsal and failure campaign | Not started | Fake-lane and non-OTP physical rehearsals pass every required failure drill. |
+| SB-07 | Rehearsal and failure campaign | In progress | Fake-lane and non-OTP physical rehearsals pass every required failure drill. |
 | SB-08 | Sacrificial ownership ceremony | Blocked by SB-01 through SB-07 | One approved one-shot commit completes or the target is quarantined; no retry path exists. |
 | SB-09 | Owned-state acceptance | Blocked by SB-08 | All positive, recovery, negative, root-integrity, and evidence-reconciliation gates pass and the board stops at `security_applied`. |
 | SB-10 | Production readiness | Explicitly deferred | Every production gate in the final section is implemented and separately accepted. |
+
+### Non-fusing prototype checkpoint
+
+The in-progress statuses above reflect implementation, not milestone exit. The
+repository now has a signed four-role capsule verifier, a fixed-extent media
+stager with a regular-file fixture mode, passive unfused hardware-evidence
+verification, and a runnable software-only orchestrator. The orchestrator uses
+the real durable control and audit services, derives the closed seven-operation
+plan, authenticates both approval and initial-intent audit records, reopens and
+rebinds persisted state, and executes only the non-authoritative simulator.
+
+These pieces are packaged in separate capability closures and are described in
+the [non-fusing prototype runbook](non-fusing-secure-boot-prototype.md). They do
+not complete the full release role set, GPT/FAT and dm-verity staging proof,
+authenticated service transport, qualified physical lane, or required failure
+matrix, and they cannot authorize SB-08.
 
 ## Workstream 1: close the qualified baseline
 
@@ -279,7 +299,7 @@ Two independent verification paths agree on every digest and signature.
 - [ ] Select the whole NVMe only through an approved `/dev/disk/by-id` path and
   reconcile its serial, model, capacity, existing partition table, and
   transaction binding immediately before staging.
-- [ ] Implement a staging tool or frozen procedure that refuses ambiguous,
+- [x] Implement a staging tool or frozen procedure that refuses ambiguous,
   mounted, unexpected, or system block devices and never accepts a partition
   selector where the whole device is required, or the reverse.
 - [ ] Freeze the exact layout: a boot FAT containing only the approved
@@ -403,6 +423,15 @@ closed if their lifetime exceeds 24 hours.
 - [ ] Add combined tests that exercise control, audit, bridge, lane guard,
   physical-adapter state, restart, and reconciliation together rather than
   substituting fake hardware at every boundary.
+
+The new `plancompiler` closes the in-process conversion boundary: it derives
+the exact operation classes, state chain, operation digests, and plan digest;
+requires the all-zero fresh prestate and release-bound owned powered-off
+poststate; and validates the persisted transaction, active claim, target,
+approval, approval audit record, initial intent, and intent audit record before
+emitting request envelopes. The integrated software rehearsal covers its
+durable restart path. It is not yet the authenticated IPC transport in the
+unchecked items above and is not wired to physical execution.
 
 ### Manual boundary limitation
 

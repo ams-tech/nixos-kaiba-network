@@ -218,7 +218,7 @@ func canonicalExpectedDigest(value string) string {
 	return "sha256:" + value
 }
 
-const zeroHash = "0000000000000000000000000000000000000000000000000000000000000000"
+const zeroHash = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 func loadStrictJSON(path string, maximum int64, target any) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {

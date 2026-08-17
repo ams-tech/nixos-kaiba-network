@@ -468,7 +468,7 @@ func directState(observation rpi5.Observation, powerState string) laneguard.Dire
 		securityState = "fresh"
 	}
 	return laneguard.DirectState{
-		CustomerKeyHash: observation.CustomerKeyHash, EEPROMHash: observation.EEPROMHash,
+		CustomerKeyHash: "sha256:" + observation.CustomerKeyHash, EEPROMHash: "sha256:" + observation.EEPROMHash,
 		SecurityState: securityState, PowerState: powerState,
 	}
 }

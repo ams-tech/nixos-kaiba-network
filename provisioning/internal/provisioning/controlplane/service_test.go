@@ -113,6 +113,41 @@ func TestSecurityAppliedWorkflowIsDurableAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestFreshTargetPrestateIsDistinctFromApprovedPoststate(t *testing.T) {
+	fixture := newTestFixture(t, &MemoryStore{})
+	transaction := fixture.create()
+	if transaction.ExpectedPrestateCustomerKeyHash == transaction.ExpectedCustomerKeyHash {
+		t.Fatal("test transaction does not distinguish fresh and post-commit customer keys")
+	}
+	transaction, err := fixture.service.AcquireClaim(context.Background(), AcquireClaimRequest{
+		SchemaVersion: AcquireClaimRequestSchemaVersion, IdempotencyKey: "claim-distinct-key-state",
+		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+		StationID: "station-1", LaneID: "lane-1", Mode: ClaimModeMutation,
+		AllowedStages: developmentCampaignNames(), LeaseDurationSeconds: 300,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := BindTargetRequest{
+		SchemaVersion: BindTargetRequestSchemaVersion, IdempotencyKey: "bind-poststate-as-fresh",
+		MutationContext: contextFor(transaction), TargetFingerprint: digest("3"),
+		ObservationDigest: digest("4"), CustomerKeyHash: transaction.ExpectedCustomerKeyHash,
+	}
+	if _, err := fixture.service.BindTarget(context.Background(), wrong); !errors.Is(err, ErrConflict) {
+		t.Fatalf("post-commit key accepted as fresh prestate: %v", err)
+	}
+	right := wrong
+	right.IdempotencyKey = "bind-actual-fresh-prestate"
+	right.CustomerKeyHash = transaction.ExpectedPrestateCustomerKeyHash
+	bound, err := fixture.service.BindTarget(context.Background(), right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.Target == nil || bound.Target.CustomerKeyHash != transaction.ExpectedPrestateCustomerKeyHash {
+		t.Fatalf("fresh target binding = %#v", bound.Target)
+	}
+}
+
 func TestRecordApprovalRequiresCompleteDevelopmentCampaign(t *testing.T) {
 	canonical := developmentCampaignNames()
 	tests := []struct {
@@ -383,7 +418,7 @@ func TestReapprovalAfterClaimTransferCannotRelabelStartedPlan(t *testing.T) {
 			transaction, err = fixture.service.BindTarget(context.Background(), BindTargetRequest{
 				SchemaVersion: BindTargetRequestSchemaVersion, IdempotencyKey: "rebind-started-plan",
 				MutationContext: contextFor(transaction), TargetFingerprint: transaction.Target.Fingerprint,
-				ObservationDigest: digest("f"), CustomerKeyHash: transaction.ExpectedCustomerKeyHash,
+				ObservationDigest: digest("f"), CustomerKeyHash: transaction.ExpectedPrestateCustomerKeyHash,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -721,7 +756,7 @@ func TestTransferIncrementsFenceAndInvalidatesApproval(t *testing.T) {
 	rebind := BindTargetRequest{
 		SchemaVersion: BindTargetRequestSchemaVersion, IdempotencyKey: "rebind-2",
 		MutationContext: contextFor(transaction), TargetFingerprint: digest("3"),
-		ObservationDigest: digest("e"), CustomerKeyHash: digest("2"),
+		ObservationDigest: digest("e"), CustomerKeyHash: transaction.ExpectedPrestateCustomerKeyHash,
 	}
 	transaction, err = fixture.service.BindTarget(context.Background(), rebind)
 	if err != nil {
@@ -828,7 +863,8 @@ func (fixture *testFixture) create() Transaction {
 	transaction, err := fixture.service.CreateTransaction(context.Background(), CreateTransactionRequest{
 		SchemaVersion: CreateTransactionRequestSchemaVersion, IdempotencyKey: "create-1",
 		TransactionID: "transaction-1", AssetID: "asset-1", IntendedLogicalID: "device-1",
-		ProfileID: "rpi5-v1", BundleDigest: digest("0"), PolicyDigest: digest("1"), ExpectedCustomerKeyHash: digest("2"),
+		ProfileID: "rpi5-v1", BundleDigest: digest("0"), PolicyDigest: digest("1"),
+		ExpectedPrestateCustomerKeyHash: digest("f"), ExpectedCustomerKeyHash: digest("2"),
 	})
 	if err != nil {
 		fixture.t.Fatal(err)
@@ -861,7 +897,7 @@ func (fixture *testFixture) createClaimBind(operations []string) Transaction {
 	transaction, err = fixture.service.BindTarget(context.Background(), BindTargetRequest{
 		SchemaVersion: BindTargetRequestSchemaVersion, IdempotencyKey: "bind-1",
 		MutationContext: contextFor(transaction), TargetFingerprint: digest("3"),
-		ObservationDigest: digest("4"), CustomerKeyHash: digest("2"),
+		ObservationDigest: digest("4"), CustomerKeyHash: transaction.ExpectedPrestateCustomerKeyHash,
 	})
 	if err != nil {
 		fixture.t.Fatal(err)

@@ -22,8 +22,8 @@ func (s *Service) BindTarget(_ context.Context, request BindTargetRequest) (Tran
 		default:
 			return fmt.Errorf("%w: cannot bind a target in status %q", ErrIllegalTransition, transaction.Status)
 		}
-		if request.CustomerKeyHash != transaction.ExpectedCustomerKeyHash {
-			return fmt.Errorf("%w: observed customer key hash differs from the transaction", ErrConflict)
+		if request.CustomerKeyHash != transaction.ExpectedPrestateCustomerKeyHash {
+			return fmt.Errorf("%w: observed customer key hash differs from the approved transaction prestate", ErrConflict)
 		}
 		if transaction.Target != nil && (transaction.Target.Fingerprint != request.TargetFingerprint || transaction.Target.CustomerKeyHash != request.CustomerKeyHash) {
 			return fmt.Errorf("%w: target replacement or changed customer key hash", ErrConflict)

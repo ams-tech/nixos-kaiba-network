@@ -263,14 +263,19 @@
           inherit (provisioning.packages.${system})
             kaiba-provision-audit
             kaiba-provision-control
+            kaiba-provision-integrated-rehearsal
             kaiba-provision-lane-guard
+            kaiba-provision-media-stager
             kaiba-provision
+            kaiba-provision-rehearsal
             kaiba-provision-signer-foundation
             kaiba-provision-signing-client-foundation
             kaiba-provision-signing-gate-foundation
             kaiba-provision-station
             kaiba-provision-station-demo
             kaiba-provision-station-pages
+            kaiba-provision-unfused-compat
+            kaiba-provision-unfused-evidence
             provisioning-test-result
             kaiba-provision-yubikey-wrapper-foundation
             ;

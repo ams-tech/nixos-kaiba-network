@@ -238,8 +238,13 @@ The provisioning leaf provides:
 - `kaiba-provision-audit`
 - `kaiba-provision-control`
 - `kaiba-provision-lane-guard`
+- `kaiba-provision-integrated-rehearsal`
+- `kaiba-provision-media-stager`
+- `kaiba-provision-rehearsal`
 - `kaiba-provision-station`
 - `kaiba-provision-station-demo`
+- `kaiba-provision-unfused-compat`
+- `kaiba-provision-unfused-evidence`
 - fail-closed signer, signing-client, signing-gate, and YubiKey-wrapper
   foundations, configured only through the Nix library factories
 
@@ -263,6 +268,10 @@ and cannot reach `enrollment_ready`. The
 [secure-boot execution plan](docs/raspberry-pi-5-secure-boot-execution-plan.md)
 tracks the remaining release, media-staging, enforcement, physical-lane,
 rehearsal, and ceremony gates for one sacrificial development board.
+The [non-fusing secure-boot prototype](docs/non-fusing-secure-boot-prototype.md)
+is the runnable software-first path through durable control, audit, plan
+binding, restart validation, signed capsule checks, media fixtures, and
+optional unfused evidence without authorizing a one-time setting change.
 
 `kaiba-provision-station-demo` is an unprivileged, loopback-only interface
 prototype for an HDMI display and USB touchscreen. It renders deterministic

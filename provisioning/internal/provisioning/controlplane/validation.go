@@ -21,7 +21,8 @@ func validateCreateRequest(request CreateTransactionRequest) error {
 	}
 	for name, value := range map[string]string{
 		"bundle_digest": request.BundleDigest, "policy_digest": request.PolicyDigest,
-		"expected_customer_key_hash": request.ExpectedCustomerKeyHash,
+		"expected_prestate_customer_key_hash": request.ExpectedPrestateCustomerKeyHash,
+		"expected_customer_key_hash":          request.ExpectedCustomerKeyHash,
 	} {
 		if !validDigest(value) {
 			return invalid(name + " must be a lowercase sha256 digest")
