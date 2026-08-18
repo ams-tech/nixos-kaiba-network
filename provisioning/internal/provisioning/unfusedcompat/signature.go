@@ -1,7 +1,6 @@
 package unfusedcompat
 
 import (
-	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -14,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rpi5bootsig"
 )
 
 const (
@@ -21,6 +22,7 @@ const (
 	TrustedSignerPolicySchemaVersion = "provisioning.kaiba.network/rpi5-unfused-trusted-signer-policy/v1alpha1"
 	SignatureAlgorithmRSA2048SHA256  = "rsa2048-sha256"
 	maximumPublicKeyBytes            = 16 * 1024
+	maximumBootSignatureBytes        = 1024
 )
 
 // SignatureReceipt proves only offline cryptographic verification. It does
@@ -93,9 +95,9 @@ func (policy TrustedSignerPolicy) digest() (string, error) {
 }
 
 // VerifyDetachedSignature verifies the exact manifest-bound boot image and
-// detached signature with an RSA-2048 public key authorized by policy. It opens
-// only regular files with O_NOFOLLOW and performs no subprocess or device
-// access.
+// canonical Raspberry Pi boot signature document with an RSA-2048 public key
+// authorized by policy. It opens only regular files with O_NOFOLLOW and
+// performs no subprocess or device access.
 func VerifyDetachedSignature(manifestPath, capsuleRoot, publicKeyPath string, policy TrustedSignerPolicy) (SignatureReceipt, error) {
 	policyDigest, err := policy.digest()
 	if err != nil {
@@ -129,15 +131,22 @@ func VerifyDetachedSignature(manifestPath, capsuleRoot, publicKeyPath string, po
 		return SignatureReceipt{}, errors.New("boot image digest changed after capsule verification")
 	}
 	signaturePath := filepath.Join(capsuleRoot, filepath.FromSlash(manifest.BootSignaturePath))
-	signature, err := readRegularFile(signaturePath, int64(publicKey.Size()))
+	signatureDocumentText, err := readRegularFile(signaturePath, maximumBootSignatureBytes)
 	if err != nil {
 		return SignatureReceipt{}, fmt.Errorf("read boot signature: %w", err)
 	}
-	hashBytes, err := hex.DecodeString(bootDigest[len("sha256:"):])
-	if err != nil || len(hashBytes) != sha256.Size {
-		return SignatureReceipt{}, errors.New("manifest boot image digest is invalid")
+	signatureDocumentDigest := sha256.Sum256(signatureDocumentText)
+	if "sha256:"+hex.EncodeToString(signatureDocumentDigest[:]) != roles.bootSignature.SHA256 {
+		return SignatureReceipt{}, errors.New("boot signature digest changed after capsule verification")
 	}
-	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hashBytes, signature); err != nil {
+	signatureDocument, err := rpi5bootsig.Parse(signatureDocumentText)
+	if err != nil {
+		return SignatureReceipt{}, fmt.Errorf("parse boot signature: %w", err)
+	}
+	if string(signatureDocument.ImageDigest) != bootDigest {
+		return SignatureReceipt{}, errors.New("boot signature image digest does not match the manifest boot image")
+	}
+	if err := signatureDocument.Verify(publicKey); err != nil {
 		return SignatureReceipt{}, errors.New("boot signature does not verify against the reviewed public key")
 	}
 

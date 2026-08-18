@@ -241,17 +241,22 @@ func TestOfflineFixtureMustBindCompleteCompatibilitySequence(t *testing.T) {
 	}
 }
 
-func TestPackageHasNoRepositoryDependencies(t *testing.T) {
+func TestPackageHasNoUnsafeRepositoryDependencies(t *testing.T) {
 	command := exec.Command("go", "list", "-f", `{{join .Imports "\n"}}`, ".")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go list: %v\n%s", err, output)
 	}
-	if strings.Contains(string(output), "github.com/ams-tech/nixos-kaiba-network/provisioning/") {
-		t.Fatalf("unfused compatibility package gained a repository dependency:\n%s", output)
+	const allowedBootSignatureDependency = "github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rpi5bootsig"
+	for _, imported := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if strings.HasPrefix(imported, "github.com/ams-tech/nixos-kaiba-network/provisioning/") && imported != allowedBootSignatureDependency {
+			t.Fatalf("unfused compatibility package gained repository dependency %q:\n%s", imported, output)
+		}
 	}
-	if strings.Contains(string(output), "os/exec") || strings.Contains(string(output), "net") {
-		t.Fatalf("unfused compatibility package gained an execution or network dependency:\n%s", output)
+	for _, imported := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if imported == "os/exec" || imported == "net" || strings.HasPrefix(imported, "net/") {
+			t.Fatalf("unfused compatibility package gained execution or network dependency %q:\n%s", imported, output)
+		}
 	}
 }
 

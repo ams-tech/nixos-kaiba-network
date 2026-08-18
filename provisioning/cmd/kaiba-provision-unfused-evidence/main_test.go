@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rpi5bootsig"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/unfusedcompat"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/unfusedevidence"
 )
@@ -146,6 +148,14 @@ func commandEvidence(t *testing.T) commandInputs {
 	bootImage := []byte("command immutable boot capsule")
 	bootHash := sha256.Sum256(bootImage)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, bootHash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	signatureDocument, err := rpi5bootsig.New(bundle.Digest(commandDigest(bootImage)), 1_725_000_123, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err = signatureDocument.MarshalText()
 	if err != nil {
 		t.Fatal(err)
 	}
