@@ -108,11 +108,12 @@ trusted only after the outer image is signed. The manifest always declares:
 - development JTAG and EEPROM write protection left unlocked; and
 - an unsigned signing status.
 
-No signing key, PIN, PKCS#11 module state, or signature is allowed in a Nix
-derivation. On the control host, the strict bundle model and root-managed
-signing-grant registry bind artifact roles and digests to an approval before
-passing bytes to the signer. The signer supports exactly Raspberry Pi's HSM
-wrapper operation:
+No signing key, PIN, PKCS#11 module state, or private-key operation is allowed
+in a Nix derivation. Public signatures may be imported only as fixed inputs to
+an offline-verification derivation. On the control host, the strict bundle
+model and root-managed signing-grant registry bind artifact roles and digests
+to an approval before passing bytes to the signer. The signer supports exactly
+Raspberry Pi's HSM wrapper operation:
 
 ```console
 kaiba-provision-signer -a rsa2048-sha256 INPUT_FILE
@@ -126,13 +127,19 @@ must contain, and offline verification must cover, the EEPROM image, normal
 `boot.img`/`boot.sig`, fresh-board commit bundle, and owned-device recovery
 bundle before a transaction can receive commit approval.
 
-The repository does not yet provide the release adapter that constructs that
-complete signed bundle. In particular, it does not invoke the pinned Raspberry
-Pi tooling to produce `boot.sig`, the signed EEPROM image, the fresh commit
-bundle, or the owned recovery bundle; nor does it resolve every manifest entry
-to artifact bytes. Those artifacts must be produced and independently checked
-by a reviewed control-host release procedure before their immutable Nix-store
-paths are supplied to `lib.mkRpi5PhysicalLaneGuard`.
+The repository now provides the narrow normal-boot signing slice: a pure Nix
+plan, a linker-fixed runtime adapter that obtains an approval-gated signature,
+strict canonical Raspberry Pi `boot.sig` encoding, and a pure offline finalizer
+that emits the unchanged `boot.img`, `boot.sig`, reviewed `public.pem`, and
+public records. See the
+[signed-boot workflow](raspberry-pi-5-signed-boot-workflow.md).
+
+It does not yet construct the complete signed release. In particular, the
+signed EEPROM image, fresh commit bundle, owned recovery bundle, complete role
+manifest, and resolution of every manifest entry to immutable bytes remain
+unfinished. Those artifacts must be produced and independently checked by a
+reviewed control-host release procedure before their immutable Nix-store paths
+are supplied to `lib.mkRpi5PhysicalLaneGuard`.
 
 Likewise, the artifact builder produces the three images but no current
 component writes `boot.img`/`boot.sig`, `root-data.img`, or `root-hash.img` to
@@ -148,10 +155,18 @@ The public construction boundaries are:
   `firmwareTree`, `rootImage`, and `unsignedArtifacts`;
 - provisioning-leaf `lib.mkDevelopmentYubiKeySigning`, which requires the
   reviewed public key, its SPKI fingerprint, its expected Raspberry Pi
-  customer-key hash, token serial, signer/cohort IDs, and an external
-  root-managed grant-registry path. Its build runs the pinned Raspberry Pi key
-  converter and refuses to produce the signer package unless the SHA-256 of
-  the resulting 264-byte key representation matches that expected hash;
+  customer-key hash, signer-policy digest, token serial, signer/cohort IDs, and
+  an external root-managed grant-registry path. Its build runs the pinned
+  Raspberry Pi key converter and refuses to produce the signer package unless
+  the SHA-256 of the resulting 264-byte key representation matches that
+  expected hash. It also exposes the configured `kaiba-provision-sign-boot`
+  runtime adapter;
+- provisioning-leaf `lib.mkRpi5BootSigningPlan`, which binds one immutable
+  `boot.img` to the reviewed public key, signer policy, plan ID, and release
+  timestamp without any signing authority;
+- provisioning-leaf `lib.mkRpi5VerifiedSignedBoot`, which consumes a public
+  runtime signing result, verifies every binding and the Raspberry Pi
+  signature, and emits a self-contained public bundle without key access;
 - provisioning-leaf `lib.mkRpi5PhysicalLaneGuard`, which requires immutable
   store paths for every recovery/test bundle plus linker-fixed signed-release,
   guard-package, compiled-artifact-set, customer-key, EEPROM, and boot-image

@@ -76,7 +76,10 @@ The repository already contains useful foundations:
   it for build-time verification, and rejects a mismatch before constructing
   the hardware adapter;
 - an authority-checking plan compiler and durable integrated software
-  rehearsal; and
+  rehearsal;
+- a pure normal-boot signing plan, linker-fixed approval-gated runtime adapter,
+  canonical Raspberry Pi `boot.sig` codec, and pure offline signed-bundle
+  finalizer; and
 - an isolated fixed-extent media-staging prototype, signer-anchored capsule
   verifier, and offline unfused record correlator that makes no hardware claim.
 
@@ -253,8 +256,12 @@ including:
 - [ ] Pin an EEPROM release that emits the signed boot-image SHA-256
   device-tree property. Absence of `boot_img_sha256` is a preflight failure for
   this target, not an optional capability downgrade.
+- [x] Implement the non-mutating normal-boot signing slice: immutable public
+  plan, fixed approval-gated adapter, canonical `boot.sig`, policy/key/image
+  binding, offline verification, and public Nix bundle finalization.
 - [ ] Produce and verify the detached signature for the exact normal
-  `boot.img`.
+  release-candidate `boot.img` with the reviewed live development token and
+  retain its gate receipt as private operational evidence.
 - [ ] Produce the fresh-board commit bundle for a hash-zero BCM2712 board. Its
   recovery program must follow the vendor's fresh-board signing rules.
 - [ ] Produce the separately customer-counter-signed owned-device readback and

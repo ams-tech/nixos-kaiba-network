@@ -85,6 +85,13 @@ device selector, subprocess runner, or network listener. It cannot emit
 
 ## Optional read-only and reversible next layers
 
+Build a deterministic public signing plan, obtain an approval-gated YubiKey
+signature at runtime, and admit the two-file public result into an
+offline-verification derivation using the
+[Raspberry Pi 5 signed-boot workflow](raspberry-pi-5-signed-boot-workflow.md).
+That path exercises the real key only for signing and cannot write a Pi, NVMe,
+EEPROM, or OTP.
+
 Once a real development capsule exists, verify its exact file tree and detached
 signature with the procedure in
 [Raspberry Pi 5 unfused compatibility prototype](raspberry-pi-5-unfused-compatibility.md).

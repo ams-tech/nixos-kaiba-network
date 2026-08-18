@@ -271,6 +271,7 @@
             kaiba-provision-signer-foundation
             kaiba-provision-signing-client-foundation
             kaiba-provision-signing-gate-foundation
+            kaiba-provision-sign-boot
             kaiba-provision-station
             kaiba-provision-station-demo
             kaiba-provision-station-pages
@@ -338,6 +339,7 @@
           station-ui = provisioning.checks.${system}.station-ui;
           rpiboot-metadata-stdout = provisioning.checks.${system}.rpiboot-metadata-stdout;
           secure-boot-artifacts = provisioning.checks.${system}.secure-boot-artifacts;
+          signed-boot-plan = provisioning.checks.${system}.signed-boot-plan;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
               {

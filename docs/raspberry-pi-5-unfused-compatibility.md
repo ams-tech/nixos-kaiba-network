@@ -47,6 +47,7 @@ hash must match the reviewed public key:
         tokenSerial = "<YUBIKEY_DECIMAL_SERIAL>";
         publicKeyPEM = ./reviewed-boot-public.pem;
         publicKeyFingerprint = "sha256:<64_LOWERCASE_HEX_DIGITS>";
+        signerPolicyDigest = "sha256:<64_LOWERCASE_HEX_DIGITS>";
         expectedCustomerKeyHash = "<64_LOWERCASE_HEX_DIGITS>";
         grantRegistryPath = "/etc/kaiba-provisioning/signing-grants.json";
       };
@@ -69,9 +70,11 @@ materialize the `./result` used by both commands in this runbook:
 nix build .#unfused-verifier
 ```
 
-The signer-pinned command verifies the manifest-bound `boot.sig` as RSA PKCS#1
-v1.5/SHA-256 over `boot.img` and emits a domain-separated receipt that includes
-the signer-policy digest:
+The signer-pinned command requires the canonical three-line Raspberry Pi
+`boot.sig`, checks that its first line is the manifest-bound SHA-256 of
+`boot.img`, and verifies its RSA-2048 PKCS#1 v1.5/SHA-256 signature with the
+reviewed key. It emits a domain-separated receipt that includes the
+signer-policy digest:
 
 ```console
 ./result/bin/kaiba-provision-unfused-compat verify-signed-offline-fixture \

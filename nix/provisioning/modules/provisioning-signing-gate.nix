@@ -43,6 +43,7 @@ in
           tokenSerial = "12345678";
           publicKeyPEM = ./development-boot-public.pem;
           publicKeyFingerprint = "sha256:...";
+          signerPolicyDigest = "sha256:...";
           expectedCustomerKeyHash = "...";
         }
       '';

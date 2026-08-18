@@ -62,6 +62,10 @@
           { system, ... }@args:
           (packagesFor system).mkRpi5PhysicalLaneGuard (builtins.removeAttrs args [ "system" ]);
 
+        mkRpi5BootSigningPlan =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5BootSigningPlan (builtins.removeAttrs args [ "system" ]);
+
         mkDevelopmentYubiKeySigning =
           { system, ... }@args:
           (packagesFor system).mkDevelopmentYubiKeySigning (builtins.removeAttrs args [ "system" ]);
@@ -69,6 +73,10 @@
         mkRpi5UnfusedVerifier =
           { system, ... }@args:
           (packagesFor system).mkRpi5UnfusedVerifier (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5VerifiedSignedBoot =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5VerifiedSignedBoot (builtins.removeAttrs args [ "system" ]);
       };
 
       packages = forAllSystems (
@@ -89,6 +97,7 @@
           kaiba-provision-signer-foundation = built.signerFoundation;
           kaiba-provision-signing-client-foundation = built.signingClientFoundation;
           kaiba-provision-signing-gate-foundation = built.signingGateFoundation;
+          kaiba-provision-sign-boot = built.signedBootTool;
           kaiba-provision-station = built.liveStation;
           kaiba-provision-station-demo = built.stationDemo;
           kaiba-provision-station-pages = built.stationPages;
@@ -118,6 +127,7 @@
           rpi5-probe-bundle = provisioning.probeBundleIntegrity;
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           secure-boot-artifacts = provisioning.secureBootArtifactContract;
+          signed-boot-plan = provisioning.signedBootPlanContract;
           station-ui =
             pkgs.runCommand "kaiba-provisioning-station-ui-check"
               {

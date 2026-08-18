@@ -108,6 +108,7 @@ let
   );
   developmentYubiKeyCustomerKeyHash = "f06d7ff084a6c69d60d7ca5a7554afa199132c31b54f9366d2852711053fa7de";
   developmentYubiKeyPublicKeyFingerprint = "sha256:21bfca39f5db869c81f1fdab5f1d2569bdd5e67ef07ccfe0e3b6ddd792a6cfe1";
+  developmentYubiKeySignerPolicyDigest = "sha256:498534e04cf7a511356fbec7fac4ad994a692e352fa0db65e99e8ba0bdbc5d61";
   developmentYubiKeyPublicKeyPEM = pkgs.writeText "kaiba-development-boot-public-key.pem" (
     builtins.readFile ./fixtures/development-boot-public.pem
   );
@@ -118,14 +119,96 @@ let
     tokenSerial = "12345678";
     publicKeyPEM = developmentYubiKeyPublicKeyPEM;
     publicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
+    signerPolicyDigest = developmentYubiKeySignerPolicyDigest;
     expectedCustomerKeyHash = developmentYubiKeyCustomerKeyHash;
     grantRegistryPath = "/etc/kaiba-provisioning/signing-grants.json";
   };
   unfusedVerifierFixture = built.mkRpi5UnfusedVerifier {
     name = "kaiba-rpi5-unfused-verifier-fixture";
-    trustedPublicKeyFingerprint =
-      developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+    trustedPublicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
   };
+  bootSigningPlanFixture = built.mkRpi5BootSigningPlan {
+    name = "kaiba-rpi5-boot-signing-plan-fixture";
+    bootImage = "${secureBootFixtureA}/unsigned/boot.img";
+    planID = "plan:rpi5-development-fixture:1";
+    publicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+    reviewedPublicKeyPEM = developmentYubiKeyPublicKeyPEM;
+    signerPolicyDigest = developmentYubiKeySigning.kaibaSigning.signerPolicyDigest;
+    sourceDateEpoch = 1786968000;
+  };
+  bootSigningPlanInputAccepted =
+    overrides:
+    (builtins.tryEval (
+      (built.mkRpi5BootSigningPlan (
+        {
+          name = "kaiba-rpi5-boot-signing-plan-evaluation";
+          bootImage = "${secureBootFixtureA}/unsigned/boot.img";
+          planID = "plan:rpi5-development-fixture:1";
+          publicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+          reviewedPublicKeyPEM = developmentYubiKeyPublicKeyPEM;
+          signerPolicyDigest = developmentYubiKeySigning.kaibaSigning.signerPolicyDigest;
+          sourceDateEpoch = 1786968000;
+        }
+        // overrides
+      )).drvPath
+    )).success;
+  emptySignedOutputFixture = pkgs.runCommand "kaiba-empty-signed-output-fixture" { } ''
+    mkdir "$out"
+  '';
+  verifiedSignedBootEvaluationFixture = built.mkRpi5VerifiedSignedBoot {
+    name = "kaiba-rpi5-verified-signed-boot-metadata-fixture";
+    signingPlan = bootSigningPlanFixture;
+    signedOutput = emptySignedOutputFixture;
+  };
+  signedBootFinalizerBootImage = pkgs.writeText "kaiba-signed-boot-finalizer-boot.img" ''
+    kaiba signed-boot finalizer fixture
+  '';
+  signedBootFinalizerPublicKey = pkgs.writeText "kaiba-signed-boot-finalizer-public.pem" (
+    builtins.readFile ./fixtures/signed-boot-finalizer-public.pem
+  );
+  signedBootFinalizerPlan = built.mkRpi5BootSigningPlan {
+    name = "kaiba-rpi5-signed-boot-finalizer-plan";
+    bootImage = signedBootFinalizerBootImage;
+    planID = "plan:rpi5-finalizer-fixture:1";
+    publicKeyFingerprint = "sha256:104dbbf42aacd5c3357ed4229237f8d8d848af868b8f680b46cba5505d8f67fc";
+    reviewedPublicKeyPEM = signedBootFinalizerPublicKey;
+    signerPolicyDigest = "sha256:68498f57aa811b8a714260a4ac4390118c78efdb2af416cc64bfbd8eac4c42e3";
+    sourceDateEpoch = 1786968000;
+  };
+  signedBootFinalizerSignedOutput = pkgs.runCommand "kaiba-signed-boot-finalizer-result" { } ''
+    mkdir "$out"
+    install -m 0444 \
+      ${./fixtures/signed-boot-finalizer/boot.sig} \
+      "$out/boot.sig"
+    install -m 0444 \
+      ${./fixtures/signed-boot-finalizer/signing-result.json} \
+      "$out/signing-result.json"
+  '';
+  signedBootFinalizerHSMWrapper = pkgs.writeShellScript "kaiba-signed-boot-finalizer-hsm-wrapper" ''
+    set -euo pipefail
+    test "$#" -eq 3
+    test "$1" = '-a'
+    test "$2" = 'rsa2048-sha256'
+    test -f "$3"
+    sed -n 's/^rsa2048: //p' ${./fixtures/signed-boot-finalizer/boot.sig}
+  '';
+  verifiedSignedBootFixture = built.mkRpi5VerifiedSignedBoot {
+    name = "kaiba-rpi5-verified-signed-boot-fixture";
+    signingPlan = signedBootFinalizerPlan;
+    signedOutput = signedBootFinalizerSignedOutput;
+  };
+  verifiedSignedBootInputAccepted =
+    overrides:
+    (builtins.tryEval (
+      (built.mkRpi5VerifiedSignedBoot (
+        {
+          name = "kaiba-rpi5-verified-signed-boot-evaluation";
+          signingPlan = bootSigningPlanFixture;
+          signedOutput = emptySignedOutputFixture;
+        }
+        // overrides
+      )).drvPath
+    )).success;
   expectedDevelopmentYubiKeyOpenSSLConfiguration = pkgs.writeText "kaiba-development-yubikey-openssl-expected.cnf" ''
     config_diagnostics = 1
     openssl_conf = kaiba_openssl_init
@@ -242,6 +325,8 @@ let
         check-jsonschema --check-metaschema \
           ${built.goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json
         check-jsonschema --check-metaschema \
+          ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-boot-signing-result-v1alpha1.schema.json \
           ${built.goSource}/schemas/secure-boot-bundle-v1alpha1.schema.json \
           ${built.goSource}/schemas/signing-grant-registry-v1alpha1.schema.json \
           ${built.goSource}/schemas/signing-request-v1alpha1.schema.json \
@@ -764,6 +849,223 @@ let
         touch "$out/passed"
       '';
 
+  signedBootPlanContract =
+    assert lib.assertMsg (bootSigningPlanInputAccepted
+      { }
+    ) "the signed-boot plan factory rejected valid public store inputs";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        bootImage = "/tmp/kaiba-untrusted-boot.img";
+      })
+    ) "the signed-boot plan factory accepted a boot image outside the Nix store";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        reviewedPublicKeyPEM = "/tmp/kaiba-untrusted-public.pem";
+      })
+    ) "the signed-boot plan factory accepted a public key outside the Nix store";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        planID = "Plan With Spaces";
+      })
+    ) "the signed-boot plan factory accepted a non-canonical plan ID";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        publicKeyFingerprint = "sha256:21BFCA39F5DB869C81F1FDAB5F1D2569BDD5E67EF07CCFE0E3B6DDD792A6CFE1";
+      })
+    ) "the signed-boot plan factory accepted a non-canonical public-key fingerprint";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        sourceDateEpoch = -1;
+      })
+    ) "the signed-boot plan factory accepted a negative source epoch";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        sourceDateEpoch = 253402300800;
+      })
+    ) "the signed-boot plan factory accepted an out-of-range source epoch";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        signerPolicyDigest = "sha256:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
+      })
+    ) "the signed-boot plan factory accepted a non-canonical signer-policy digest";
+    assert lib.assertMsg (verifiedSignedBootInputAccepted
+      { }
+    ) "the signed-boot finalizer factory rejected public store inputs";
+    assert lib.assertMsg (
+      !(verifiedSignedBootInputAccepted {
+        signingPlan = "/tmp/kaiba-untrusted-signing-plan";
+      })
+    ) "the signed-boot finalizer factory accepted a plan outside the Nix store";
+    assert lib.assertMsg (
+      !(verifiedSignedBootInputAccepted {
+        signedOutput = "/tmp/kaiba-untrusted-signed-output";
+      })
+    ) "the signed-boot finalizer factory accepted signed output outside the Nix store";
+    pkgs.runCommand "kaiba-signed-boot-plan-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.check-jsonschema
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.jq
+          pkgs.openssl
+          pkgs.xxd
+        ];
+      }
+      ''
+        set -euo pipefail
+
+        find ${bootSigningPlanFixture} -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
+          > "$TMPDIR/actual-plan-files"
+        printf '%s\n' boot.img plan.json public.pem \
+          > "$TMPDIR/expected-plan-files"
+        cmp "$TMPDIR/expected-plan-files" "$TMPDIR/actual-plan-files"
+
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha1.schema.json \
+          ${bootSigningPlanFixture}/plan.json
+
+        cmp \
+          ${secureBootFixtureA}/unsigned/boot.img \
+          ${bootSigningPlanFixture}/boot.img
+        test "$(jq -r .schema_version ${bootSigningPlanFixture}/plan.json)" = \
+          'kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1'
+        test "$(jq -r .plan_id ${bootSigningPlanFixture}/plan.json)" = \
+          'plan:rpi5-development-fixture:1'
+        test "$(jq -r .public_key_fingerprint ${bootSigningPlanFixture}/plan.json)" = \
+          '${developmentYubiKeyPublicKeyFingerprint}'
+        test "$(jq -r .source_date_epoch ${bootSigningPlanFixture}/plan.json)" = \
+          '1786968000'
+        test "$(jq -r .signer_policy_digest ${bootSigningPlanFixture}/plan.json)" = \
+          '${developmentYubiKeySignerPolicyDigest}'
+        test "$(jq -r .boot_image_size_bytes ${bootSigningPlanFixture}/plan.json)" = \
+          "$(stat --format=%s ${bootSigningPlanFixture}/boot.img)"
+        test "$(jq -r .boot_image_digest ${bootSigningPlanFixture}/plan.json)" = \
+          "sha256:$(sha256sum ${bootSigningPlanFixture}/boot.img | cut -d ' ' -f 1)"
+        jq -e '
+          keys == [
+            "boot_image_digest",
+            "boot_image_size_bytes",
+            "plan_id",
+            "public_key_fingerprint",
+            "schema_version",
+            "signer_policy_digest",
+            "source_date_epoch"
+          ]
+          and (.boot_image_size_bytes | type) == "number"
+          and (.source_date_epoch | type) == "number"
+        ' ${bootSigningPlanFixture}/plan.json > /dev/null
+
+        openssl pkey \
+          -pubin \
+          -in ${bootSigningPlanFixture}/public.pem \
+          -outform DER \
+          -out "$TMPDIR/boot-signing-public.der"
+        test "$(
+          openssl pkey \
+            -pubin \
+            -in ${bootSigningPlanFixture}/public.pem \
+            -text \
+            -noout \
+            | sed -n '1p'
+        )" = 'Public-Key: (2048 bit)'
+        openssl pkey \
+          -pubin \
+          -in ${bootSigningPlanFixture}/public.pem \
+          -text \
+          -noout \
+          | grep -Fx 'Exponent: 65537 (0x10001)' > /dev/null
+        test "sha256:$(sha256sum "$TMPDIR/boot-signing-public.der" | cut -d ' ' -f 1)" = \
+          '${developmentYubiKeyPublicKeyFingerprint}'
+
+        test -x ${built.signedBootTool}/bin/kaiba-provision-sign-boot
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.privateKeyAccess}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.signingAuthorityConfigured}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.directHardwareAccess}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.otpCapable}' = 'false'
+        test '${builtins.toJSON bootSigningPlanFixture.kaibaBootSigningPlan.privateKeyAccess}' = 'false'
+        test '${builtins.toJSON bootSigningPlanFixture.kaibaBootSigningPlan.signingAuthorityConfigured}' = 'false'
+        test '${builtins.toJSON bootSigningPlanFixture.kaibaBootSigningPlan.mutationCapable}' = 'false'
+        test '${bootSigningPlanFixture.kaibaBootSigningPlan.schemaVersion}' = \
+          'kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1'
+        test '${bootSigningPlanFixture.kaibaBootSigningPlan.signerPolicyDigest}' = \
+          '${developmentYubiKeySignerPolicyDigest}'
+        test '${builtins.toJSON verifiedSignedBootEvaluationFixture.kaibaVerifiedSignedBoot.privateKeyAccess}' = \
+          'false'
+        test '${builtins.toJSON verifiedSignedBootEvaluationFixture.kaibaVerifiedSignedBoot.mutationCapable}' = \
+          'false'
+        test '${builtins.toJSON verifiedSignedBootEvaluationFixture.kaibaVerifiedSignedBoot.signatureVerificationRequired}' = \
+          'true'
+        test '${verifiedSignedBootEvaluationFixture.kaibaVerifiedSignedBoot.verificationMode}' = \
+          'pure_offline'
+
+        find ${verifiedSignedBootFixture} -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
+          > "$TMPDIR/actual-final-files"
+        printf '%s\n' \
+          boot.img \
+          boot.sig \
+          manifest.json \
+          public.pem \
+          signing-plan.json \
+          signing-result.json \
+          > "$TMPDIR/expected-final-files"
+        cmp "$TMPDIR/expected-final-files" "$TMPDIR/actual-final-files"
+        cmp ${signedBootFinalizerBootImage} ${verifiedSignedBootFixture}/boot.img
+        cmp ${./fixtures/signed-boot-finalizer/boot.sig} ${verifiedSignedBootFixture}/boot.sig
+        cmp ${signedBootFinalizerPublicKey} ${verifiedSignedBootFixture}/public.pem
+        cmp ${signedBootFinalizerPlan}/plan.json ${verifiedSignedBootFixture}/signing-plan.json
+        cmp \
+          ${./fixtures/signed-boot-finalizer/signing-result.json} \
+          ${verifiedSignedBootFixture}/signing-result.json
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/rpi5-boot-signing-result-v1alpha1.schema.json \
+          ${verifiedSignedBootFixture}/signing-result.json
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/secure-boot-bundle-v1alpha1.schema.json \
+          ${verifiedSignedBootFixture}/manifest.json
+        jq -e '
+          .schema_version == "kaiba.provisioning.secure-boot-bundle/v1alpha1"
+          and .manifest_id == "plan:rpi5-finalizer-fixture:1"
+          and .device_class == "raspberry-pi-5"
+          and .signing_policy_digest == "sha256:68498f57aa811b8a714260a4ac4390118c78efdb2af416cc64bfbd8eac4c42e3"
+          and [.artifacts[].role] == [
+            "boot_public_key",
+            "rpi5.boot_image",
+            "rpi5.boot_signature"
+          ]
+        ' ${verifiedSignedBootFixture}/manifest.json > /dev/null
+        ${pkgs.bash}/bin/bash ${pkgs.raspberrypi-eeprom.src}/rpi-eeprom-digest \
+          -k ${verifiedSignedBootFixture}/public.pem \
+          -i ${verifiedSignedBootFixture}/boot.img \
+          -v ${verifiedSignedBootFixture}/boot.sig
+        SOURCE_DATE_EPOCH=1786968000 \
+          ${pkgs.bash}/bin/bash ${pkgs.raspberrypi-eeprom.src}/rpi-eeprom-digest \
+          -H ${signedBootFinalizerHSMWrapper} \
+          -i ${verifiedSignedBootFixture}/boot.img \
+          -o "$TMPDIR/upstream-boot.sig"
+        cmp ${verifiedSignedBootFixture}/boot.sig "$TMPDIR/upstream-boot.sig"
+
+        set +e
+        ${built.signedBootTool}/bin/kaiba-provision-sign-boot sign \
+          --plan ${bootSigningPlanFixture} \
+          --output "$TMPDIR/generic-sign-output" \
+          > "$TMPDIR/generic-sign.stdout" \
+          2> "$TMPDIR/generic-sign.stderr"
+        generic_sign_status="$?"
+        set -e
+        test "$generic_sign_status" -eq 1
+        test ! -e "$TMPDIR/generic-sign-output"
+        grep -F 'linker-fixed public-key fingerprint' \
+          "$TMPDIR/generic-sign.stderr"
+
+        mkdir -p "$out"
+        touch "$out/passed"
+      '';
+
   developmentYubiKeySigningContract =
     pkgs.runCommand "kaiba-development-yubikey-signing-contract"
       {
@@ -771,6 +1073,7 @@ let
           pkgs.coreutils
           pkgs.findutils
           pkgs.gnugrep
+          pkgs.jq
           pkgs.openssl
         ];
       }
@@ -778,6 +1081,7 @@ let
         set -euo pipefail
 
         expected_binaries="$(${pkgs.coreutils}/bin/printf '%s\n' \
+          kaiba-provision-sign-boot \
           kaiba-provision-signer \
           kaiba-provision-signing-client \
           kaiba-provision-signing-gate \
@@ -804,6 +1108,24 @@ let
           '${developmentYubiKeyPublicKeyFingerprint}'
         test '${developmentYubiKeySigning.kaibaSigning.expectedCustomerKeyHash}' = \
           '${developmentYubiKeyCustomerKeyHash}'
+        test '${developmentYubiKeySigning.kaibaSigning.signerPolicyDigest}' = \
+          '${developmentYubiKeySignerPolicyDigest}'
+        test -x \
+          ${developmentYubiKeySigning.kaibaSigning.signedBoot}/bin/kaiba-provision-sign-boot
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.gateSocketPath}' = \
+          '/run/kaiba-provision-signing/signing.sock'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.signerID}' = \
+          'signer:development-fixture'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.cohortID}' = \
+          'cohort:development-fixture'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.pkcs11URI}' = \
+          'pkcs11:serial=12345678;id=%02;type=private'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.publicKeyFingerprint}' = \
+          '${developmentYubiKeyPublicKeyFingerprint}'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.expectedPublicKeyPath}' = \
+          '${developmentYubiKeyPublicKeyPEM}'
+        test '${builtins.toJSON developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.runtimeAuthoritySelectors}' = \
+          'false'
         test "$(cat ${developmentYubiKeySigning.kaibaSigning.customerKeyHashFile})" = \
           '${developmentYubiKeyCustomerKeyHash}'
         test "$(stat --format=%s \
@@ -811,6 +1133,21 @@ let
         test "$(sha256sum \
           ${developmentYubiKeySigning.kaibaSigning.customerPublicKeyBinary} \
           | cut -d ' ' -f 1)" = '${developmentYubiKeyCustomerKeyHash}'
+        test "$(cat ${developmentYubiKeySigning.kaibaSigning.signerPolicyDigestFile})" = \
+          '${developmentYubiKeySignerPolicyDigest}'
+        jq -e '
+          .schema_version == "kaiba.provisioning.yubikey-signing-policy/v1alpha1"
+          and .signer_id == "signer:development-fixture"
+          and .cohort_id == "cohort:development-fixture"
+          and .provider == "yubikey-piv"
+          and .piv_slot == "9c"
+          and .pkcs11_uri == "pkcs11:serial=12345678;id=%02;type=private"
+          and .public_key_fingerprint == "${developmentYubiKeyPublicKeyFingerprint}"
+          and .key_algorithm == "rsa-2048"
+          and .pin_required == true
+          and .touch_required == true
+          and .private_key_exportable == false
+        ' ${developmentYubiKeySigning.kaibaSigning.signerPolicyJSON} > /dev/null
         test '${developmentYubiKeySigning.kaibaSigning.pinCredentialPath}' = \
           '/run/credentials/kaiba-provision-signing-gate.service/yubikey-pin'
         test '${developmentYubiKeySigning.kaibaSigning.socketPath}' = \
@@ -849,6 +1186,27 @@ let
           "$TMPDIR/wrapper.stderr"
         test "$(wc -l < "$TMPDIR/wrapper.stderr")" -eq 1
 
+        # The configured adapter fixes every authority value at link time and
+        # rejects attempts to replace any of them on the command line.
+        set +e
+        ${developmentYubiKeySigning}/bin/kaiba-provision-sign-boot \
+          sign \
+          --plan /tmp/kaiba-plan \
+          --output /tmp/kaiba-signed \
+          --socket /tmp/attacker.sock \
+          > "$TMPDIR/sign-boot.stdout" \
+          2> "$TMPDIR/sign-boot.stderr"
+        sign_boot_status="$?"
+        set -e
+        test "$sign_boot_status" -eq 2
+        test ! -s "$TMPDIR/sign-boot.stdout"
+        grep -Fx \
+          'usage: kaiba-provision-sign-boot sign --plan ABSOLUTE_PLAN_DIR --output ABSOLUTE_OUTPUT_DIR' \
+          "$TMPDIR/sign-boot.stderr"
+        grep -Fx \
+          '       kaiba-provision-sign-boot finalize --plan ABSOLUTE_PLAN_DIR --signed ABSOLUTE_SIGNED_DIR --output ABSOLUTE_OUTPUT_DIR' \
+          "$TMPDIR/sign-boot.stderr"
+
         mkdir -p "$out"
         touch "$out/passed"
       '';
@@ -872,6 +1230,7 @@ let
         test -x ${built.serviceSuite}/bin/kaiba-provision-signing-gate
         test -x ${built.serviceSuite}/bin/kaiba-provision-station
         test -x ${built.serviceSuite}/bin/kaiba-provision-yubikey-wrapper
+        test -x ${built.signedBootTool}/bin/kaiba-provision-sign-boot
         test -x ${built.provision}/bin/kaiba-provision
         test -x ${built.rehearsal}/bin/kaiba-provision-rehearsal
         test '${built.rehearsal.kaibaRehearsal.authority}' = \
@@ -1001,6 +1360,7 @@ let
         test -f ${probeBundleIntegrity}/passed
         test -f ${rpibootMetadataStdoutCompatibility}/passed
         test -f ${secureBootArtifactContract}/passed
+        test -f ${signedBootPlanContract}/passed
         test -f ${developmentYubiKeySigningContract}/passed
         test -f ${moduleEval}/results.txt
 
@@ -1047,5 +1407,6 @@ in
     provisioningTestResult
     rpibootMetadataStdoutCompatibility
     secureBootArtifactContract
+    signedBootPlanContract
     ;
 }
