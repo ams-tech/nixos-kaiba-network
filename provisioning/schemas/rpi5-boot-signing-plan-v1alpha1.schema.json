@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-boot-signing-plan-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 boot signing plan v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "boot_image_digest",
+    "boot_image_size_bytes",
+    "public_key_fingerprint",
+    "signer_policy_digest",
+    "source_date_epoch"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1"
+    },
+    "plan_id": { "$ref": "#/$defs/identifier" },
+    "boot_image_digest": { "$ref": "#/$defs/digest" },
+    "boot_image_size_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100663296
+    },
+    "public_key_fingerprint": { "$ref": "#/$defs/digest" },
+    "signer_policy_digest": { "$ref": "#/$defs/digest" },
+    "source_date_epoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 253402300799
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}
