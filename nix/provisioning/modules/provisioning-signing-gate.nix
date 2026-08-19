@@ -1,6 +1,7 @@
 {
   config,
   lib,
+  pkgs,
   utils,
   ...
 }:
@@ -93,6 +94,21 @@ in
         '';
       }
       {
+        assertion = config.security.polkit.enable;
+        message = "the YubiKey signing gate requires polkit-protected PC/SC access";
+      }
+      {
+        assertion = config.services.pcscd.package == pkgs.pcscliteWithPolkit;
+        message = "the YubiKey signing gate requires the polkit-enabled PC/SC daemon";
+      }
+      {
+        assertion = config.services.pcscd.extraArgs == [ ];
+        message = ''
+          services.pcscd.extraArgs must remain empty while the YubiKey signing
+          gate is enabled; overrides can disable authorization or log APDUs.
+        '';
+      }
+      {
         assertion =
           signingConfig == null
           ||
@@ -109,7 +125,24 @@ in
       extraGroups = [ ];
     };
 
-    services.pcscd.enable = true;
+    services.pcscd = {
+      enable = true;
+      package = pkgs.pcscliteWithPolkit;
+    };
+    security.polkit = {
+      enable = true;
+      extraConfig = ''
+        // pcscd rejects non-console identities by default. Authorize only the
+        // dedicated, sandboxed signer without granting a human service group.
+        polkit.addRule(function(action, subject) {
+          if (subject.user == "kaiba-signing" &&
+              (action.id == "org.debian.pcsc-lite.access_pcsc" ||
+               action.id == "org.debian.pcsc-lite.access_card")) {
+            return polkit.Result.YES;
+          }
+        });
+      '';
+    };
     environment.systemPackages = optional (cfg.package != null) cfg.package;
 
     systemd.services.${serviceName} = {

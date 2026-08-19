@@ -161,6 +161,17 @@ package exposes the checked policy at
 `kaibaSigning.signerPolicyJSON` and its digest at
 `kaibaSigning.signerPolicyDigestFile`.
 
+On the NixOS control host, the `provisioning-signing-gate` module enables
+PC/SC and polkit together. Its local policy grants
+`org.debian.pcsc-lite.access_pcsc` and
+`org.debian.pcsc-lite.access_card` to the dedicated `kaiba-signing` service
+identity, so the headless systemd service can reach the YubiKey without a
+human service group or root.
+It also refuses PC/SC daemon arguments that could disable polkit or enable APDU
+logging.
+The module does not replace upstream policy for active local-console sessions;
+control-host operators must review that policy separately.
+
 Build the two public/configured inputs. Keep named output links for the whole
 review and signing ceremony so Nix garbage collection cannot remove the exact
 artifacts that were reviewed:

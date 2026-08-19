@@ -229,6 +229,18 @@ let
     services.kaiba-provisioning-signing-gate.pinFile = "${signingTestPackage}/pin";
   };
 
+  provisioningSigningGateWithoutPolkit = lib.recursiveUpdate provisioningSigningGate {
+    security.polkit.enable = lib.mkForce false;
+  };
+
+  provisioningSigningGateWithoutProtectedPcscd = lib.recursiveUpdate provisioningSigningGate {
+    services.pcscd.package = lib.mkForce pkgs.pcsclite;
+  };
+
+  provisioningSigningGateWithPcscdArgs = lib.recursiveUpdate provisioningSigningGate {
+    services.pcscd.extraArgs = [ "--disable-polkit" ];
+  };
+
   probeConfig = evaluateConfig provisioningProbe;
   controlConfig = evaluateConfig provisioningControl;
   controlTLSConfig = evaluateConfig provisioningControlTLS;
@@ -255,6 +267,7 @@ let
   laneGuardMutatingService =
     laneGuardMutatingConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
   signingGateService = signingGateConfig.systemd.services.kaiba-provision-signing-gate.serviceConfig;
+  signingGatePolkit = signingGateConfig.security.polkit.extraConfig;
 
   probeBoundary =
     probeConfig.users.groups ? kaiba-provision
@@ -395,6 +408,14 @@ let
 
   signingServiceBoundary =
     signingGateConfig.services.pcscd.enable
+    && signingGateConfig.security.polkit.enable
+    && signingGateConfig.services.pcscd.package == pkgs.pcscliteWithPolkit
+    && signingGateConfig.services.pcscd.extraArgs == [ ]
+    && lib.hasInfix ''subject.user == "kaiba-signing"'' signingGatePolkit
+    && lib.hasInfix ''action.id == "org.debian.pcsc-lite.access_pcsc"'' signingGatePolkit
+    && lib.hasInfix ''action.id == "org.debian.pcsc-lite.access_card"'' signingGatePolkit
+    && !(lib.hasInfix "subject.isInGroup" signingGatePolkit)
+    && !disabledProbeConfig.security.polkit.enable
     && signingGateConfig.users.users.kaiba-signing.isSystemUser
     && signingGateService.User == "kaiba-signing"
     && signingGateService.Group == "kaiba-signing"
@@ -479,6 +500,15 @@ assert lib.assertMsg (
   !assertionsPass provisioningSigningGateStorePIN
 ) "a Nix-store YubiKey PIN was accepted";
 assert lib.assertMsg (
+  !assertionsPass provisioningSigningGateWithoutPolkit
+) "a YubiKey signing gate without polkit was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningSigningGateWithoutProtectedPcscd
+) "a YubiKey signing gate with a non-polkit PC/SC daemon was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningSigningGateWithPcscdArgs
+) "a YubiKey signing gate with unsafe pcscd arguments was accepted";
+assert lib.assertMsg (
   !assertionsPass duplicateProbeOperators
 ) "duplicate probe operators were accepted";
 assert lib.assertMsg probeBoundary
@@ -510,5 +540,6 @@ pkgs.runCommand "kaiba-provisioning-module-evaluation" { } ''
     'secure-boot-target-enrollment-blocked: pass' \
     'physical-lane-guard-explicit-mutation-boundary: pass' \
     'yubikey-signing-gate-credential-boundary: pass' \
+    'yubikey-signing-gate-pcsc-authorization: pass' \
     > "$out/results.txt"
 ''
