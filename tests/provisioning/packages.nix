@@ -132,7 +132,9 @@ let
     bootImage = "${secureBootFixtureA}/unsigned/boot.img";
     planID = "plan:rpi5-development-fixture:1";
     publicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
-    reviewedPublicKeyPEM = developmentYubiKeyPublicKeyPEM;
+    # Exercise a key nested directly below the flake source.  The factory must
+    # preserve its Nix path context so the sandbox mounts it as an input.
+    reviewedPublicKeyPEM = ./fixtures/development-boot-public.pem;
     signerPolicyDigest = developmentYubiKeySigning.kaibaSigning.signerPolicyDigest;
     sourceDateEpoch = 1786968000;
   };
@@ -945,6 +947,9 @@ let
         cmp \
           ${secureBootFixtureA}/unsigned/boot.img \
           ${bootSigningPlanFixture}/boot.img
+        cmp \
+          ${./fixtures/development-boot-public.pem} \
+          ${bootSigningPlanFixture}/public.pem
         test "$(jq -r .schema_version ${bootSigningPlanFixture}/plan.json)" = \
           'kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1'
         test "$(jq -r .plan_id ${bootSigningPlanFixture}/plan.json)" = \

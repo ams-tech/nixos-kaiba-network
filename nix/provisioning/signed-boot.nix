@@ -47,12 +47,14 @@ let
       "signerPolicyDigest must use canonical sha256:<64 lowercase hex> form";
     assert lib.assertMsg (canonicalEpoch sourceDateEpoch)
       "sourceDateEpoch must be an integer Unix timestamp from 0 through 253402300799";
-    let
-      bootImageArgument = lib.escapeShellArg (toString bootImage);
-      reviewedPublicKeyArgument = lib.escapeShellArg (toString reviewedPublicKeyPEM);
-    in
     pkgs.runCommand name
       {
+        # Keep both public inputs in the derivation environment as well as the
+        # generated script.  Shell escaping can discard Nix string context for
+        # a path nested below a flake source, which would otherwise leave that
+        # path unavailable inside the build sandbox.
+        bootImageInput = bootImage;
+        reviewedPublicKeyInput = reviewedPublicKeyPEM;
         nativeBuildInputs = [
           pkgs.coreutils
           pkgs.findutils
@@ -90,25 +92,25 @@ let
         export LC_ALL=C
         umask 022
 
-        test -f ${bootImageArgument}
-        test ! -L ${bootImageArgument}
-        test -s ${bootImageArgument}
-        test -f ${reviewedPublicKeyArgument}
-        test ! -L ${reviewedPublicKeyArgument}
-        test -s ${reviewedPublicKeyArgument}
+        test -f "$bootImageInput"
+        test ! -L "$bootImageInput"
+        test -s "$bootImageInput"
+        test -f "$reviewedPublicKeyInput"
+        test ! -L "$reviewedPublicKeyInput"
+        test -s "$reviewedPublicKeyInput"
 
         mkdir -p "$out"
-        install -m 0444 ${bootImageArgument} "$out/boot.img"
+        install -m 0444 "$bootImageInput" "$out/boot.img"
 
         # `openssl rsa` rejects non-RSA public keys. Re-emitting and comparing
         # it also requires the reviewed input to be one canonical PUBLIC KEY
         # PEM block with no ignored headers or trailing data.
         openssl rsa \
           -pubin \
-          -in ${reviewedPublicKeyArgument} \
+          -in "$reviewedPublicKeyInput" \
           -pubout \
           -out "$out/public.pem"
-        cmp ${reviewedPublicKeyArgument} "$out/public.pem"
+        cmp "$reviewedPublicKeyInput" "$out/public.pem"
         test "$(
           openssl pkey -pubin -in "$out/public.pem" -text -noout | sed -n '1p'
         )" = 'Public-Key: (2048 bit)'
