@@ -780,6 +780,21 @@ let
     assert lib.assertMsg (lib.all (sourceRevision: !(sourceRevisionAccepted sourceRevision))
       invalidSourceRevisions
     ) "the secure-boot artifact builder accepted a non-canonical source revision";
+    assert lib.assertMsg (
+      secureBootFixtureA.kaibaUnsignedArtifacts.schemaVersion
+      == "provisioning.kaiba.network/unsigned-artifact-set/v1alpha1"
+      && secureBootFixtureA.kaibaUnsignedArtifacts.signingStatus == "unsigned"
+      && lib.all (value: value == false) [
+        secureBootFixtureA.kaibaUnsignedArtifacts.blockDeviceWriteCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.directHardwareAccess
+        secureBootFixtureA.kaibaUnsignedArtifacts.eepromProgrammingCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.mutationCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.oneTimeSettingCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.otpCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.privateKeyAccess
+        secureBootFixtureA.kaibaUnsignedArtifacts.signingAuthorityConfigured
+      ]
+    ) "the unsigned artifact builder gained signing, hardware, or mutation capability";
     pkgs.runCommand "kaiba-secure-boot-artifact-contract"
       {
         nativeBuildInputs = [
