@@ -60,7 +60,11 @@
   sdImage = {
     compressImage = false;
     expandOnBoot = false;
-    firmwareSize = 96;
+    # nixos-raspberrypi's SD-image profile fixes this at 1024 MiB. This target
+    # uses the SD-image module only to obtain its root image and firmware tree;
+    # the separately assembled boot.img must stay within the Pi 5
+    # boot_ramdisk ceiling.
+    firmwareSize = lib.mkForce 96;
     populateRootCommands = lib.mkAfter ''
       mkdir -p ./files/etc ./files/root ./files/run ./files/tmp ./files/var
       chmod 0555 ./files/etc ./files/root

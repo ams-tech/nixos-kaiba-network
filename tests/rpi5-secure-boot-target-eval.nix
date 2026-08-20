@@ -30,6 +30,9 @@ assert lib.assertMsg (
   !cfg.sdImage.compressImage
 ) "the secure-boot root image is compressed instead of raw ext4";
 assert lib.assertMsg (
+  cfg.sdImage.firmwareSize == 96
+) "the secure-boot firmware image exceeds the Raspberry Pi 5 boot_ramdisk ceiling";
+assert lib.assertMsg (
   !cfg.sdImage.expandOnBoot
 ) "the immutable secure-boot root image is configured to expand on boot";
 assert lib.assertMsg (
