@@ -101,9 +101,23 @@ text hash.
 
 ## Nix construction
 
-A consuming flake can expose the unsigned plan and configured runtime package
-as follows. Replace every marked deployment value. `sourceDateEpoch` must be a
-fixed release value, not the evaluation time.
+This repository owns one public-only, sacrificial development profile in
+[`nix/development-signing.nix`](../nix/development-signing.nix). Build its
+configured runtime package directly from the repository root:
+
+```console
+nix build path:.#development-signing --out-link result-development-signing
+signing_path="$(readlink -f result-development-signing)"
+```
+
+That build regenerates and checks the Raspberry Pi customer-key representation
+and canonical signer policy without opening PC/SC or invoking the private key.
+The checked-in profile is not production-approved and its initial ceremony has
+not completed the required independent second review.
+
+Another deployment can expose its unsigned plan and configured runtime package
+with the factories below. Replace every marked deployment value.
+`sourceDateEpoch` must be a fixed release value, not the evaluation time.
 
 ```nix
 {

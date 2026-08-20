@@ -174,11 +174,15 @@ The public construction boundaries are:
 - the `provisioning-signing-gate`, `provisioning-control`,
   `provisioning-audit`, and `provisioning-lane-guard` NixOS modules.
 
-There is intentionally no checked-in deployment instance: the real token
-serial, public key, customer-key hash, EEPROM digest, physical USB/UART/GPIO
-selectors, TLS credentials, approvals, and recovery bundles are deployment
-inputs. Generic signer and lane-guard packages fail closed until constructed
-through their factories.
+The repository contains one checked-in, public-only deployment instance for
+the explicitly sacrificial development prototype. It records the development
+token serial, reviewed public key, customer-key hash, and signer-policy digest
+under [`provisioning/signers/development-prototype`](../provisioning/signers/development-prototype/README.md).
+That exception contains no credential or signing authority and is not approved
+for production. Production signer metadata, EEPROM digests, physical
+USB/UART/GPIO selectors, TLS credentials, approvals, grants, and recovery
+bundles remain external deployment inputs. Generic signer and lane-guard
+packages still fail closed until constructed through their factories.
 
 ## Station and control-plane state
 

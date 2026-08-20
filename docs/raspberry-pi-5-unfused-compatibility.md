@@ -24,51 +24,23 @@ must be one RSA-2048 `PUBLIC KEY` PEM block using exponent 65537, and its
 fingerprint must match that immutable anchor.
 
 In Nix, derive that verifier anchor from the same public metadata as the
-development signing package rather than copying a runtime flag. For example,
-the following complete consuming flake exposes one signer-pinned verifier
-package. Replace the revision and marked deployment values; the customer-key
-hash must match the reviewed public key:
-
-```nix
-{
-  inputs = {
-    kaiba.url = "github:ams-tech/nixos-kaiba-network/<PINNED_REVISION>";
-    nixpkgs.follows = "kaiba/nixpkgs";
-  };
-
-  outputs = { kaiba, ... }:
-    let
-      system = "x86_64-linux";
-      developmentSigning = kaiba.lib.mkDevelopmentYubiKeySigning {
-        inherit system;
-        name = "kaiba-prototype-signing";
-        cohortID = "cohort:prototype";
-        signerID = "signer:prototype";
-        tokenSerial = "<YUBIKEY_DECIMAL_SERIAL>";
-        publicKeyPEM = ./reviewed-boot-public.pem;
-        publicKeyFingerprint = "sha256:<64_LOWERCASE_HEX_DIGITS>";
-        signerPolicyDigest = "sha256:<64_LOWERCASE_HEX_DIGITS>";
-        expectedCustomerKeyHash = "<64_LOWERCASE_HEX_DIGITS>";
-        grantRegistryPath = "/etc/kaiba-provisioning/signing-grants.json";
-      };
-    in
-    {
-      packages.${system}.unfused-verifier =
-        kaiba.lib.mkRpi5UnfusedVerifier {
-          inherit system;
-          trustedPublicKeyFingerprint =
-            developmentSigning.kaibaSigning.publicKeyFingerprint;
-        };
-    };
-}
-```
-
-Save that expression as `flake.nix` beside `reviewed-boot-public.pem`, then
-materialize the `./result` used by both commands in this runbook:
+development signing package rather than copying a runtime flag. The repository
+profile in [`nix/development-signing.nix`](../nix/development-signing.nix)
+does that and exposes a signer-pinned verifier directly. Materialize the named
+result used by both commands in this runbook:
 
 ```console
-nix build .#unfused-verifier
+nix build path:.#rpi5-unfused-verifier \
+  --out-link result-rpi5-unfused-verifier
+verifier_path="$(readlink -f result-rpi5-unfused-verifier)"
+reviewed_public_key="$(readlink -f \
+  provisioning/signers/development-prototype/reviewed-boot-public.pem)"
 ```
+
+Other deployments must instantiate `mkDevelopmentYubiKeySigning` with their
+independently reviewed public metadata and pass
+`signing.kaibaSigning.publicKeyFingerprint` to `mkRpi5UnfusedVerifier` in the
+same way. A runtime flag must never select the trust anchor.
 
 The signer-pinned command requires the canonical three-line Raspberry Pi
 `boot.sig`, checks that its first line is the manifest-bound SHA-256 of
@@ -77,11 +49,11 @@ reviewed key. It emits a domain-separated receipt that includes the
 signer-policy digest:
 
 ```console
-./result/bin/kaiba-provision-unfused-compat verify-signed-offline-fixture \
+"$verifier_path/bin/kaiba-provision-unfused-compat" verify-signed-offline-fixture \
   --manifest /absolute/path/capsule-manifest.json \
   --capsule-root /absolute/path/capsule \
   --fixture /absolute/path/unfused-fixture.json \
-  --public-key /absolute/path/reviewed-boot-public.pem
+  --public-key "$reviewed_public_key"
 ```
 
 A successful result is always limited to:
@@ -124,11 +96,11 @@ The UART transcript must contain exactly one capsule-bound compatibility record
 and exactly one root-data/root-hash-bound dm-verity record. Then run:
 
 ```console
-./result/bin/kaiba-provision-unfused-evidence verify-operator-observation \
+"$verifier_path/bin/kaiba-provision-unfused-evidence" verify-operator-observation \
   --manifest /absolute/path/capsule-manifest.json \
   --capsule-root /absolute/path/capsule \
   --fixture /absolute/path/unfused-fixture.json \
-  --public-key /absolute/path/reviewed-boot-public.pem \
+  --public-key "$reviewed_public_key" \
   --observation /absolute/path/operator-observation.json \
   --uart-capture /absolute/path/uart.txt
 ```
