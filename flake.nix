@@ -225,6 +225,24 @@
         import ./nix/development-signing.nix {
           inherit provisioning system;
         };
+
+      rpi5PrototypeRelease =
+        let
+          system = "x86_64-linux";
+          pkgs = import nixpkgs { inherit system; };
+        in
+        import ./nix/rpi5-prototype-release.nix {
+          developmentSigning = developmentSigningFor system;
+          inherit
+            lib
+            mkRpi5SecureBootTarget
+            pkgs
+            provisioning
+            system
+            ;
+          sourceDateEpoch = self.lastModified;
+          sourceRevision = defaultTargetSourceRevision;
+        };
     in
     {
       nixosModules = {
@@ -293,6 +311,8 @@
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           development-signing = developmentSigning.signing;
+          rpi5-prototype-release-review = rpi5PrototypeRelease.review;
+          rpi5-prototype-signing-plan = rpi5PrototypeRelease.signingPlan;
           inherit (dns.packages.${system})
             dns-schema-gate
             dns-security-gate
@@ -305,6 +325,7 @@
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
           rpi5-provisioning-sd-image = rpi5ProvisioningSystem.config.system.build.sdImage;
+          rpi5-prototype-unsigned-artifacts = rpi5PrototypeRelease.unsignedArtifacts;
         }
       );
 
@@ -395,6 +416,11 @@
               expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
               sourceRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
             };
+          };
+          rpi5-prototype-release-eval = import ./tests/rpi5-prototype-release-eval.nix {
+            inherit lib pkgs;
+            prototype = rpi5PrototypeRelease;
+            signingProfile = developmentSigning;
           };
         }
       );

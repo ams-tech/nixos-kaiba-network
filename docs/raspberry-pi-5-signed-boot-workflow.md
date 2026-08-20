@@ -115,6 +115,48 @@ and canonical signer policy without opening PC/SC or invoking the private key.
 The checked-in profile is not production-approved and its initial ceremony has
 not completed the required independent second review.
 
+### Build the repository prototype release inputs
+
+The root flake now binds that development profile to one concrete Pi 5 target.
+Run these commands from a clean Git checkout; evaluation fails closed when the
+source revision is dirty or unavailable:
+
+```console
+nix build path:.#packages.aarch64-linux.rpi5-prototype-unsigned-artifacts \
+  --out-link result-rpi5-prototype-unsigned-artifacts
+nix build path:.#rpi5-prototype-signing-plan \
+  --out-link result-rpi5-prototype-signing-plan
+nix build path:.#rpi5-prototype-release-review \
+  --out-link result-rpi5-prototype-release-review
+```
+
+On an x86_64 host, all three builds require Nix to be configured with an
+AArch64 builder or `aarch64-linux` emulation. The target-system closure, raw
+root image, dm-verity hash tree, and 96 MiB FAT boot image make the first build
+substantially slower and larger than the public signer-contract build.
+
+The signing plan ID contains the first 12 hexadecimal characters of the clean
+source revision, and its timestamp is the flake's fixed commit timestamp. A
+source change therefore creates a different release identity instead of
+silently reusing a plan ID. Inspect the completed public review with:
+
+```console
+jq . result-rpi5-prototype-unsigned-artifacts/manifest.json
+jq . result-rpi5-prototype-signing-plan/plan.json
+jq . result-rpi5-prototype-release-review/review.json
+cmp \
+  result-rpi5-prototype-unsigned-artifacts/unsigned/boot.img \
+  result-rpi5-prototype-signing-plan/boot.img
+```
+
+The review revalidates both JSON schemas, every artifact digest, the canonical
+unsigned-bundle digest, the dm-verity tree and boot command line, the reviewed
+PEM and SPKI fingerprint, the Raspberry Pi customer-key representation, and
+the signer-policy digest. These three builds have no PC/SC, YubiKey, private-key,
+signing-grant, block-device, EEPROM, or OTP access. Their result is still an
+unsigned normal-boot artifact set and a public signing plan, not a signed
+release or authority to change a board.
+
 Another deployment can expose its unsigned plan and configured runtime package
 with the factories below. Replace every marked deployment value.
 `sourceDateEpoch` must be a fixed release value, not the evaluation time.

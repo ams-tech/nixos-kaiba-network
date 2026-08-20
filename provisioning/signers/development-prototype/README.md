@@ -51,4 +51,17 @@ Build the public-only contracts from the repository root:
 ```console
 nix build .#development-signing --out-link result-development-signing
 nix build .#rpi5-unfused-verifier --out-link result-rpi5-unfused-verifier
+nix build .#packages.aarch64-linux.rpi5-prototype-unsigned-artifacts \
+  --out-link result-rpi5-prototype-unsigned-artifacts
+nix build .#rpi5-prototype-signing-plan \
+  --out-link result-rpi5-prototype-signing-plan
+nix build .#rpi5-prototype-release-review \
+  --out-link result-rpi5-prototype-release-review
 ```
+
+The final three outputs bind a clean repository revision to the development
+customer-key hash, construct an unsigned Pi 5 boot/root artifact set, and
+validate its public signing plan. They neither contact the YubiKey nor sign or
+write anything. See the
+[signed-boot workflow](../../../docs/raspberry-pi-5-signed-boot-workflow.md#build-the-repository-prototype-release-inputs)
+for output inspection and host requirements.

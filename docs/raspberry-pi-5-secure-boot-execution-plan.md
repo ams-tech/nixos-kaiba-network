@@ -134,7 +134,11 @@ These rules apply to every work item and rehearsal:
 The in-progress statuses above reflect implementation, not milestone exit. The
 repository now has a signed four-role capsule verifier, a fixed-extent media
 stager with a regular-file fixture mode, offline unfused record correlation,
-and a runnable software-only orchestrator. The orchestrator uses
+and a runnable software-only orchestrator. It also exposes a clean-revision
+Pi 5 target, unsigned root/boot artifacts, a signer-profile-bound public
+signing plan, and a concrete release review that verifies the artifact digests,
+dm-verity tree, public key, and signer-policy binding without signing or
+hardware access. The orchestrator uses
 the real durable control and audit services, derives the closed seven-operation
 plan, verifies both approval and initial-intent audit records under a distinct
 rehearsal actor policy, reopens and revalidates persisted state, emits no
