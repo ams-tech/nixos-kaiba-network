@@ -89,3 +89,9 @@ independently parse the primary and backup GPT, inspect a FAT allowlist, run
 `veritysetup verify`, bind a production transaction and release manifest into
 the receipt, or prove cold-power removal. Those are SB-04 exit gates and must
 be completed before this tool is used as ceremony evidence.
+
+The Nix-built four-role unfused capsule is also not a whole-device image. Its
+`boot.img` is the inner boot ramdisk; it does not provide the outer FAT
+filesystem with `config.txt` and `boot_ramdisk=1`, partition tables, or fixed
+partition extents. Do not pass `capsule/boot.img` to a whole-device flashing
+command.

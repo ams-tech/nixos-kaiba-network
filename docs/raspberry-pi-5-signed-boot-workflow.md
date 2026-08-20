@@ -299,6 +299,21 @@ Using `path:.` in this local prototype includes the public, untracked
 `signed-output` directory. A shared release should instead fetch that public
 directory from a content-addressed artifact source with a reviewed hash.
 
+The verified bundle is not yet the four-role unfused capsule. Assemble it with
+the exact root-data and root-hash images from the same reviewed unsigned
+artifact set by using `mkRpi5VerifiedUnfusedCapsule`. That derivation refuses a
+signer anchor that differs from the signing plan, constructs the pinned
+verifier internally, and refuses a signed boot image that differs from the
+unsigned artifact set or embeds a different dm-verity root hash. It emits the
+strict capsule manifest, a clearly synthetic fixture, and the signer-anchored
+offline result described in the
+[Raspberry Pi 5 unfused compatibility prototype](raspberry-pi-5-unfused-compatibility.md).
+
+This is still an offline public build. It neither contacts the YubiKey nor
+touches a Pi, EEPROM, OTP, removable medium, or block device. Changing the boot
+or root artifacts invalidates the bindings and requires review and a new
+signature rather than silently reusing this result.
+
 ## Safety status
 
 Completing this workflow proves that the selected `boot.img` verifies under

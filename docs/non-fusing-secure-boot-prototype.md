@@ -92,23 +92,28 @@ offline-verification derivation using the
 That path exercises the real key only for signing and cannot write a Pi, NVMe,
 EEPROM, or OTP.
 
-Once a real development capsule exists, verify its exact file tree and detached
-signature with the procedure in
+Once the public signing result has been admitted, assemble the signed boot pair
+and the reviewed dm-verity root images with `mkRpi5VerifiedUnfusedCapsule`.
+That derivation verifies the exact four-role tree, the root-data/hash
+relationship, and the detached signature using the signer-pinned verifier. Its
+fixture remains explicitly synthetic and its result makes no hardware or
+enforcement claim. See
 [Raspberry Pi 5 unfused compatibility prototype](raspberry-pi-5-unfused-compatibility.md).
-This is read-only.
 
 Exercise media staging against a sparse regular-file fixture before considering
 a dedicated device. The fixture path runs the same extent preflight, write,
 fsync, reopen, and digest comparison while rejecting every path beneath
 `/dev`. See [Target-media staging prototype](target-media-staging-prototype.md).
 
-An optional physical compatibility exercise uses a fresh unfused Pi, never
-supplies an OTP- or EEPROM-programming bundle, and records the all-zero
-customer-key hash before and after the run. The passive verifier correlates the
-operator-authored record and UART transcript with an in-process, signer-anchored
-capsule verification. Because neither capture is authenticated or fresh, it
-emits `record_consistent:true` but keeps `hardware_observed:false`,
-`security_enforced:false`, and `mutation_eligible:false`.
+A physical compatibility exercise remains blocked until the repository has a
+reviewed outer boot FAT/GPT image and an unfused target mode that emits the
+required UART records. When those exist, the exercise must use a fresh unfused
+Pi, never supply an OTP- or EEPROM-programming bundle, and record the all-zero
+customer-key hash before and after the run. The passive verifier can correlate
+the operator-authored record and UART transcript with an in-process,
+signer-anchored capsule verification, but unauthenticated capture still keeps
+`hardware_observed:false`, `security_enforced:false`, and
+`mutation_eligible:false`.
 
 ## Boundary before any real ownership ceremony
 

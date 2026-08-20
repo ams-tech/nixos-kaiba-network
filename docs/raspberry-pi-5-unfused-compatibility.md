@@ -42,6 +42,73 @@ independently reviewed public metadata and pass
 `signing.kaibaSigning.publicKeyFingerprint` to `mkRpi5UnfusedVerifier` in the
 same way. A runtime flag must never select the trust anchor.
 
+## Nix-built four-role capsule
+
+`mkRpi5VerifiedUnfusedCapsule` is the fail-closed assembly boundary for the
+offline prototype. It accepts only typed Nix-store outputs from
+`mkRpi5VerifiedSignedBoot` and `mkRpi5SecureBootArtifacts`, plus an
+independently reviewed signer fingerprint. The factory constructs the pinned
+verifier itself, and the reviewed fingerprint must match the fingerprint
+retained by the signed-boot signing plan.
+
+The derivation checks that the signed `boot.img` is byte-for-byte identical to
+the boot image in the unsigned artifact set, revalidates that artifact set's
+domain-separated manifest digest, checks all three declared artifact digests,
+extracts the root-integrity record and active command line from the signed FAT
+image, and requires both to select the same dm-verity root hash and devices.
+It runs `veritysetup verify` over the final copied root-data and root-hash
+images, then emits this exact tree:
+
+```text
+capsule/
+├── boot.img
+├── boot.sig
+└── nvme/
+    ├── root-data.img
+    └── root-hash.img
+```
+
+The public key and evidence stay outside `capsule/`, because any extra entry in
+the capsule tree is rejected:
+
+```text
+capsule-manifest.json
+compatibility-result.json
+public.pem
+unfused-fixture.json
+```
+
+The repository profile exposes a release-bound helper that selects its reviewed
+signing plan, unsigned artifact set, and development signer metadata. Instantiate
+it only after the two-file public `signedOutput` from the signing ceremony has
+been placed in the Nix store as shown in the signed-boot workflow:
+
+```nix
+packages.x86_64-linux.verified-unfused-capsule =
+  kaiba.lib.mkRpi5PrototypeVerifiedUnfusedCapsule {
+    inherit signedOutput;
+  };
+```
+
+Other deployments can use `mkRpi5VerifiedUnfusedCapsule` directly, but must
+supply their independently reviewed `trustedPublicKeyFingerprint` as well as
+the typed verified-boot and unsigned-artifact outputs. The factory constructs
+the signer-pinned verifier internally.
+
+Build the resulting package and inspect its already verified result:
+
+```console
+nix build path:.#verified-unfused-capsule \
+  --out-link result-verified-unfused-capsule
+jq . result-verified-unfused-capsule/compatibility-result.json
+```
+
+The fixture deliberately sets the complete compatibility sequence to true so
+the offline contract can be exercised. It is synthetic, is named as such, and
+cannot establish that any Pi booted. The derivation metadata and result keep
+hardware observation, security enforcement, mutation eligibility, block-device
+access, EEPROM programming, and OTP capability false.
+
 The signer-pinned command requires the canonical three-line Raspberry Pi
 `boot.sig`, checks that its first line is the manifest-bound SHA-256 of
 `boot.img`, and verifies its RSA-2048 PKCS#1 v1.5/SHA-256 signature with the
