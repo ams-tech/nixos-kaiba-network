@@ -51,6 +51,16 @@ assert lib.assertMsg (
 ) "the prototype unsigned artifact set differs from its reviewed release metadata";
 pkgs.runCommand "kaiba-rpi5-prototype-release-review"
   {
+    # Preserve the Nix path context for every public input consumed below.
+    # In particular, the reviewed key is nested under the flake source and
+    # must be mounted explicitly in the sandbox.
+    unsignedArtifactsInput = unsignedArtifacts;
+    signingPlanInput = signingPlan;
+    reviewedPublicKeyInput = reviewedPublicKeyPEM;
+    customerPublicKeyBinaryInput = signingContract.customerPublicKeyBinary;
+    customerKeyHashFileInput = signingContract.customerKeyHashFile;
+    signerPolicyJSONInput = signingContract.signerPolicyJSON;
+    signerPolicyDigestFileInput = signingContract.signerPolicyDigestFile;
     nativeBuildInputs = with pkgs; [
       check-jsonschema
       coreutils
@@ -79,13 +89,13 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
     set -euo pipefail
     export LC_ALL=C
 
-    readonly unsigned=${lib.escapeShellArg (toString unsignedArtifacts)}
-    readonly plan=${lib.escapeShellArg (toString signingPlan)}
-    readonly reviewed_key=${lib.escapeShellArg (toString reviewedPublicKeyPEM)}
-    readonly customer_key_binary=${lib.escapeShellArg signingContract.customerPublicKeyBinary}
-    readonly customer_key_hash_file=${lib.escapeShellArg signingContract.customerKeyHashFile}
-    readonly signer_policy_json_path=${lib.escapeShellArg signingContract.signerPolicyJSON}
-    readonly signer_policy_digest_file=${lib.escapeShellArg signingContract.signerPolicyDigestFile}
+    readonly unsigned="$unsignedArtifactsInput"
+    readonly plan="$signingPlanInput"
+    readonly reviewed_key="$reviewedPublicKeyInput"
+    readonly customer_key_binary="$customerPublicKeyBinaryInput"
+    readonly customer_key_hash_file="$customerKeyHashFileInput"
+    readonly signer_policy_json_path="$signerPolicyJSONInput"
+    readonly signer_policy_digest_file="$signerPolicyDigestFileInput"
 
     test -d "$unsigned"
     test ! -L "$unsigned"
