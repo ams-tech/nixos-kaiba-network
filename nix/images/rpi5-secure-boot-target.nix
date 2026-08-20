@@ -7,6 +7,7 @@
   config,
   lib,
   modulesPath,
+  pkgs,
   ...
 }:
 
@@ -37,7 +38,14 @@
 
   documentation.enable = false;
   networking.hostName = "kaiba-rpi5-secure-target";
-  nix.enable = false;
+  nix = {
+    enable = false;
+    # The generic SD-image builder still invokes nix-store and nix-env to
+    # initialize the filesystem database. The modular CLI output supplies
+    # those commands without pulling the manual and full Nix test aggregate
+    # into this native AArch64 image-construction dependency.
+    package = pkgs.nix.nix-cli;
+  };
 
   boot.loader.raspberry-pi = {
     bootloader = "kernel";

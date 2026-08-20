@@ -54,6 +54,9 @@ assert lib.assertMsg (
   !cfg.nix.enable && cfg.system.disableInstallerTools && !cfg.documentation.enable
 ) "the immutable target still contains Nix, installer tooling, or generated documentation";
 assert lib.assertMsg (
+  cfg.nix.package == target.nixosSystem.pkgs.nix.nix-cli
+) "the image builder is using the full Nix manual and test aggregate instead of the modular CLI";
+assert lib.assertMsg (
   cfg.systemd.services.kaiba-secure-boot-evidence.serviceConfig.StandardOutput == "journal+console"
   && cfg.systemd.services.kaiba-secure-boot-evidence.serviceConfig.StandardError == "journal+console"
 ) "secure-boot evidence is not routed to the UART-backed kernel console";
