@@ -1255,9 +1255,9 @@ let
         test -x ${built.rehearsal}/bin/kaiba-provision-rehearsal
         test '${built.rehearsal.kaibaRehearsal.authority}' = \
           'rehearsal_only_non_authoritative'
-        test '${toString built.rehearsal.kaibaRehearsal.hardwareAccess}' = 'false'
-        test '${toString built.rehearsal.kaibaRehearsal.mutationCapable}' = 'false'
-        test '${toString built.rehearsal.kaibaRehearsal.otpCapable}' = 'false'
+        test '${builtins.toJSON built.rehearsal.kaibaRehearsal.hardwareAccess}' = 'false'
+        test '${builtins.toJSON built.rehearsal.kaibaRehearsal.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.rehearsal.kaibaRehearsal.otpCapable}' = 'false'
         ${built.rehearsal}/bin/kaiba-provision-rehearsal \
           --rehearsal-id nix-contract > "$TMPDIR/rehearsal.json"
         jq -e '
@@ -1271,17 +1271,17 @@ let
           and ([.evidence[].otp_write_attempted] | all(. == false))
         ' "$TMPDIR/rehearsal.json" > /dev/null
         if strings ${built.rehearsal}/bin/kaiba-provision-rehearsal \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)'; then
           echo 'software rehearsal binary links a physical provisioning package' >&2
           exit 1
         fi
         test -x ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal
         test '${built.integratedRehearsal.kaibaIntegratedRehearsal.authority}' = 'non_authoritative'
         test '${built.integratedRehearsal.kaibaIntegratedRehearsal.executionMode}' = 'software_only'
-        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.directHardwareAccess}' = 'false'
-        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.mutationCapable}' = 'false'
-        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.oneTimeSettingCapable}' = 'false'
-        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.otpCapable}' = 'false'
+        test '${builtins.toJSON built.integratedRehearsal.kaibaIntegratedRehearsal.directHardwareAccess}' = 'false'
+        test '${builtins.toJSON built.integratedRehearsal.kaibaIntegratedRehearsal.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.integratedRehearsal.kaibaIntegratedRehearsal.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON built.integratedRehearsal.kaibaIntegratedRehearsal.otpCapable}' = 'false'
         ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal \
           --state-dir "$TMPDIR/integrated-rehearsal-state" \
           --rehearsal-id nix-integrated > "$TMPDIR/integrated-rehearsal.json"
@@ -1300,58 +1300,58 @@ let
           and .simulation.outcome == "rehearsal_passed"
         ' "$TMPDIR/integrated-rehearsal.json" > /dev/null
         if strings ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal \
-          | grep -E 'internal/provisioning/(physicalrpi5|rpi5)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|rpi5)([./]|$)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
           echo 'integrated rehearsal links a live physical provisioning capability' >&2
           exit 1
         fi
         test -x ${built.unfusedCompat}/bin/kaiba-provision-unfused-compat
         test '${built.unfusedCompat.kaibaUnfusedCompatibility.evidenceMode}' = \
           'offline_fixture'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.hardwareAccess}' = 'false'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.mutationCapable}' = 'false'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.otpCapable}' = 'false'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.securityEnforcementClaim}' = 'false'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.signerTrustAnchored}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.hardwareAccess}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.otpCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.securityEnforcementClaim}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.signerTrustAnchored}' = 'false'
         if strings ${built.unfusedCompat}/bin/kaiba-provision-unfused-compat \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset'; then
           echo 'unfused compatibility verifier links a physical provisioning capability' >&2
           exit 1
         fi
         test -x ${built.unfusedEvidence}/bin/kaiba-provision-unfused-evidence
         test '${built.unfusedEvidence.kaibaUnfusedEvidence.evidenceMode}' = \
           'offline_operator_correlation'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.captureAuthenticated}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.directHardwareAccess}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.hardwareObservationClaim}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.mutationCapable}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.oneTimeSettingCapable}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.otpCapable}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.securityEnforcementClaim}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.signerTrustAnchored}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.captureAuthenticated}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.directHardwareAccess}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.hardwareObservationClaim}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.otpCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.securityEnforcementClaim}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.signerTrustAnchored}' = 'false'
         if strings ${built.unfusedEvidence}/bin/kaiba-provision-unfused-evidence \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
           echo 'unfused evidence verifier links a live physical provisioning capability' >&2
           exit 1
         fi
         test -x ${unfusedVerifierFixture}/bin/kaiba-provision-unfused-compat
         test -x ${unfusedVerifierFixture}/bin/kaiba-provision-unfused-evidence
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.signerTrustAnchored}' = 'true'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.signerTrustAnchored}' = 'true'
         test '${unfusedVerifierFixture.kaibaUnfusedVerifier.trustedPublicKeyFingerprint}' = \
           '${developmentYubiKeyPublicKeyFingerprint}'
         test '${unfusedVerifierFixture.kaibaUnfusedVerifier.evidenceMode}' = \
           'offline_operator_correlation'
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.captureAuthenticated}' = 'false'
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.hardwareObservationClaim}' = 'false'
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.oneTimeSettingCapable}' = 'false'
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.securityEnforcementClaim}' = 'false'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.captureAuthenticated}' = 'false'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.hardwareObservationClaim}' = 'false'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.securityEnforcementClaim}' = 'false'
         test -x ${built.mediaStager}/bin/kaiba-provision-media-stager
-        test '${toString built.mediaStager.kaibaMediaStager.blockDeviceWriteCapable}' = 'true'
-        test '${toString built.mediaStager.kaibaMediaStager.oneTimeSettingCapable}' = 'false'
-        test '${toString built.mediaStager.kaibaMediaStager.otpCapable}' = 'false'
-        test '${toString built.mediaStager.kaibaMediaStager.eepromProgrammingCapable}' = 'false'
-        test '${toString built.mediaStager.kaibaMediaStager.fixtureModeAvailable}' = 'true'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.blockDeviceWriteCapable}' = 'true'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.otpCapable}' = 'false'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.eepromProgrammingCapable}' = 'false'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.fixtureModeAvailable}' = 'true'
         if strings ${built.mediaStager}/bin/kaiba-provision-media-stager \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset'; then
           echo 'media stager links a Pi ownership or lane-control capability' >&2
           exit 1
         fi
