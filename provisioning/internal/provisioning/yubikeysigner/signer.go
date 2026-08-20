@@ -64,7 +64,7 @@ func (s *Signer) Sign(ctx context.Context, inputPath string) ([]byte, error) {
 		return nil, fmt.Errorf("prepare signature output: %w", err)
 	}
 
-	credentialIdentity, err := validateCredential(s.pinPath, s.runtimeOwnerUID)
+	credentialIdentity, err := s.credentialValidator(s.pinPath, s.trustedOwnerUID, s.runtimeOwnerUID)
 	if err != nil {
 		return nil, fmt.Errorf("PIN credential: %w", err)
 	}
