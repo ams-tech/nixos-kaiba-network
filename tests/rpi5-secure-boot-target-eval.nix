@@ -51,6 +51,9 @@ assert lib.assertMsg (
   cfg.systemd.sysusers.enable && !cfg.system.switch.enable
 ) "the immutable target still depends on classic mutable activation or switching";
 assert lib.assertMsg (
+  !cfg.nix.enable && cfg.system.disableInstallerTools && !cfg.documentation.enable
+) "the immutable target still contains Nix, installer tooling, or generated documentation";
+assert lib.assertMsg (
   cfg.systemd.services.kaiba-secure-boot-evidence.serviceConfig.StandardOutput == "journal+console"
   && cfg.systemd.services.kaiba-secure-boot-evidence.serviceConfig.StandardError == "journal+console"
 ) "secure-boot evidence is not routed to the UART-backed kernel console";

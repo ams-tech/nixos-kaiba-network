@@ -35,7 +35,9 @@
     inherit expectedCustomerKeyHash sourceRevision;
   };
 
+  documentation.enable = false;
   networking.hostName = "kaiba-rpi5-secure-target";
+  nix.enable = false;
 
   boot.loader.raspberry-pi = {
     bootloader = "kernel";
@@ -82,6 +84,7 @@
       enable = true;
       mutable = false;
     };
+    disableInstallerTools = true;
     stateVersion = "26.05";
     switch.enable = false;
   };
