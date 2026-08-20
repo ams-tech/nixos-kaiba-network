@@ -243,6 +243,34 @@
           sourceDateEpoch = self.lastModified;
           sourceRevision = defaultTargetSourceRevision;
         };
+
+      mkRpi5PrototypeVerifiedUnfusedCapsule =
+        {
+          signedOutput,
+          capsuleID ? "capsule:rpi5-prototype:${builtins.substring 0 12 defaultTargetSourceRevision}",
+          fixtureID ? "${capsuleID}:synthetic",
+          name ? "kaiba-rpi5-prototype-verified-unfused-capsule",
+        }:
+        let
+          system = "x86_64-linux";
+          developmentSigning = developmentSigningFor system;
+          verifiedSignedBoot = provisioning.lib.mkRpi5VerifiedSignedBoot {
+            inherit system signedOutput;
+            name = "${name}-signed-boot";
+            signingPlan = rpi5PrototypeRelease.signingPlan;
+          };
+        in
+        provisioning.lib.mkRpi5VerifiedUnfusedCapsule {
+          inherit
+            capsuleID
+            fixtureID
+            name
+            system
+            verifiedSignedBoot
+            ;
+          trustedPublicKeyFingerprint = developmentSigning.metadata.publicKeyFingerprint;
+          unsignedArtifacts = rpi5PrototypeRelease.unsignedArtifacts;
+        };
     in
     {
       nixosModules = {
@@ -272,7 +300,11 @@
       };
 
       lib = provisioning.lib // {
-        inherit mkRpi5SecureBootTarget rpi5SecureBootFirmwareAllowlist;
+        inherit
+          mkRpi5PrototypeVerifiedUnfusedCapsule
+          mkRpi5SecureBootTarget
+          rpi5SecureBootFirmwareAllowlist
+          ;
       };
 
       packages = forAllSystems (
@@ -371,6 +403,7 @@
           provisioning-test-result = provisioning.checks.${system}.provisioning-test-result;
           station-ui = provisioning.checks.${system}.station-ui;
           rpiboot-metadata-stdout = provisioning.checks.${system}.rpiboot-metadata-stdout;
+          rpi5-unfused-capsule = provisioning.checks.${system}.unfused-capsule;
           rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
           secure-boot-artifacts = provisioning.checks.${system}.secure-boot-artifacts;
           signed-boot-plan = provisioning.checks.${system}.signed-boot-plan;

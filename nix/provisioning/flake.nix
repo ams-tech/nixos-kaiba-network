@@ -77,6 +77,10 @@
         mkRpi5VerifiedSignedBoot =
           { system, ... }@args:
           (packagesFor system).mkRpi5VerifiedSignedBoot (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5VerifiedUnfusedCapsule =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5VerifiedUnfusedCapsule (builtins.removeAttrs args [ "system" ]);
       };
 
       packages = forAllSystems (
@@ -128,6 +132,7 @@
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           secure-boot-artifacts = provisioning.secureBootArtifactContract;
           signed-boot-plan = provisioning.signedBootPlanContract;
+          unfused-capsule = provisioning.unfusedCapsuleContract;
           station-ui =
             pkgs.runCommand "kaiba-provisioning-station-ui-check"
               {

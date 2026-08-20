@@ -431,6 +431,12 @@ let
   };
   inherit (signedBootFactories) mkRpi5BootSigningPlan mkRpi5VerifiedSignedBoot;
 
+  unfusedCapsuleFactories = import ./unfused-capsule.nix {
+    inherit lib pkgs mkRpi5UnfusedVerifier;
+    unsignedArtifactSchema = goSource + "/schemas/unsigned-artifact-set-v1alpha1.schema.json";
+  };
+  inherit (unfusedCapsuleFactories) mkRpi5VerifiedUnfusedCapsule;
+
   # Produces the only lane-guard build that can cross the mutation boundary.
   # Every executable, payload, and expected digest is fixed into the binary;
   # runtime JSON can select only a typed operation already present in its
@@ -856,6 +862,7 @@ in
     mkRpi5PhysicalLaneGuard
     mkRpi5UnfusedVerifier
     mkRpi5VerifiedSignedBoot
+    mkRpi5VerifiedUnfusedCapsule
     provision
     rehearsal
     rpiboot
