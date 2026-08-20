@@ -219,6 +219,12 @@
             provisioning.packages.${system}.provisioning-suite
           ];
         };
+
+      developmentSigningFor =
+        system:
+        import ./nix/development-signing.nix {
+          inherit provisioning system;
+        };
     in
     {
       nixosModules = {
@@ -253,8 +259,12 @@
 
       packages = forAllSystems (
         system:
+        let
+          developmentSigning = developmentSigningFor system;
+        in
         {
           default = compatibilitySuiteFor system;
+          rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
           inherit (dns.packages.${system})
             kaiba-agent
             kaiba-controller
@@ -282,6 +292,7 @@
             ;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
+          development-signing = developmentSigning.signing;
           inherit (dns.packages.${system})
             dns-schema-gate
             dns-security-gate
@@ -301,6 +312,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
+          developmentSigning = developmentSigningFor system;
           laneGuardFixtureBundle = "${provisioning.packages.${system}.rpi5-probe-bundle}/bundle";
           laneGuardFixture = provisioning.lib.mkRpi5PhysicalLaneGuard {
             inherit system;
@@ -338,6 +350,7 @@
           provisioning-test-result = provisioning.checks.${system}.provisioning-test-result;
           station-ui = provisioning.checks.${system}.station-ui;
           rpiboot-metadata-stdout = provisioning.checks.${system}.rpiboot-metadata-stdout;
+          rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
           secure-boot-artifacts = provisioning.checks.${system}.secure-boot-artifacts;
           signed-boot-plan = provisioning.checks.${system}.signed-boot-plan;
           ci-workflow =
@@ -357,6 +370,7 @@
               '';
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
+          development-signing = developmentSigning.signing;
           report-unit = dns.checks.${system}.report-unit;
           dns-schema = dns.checks.${system}.dns-schema;
           dns-topology = dns.checks.${system}.dns-topology;
