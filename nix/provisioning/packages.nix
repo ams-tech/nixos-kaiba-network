@@ -145,6 +145,35 @@ let
     doCheck = false;
   };
 
+  # This generic command can finalize public signed-boot records, but it is
+  # deliberately built without a signing backend or private-key locator. A
+  # separately configured runtime package may submit a prepared request to an
+  # approval-gated signer; Nix derivations only consume the resulting public
+  # record.
+  signedBootTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-sign-boot";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-sign-boot" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaSignedBootTool = {
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-sign-boot";
+      description = "Public signing-plan and signed-boot bundle verifier";
+      platforms = lib.platforms.linux;
+    };
+  };
+
   # Keep the software-only rehearsal in its own derivation.  In particular,
   # do not symlink it from serviceSuite: that output also contains the lane
   # guard and would make the closure boundary impossible to audit.
@@ -240,6 +269,36 @@ let
     meta = {
       mainProgram = "kaiba-provision-media-stager";
       description = "Fail-closed target-media writer with reopened digest readback";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  # Snapshot only a no-follow, exclusively locked regular-file fixture. Keep
+  # this helper separate from the block-device-capable media stager so the
+  # synthetic verifier does not acquire device-write capability in its closure.
+  fixtureSnapshot = pkgs.buildGoModule {
+    pname = "kaiba-provision-fixture-snapshot";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-fixture-snapshot" ];
+    vendorHash = null;
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      go test ./internal/provisioning/fixturesnapshot ./cmd/kaiba-provision-fixture-snapshot
+      runHook postCheck
+    '';
+    passthru.kaibaFixtureSnapshot = {
+      blockDeviceAccess = false;
+      directHardwareAccess = false;
+      destinationFileWriteCapable = true;
+      mutationCapable = false;
+      regularFileOnly = true;
+      sourceWriteCapable = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-fixture-snapshot";
+      description = "No-follow, locked snapshot helper for regular-file media fixtures";
       platforms = lib.platforms.linux;
     };
   };
@@ -397,6 +456,27 @@ let
   storeBacked =
     value: cleanAbsolute (toString value) && lib.hasPrefix "${builtins.storeDir}/" (toString value);
 
+  signedBootFactories = import ./signed-boot.nix {
+    inherit lib pkgs signedBootTool;
+  };
+  inherit (signedBootFactories) mkRpi5BootSigningPlan mkRpi5VerifiedSignedBoot;
+
+  unfusedCapsuleFactories = import ./unfused-capsule.nix {
+    inherit lib pkgs mkRpi5UnfusedVerifier;
+    unsignedArtifactSchema = goSource + "/schemas/unsigned-artifact-set-v1alpha1.schema.json";
+  };
+  inherit (unfusedCapsuleFactories) mkRpi5VerifiedUnfusedCapsule;
+
+  mediaStagingFixtureFactories = import ./media-staging-fixture.nix {
+    inherit
+      fixtureSnapshot
+      lib
+      mediaStager
+      pkgs
+      ;
+  };
+  inherit (mediaStagingFixtureFactories) mkRpi5MediaStagingFixture;
+
   # Produces the only lane-guard build that can cross the mutation boundary.
   # Every executable, payload, and expected digest is fixed into the binary;
   # runtime JSON can select only a typed operation already present in its
@@ -490,6 +570,7 @@ let
       publicKeyFingerprint,
       publicKeyPEM,
       signerID,
+      signerPolicyDigest,
       tokenSerial,
       name ? "kaiba-development-yubikey-signing",
     }:
@@ -500,6 +581,8 @@ let
     ) "tokenSerial must contain 1 to 16 decimal digits";
     assert lib.assertMsg (canonicalDigest publicKeyFingerprint)
       "publicKeyFingerprint must use canonical sha256:<64 lowercase hex> form";
+    assert lib.assertMsg (canonicalDigest signerPolicyDigest)
+      "signerPolicyDigest must use canonical sha256:<64 lowercase hex> form";
     assert lib.assertMsg (canonicalRawDigest expectedCustomerKeyHash)
       "expectedCustomerKeyHash must contain 64 lowercase hexadecimal characters";
     assert lib.assertMsg (storeBacked publicKeyPEM) "publicKeyPEM must be a fixed Nix-store path";
@@ -520,6 +603,7 @@ let
             nativeBuildInputs = [
               customerKeyPython
               pkgs.coreutils
+              pkgs.jq
             ];
           }
           ''
@@ -539,12 +623,51 @@ let
               exit 1
             fi
 
+            signer_policy_json="$(
+              jq \
+                --null-input \
+                --compact-output \
+                --arg schema_version 'kaiba.provisioning.yubikey-signing-policy/v1alpha1' \
+                --arg signer_id '${signerID}' \
+                --arg cohort_id '${cohortID}' \
+                --arg provider 'yubikey-piv' \
+                --arg piv_slot '9c' \
+                --arg pkcs11_uri '${pkcs11URI}' \
+                --arg public_key_fingerprint '${publicKeyFingerprint}' \
+                --arg key_algorithm 'rsa-2048' \
+                '{
+                  schema_version: $schema_version,
+                  signer_id: $signer_id,
+                  cohort_id: $cohort_id,
+                  provider: $provider,
+                  piv_slot: $piv_slot,
+                  pkcs11_uri: $pkcs11_uri,
+                  public_key_fingerprint: $public_key_fingerprint,
+                  key_algorithm: $key_algorithm,
+                  pin_required: true,
+                  touch_required: true,
+                  private_key_exportable: false
+                }'
+            )"
+            actual_signer_policy_digest="sha256:$({
+              printf '%s\0' 'kaiba.provisioning.yubikey-signing-policy.v1alpha1'
+              printf '%s' "$signer_policy_json"
+            } | sha256sum | cut -d ' ' -f 1)"
+            if test "$actual_signer_policy_digest" != '${signerPolicyDigest}'; then
+              echo "configured signerPolicyDigest does not match the canonical YubiKey policy" >&2
+              exit 1
+            fi
+
             mkdir -p "$out/share/kaiba"
             install -m 0444 \
               "$TMPDIR/customer-public-key.bin" \
               "$out/share/kaiba/customer-public-key.bin"
             printf '%s\n' "$actual_customer_key_hash" \
               > "$out/share/kaiba/customer-key-hash"
+            printf '%s\n' "$signer_policy_json" \
+              > "$out/share/kaiba/signer-policy.json"
+            printf '%s\n' "$actual_signer_policy_digest" \
+              > "$out/share/kaiba/signer-policy-digest"
           '';
       opensslConfiguration = pkgs.writeText "kaiba-yubikey-openssl.cnf" ''
         config_diagnostics = 1
@@ -625,11 +748,24 @@ let
           "-X=main.developmentPublicKeyFingerprint=${publicKeyFingerprint}"
         ];
       };
+      signedBoot = buildCommand {
+        pname = "${name}-sign-boot";
+        subPackage = "cmd/kaiba-provision-sign-boot";
+        ldflags = [
+          "-X=main.signingGateSocketPath=${socketPath}"
+          "-X=main.signerID=${signerID}"
+          "-X=main.cohortID=${cohortID}"
+          "-X=main.signingPKCS11URI=${pkcs11URI}"
+          "-X=main.expectedPublicKeyPath=${toString publicKeyPEM}"
+          "-X=main.expectedPublicKeyFingerprint=${publicKeyFingerprint}"
+        ];
+      };
     in
     pkgs.symlinkJoin {
       inherit name;
       paths = [
         customerKeyContract
+        signedBoot
         signer
         signingClient
         signingGate
@@ -646,7 +782,9 @@ let
           pinCredentialPath
           pkcs11URI
           publicKeyFingerprint
+          signedBoot
           signerID
+          signerPolicyDigest
           signingClient
           signingGate
           socketPath
@@ -654,8 +792,21 @@ let
           ykcs11Module
           yubiKeyWrapper
           ;
+        signedBootConfiguration = {
+          gateSocketPath = socketPath;
+          inherit
+            cohortID
+            pkcs11URI
+            publicKeyFingerprint
+            signerID
+            ;
+          expectedPublicKeyPath = toString publicKeyPEM;
+          runtimeAuthoritySelectors = false;
+        };
         customerKeyHashFile = "${customerKeyContract}/share/kaiba/customer-key-hash";
         customerPublicKeyBinary = "${customerKeyContract}/share/kaiba/customer-public-key.bin";
+        signerPolicyDigestFile = "${customerKeyContract}/share/kaiba/signer-policy-digest";
+        signerPolicyJSON = "${customerKeyContract}/share/kaiba/signer-policy.json";
       };
       meta = {
         mainProgram = "kaiba-provision-signer";
@@ -747,8 +898,12 @@ in
     liveStation
     mediaStager
     mkDevelopmentYubiKeySigning
+    mkRpi5BootSigningPlan
     mkRpi5PhysicalLaneGuard
+    mkRpi5MediaStagingFixture
     mkRpi5UnfusedVerifier
+    mkRpi5VerifiedSignedBoot
+    mkRpi5VerifiedUnfusedCapsule
     provision
     rehearsal
     rpiboot
@@ -763,6 +918,7 @@ in
     signerFoundation
     signingClientFoundation
     signingGateFoundation
+    signedBootTool
     suite
     yubiKeyWrapperFoundation
     ;

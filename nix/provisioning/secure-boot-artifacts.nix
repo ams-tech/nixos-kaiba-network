@@ -81,6 +81,28 @@ pkgs.runCommand name
       jq
       mtools
     ];
+    passthru.kaibaUnsignedArtifacts = {
+      inherit
+        bootCommandLinePath
+        bootImageSizeMiB
+        bootOrderPolicy
+        dataDevice
+        expectedCustomerKeyHash
+        firmwareAllowlist
+        hashDevice
+        sourceRevision
+        ;
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      schemaVersion = "provisioning.kaiba.network/unsigned-artifact-set/v1alpha1";
+      signingAuthorityConfigured = false;
+      signingStatus = "unsigned";
+    };
     preferLocalBuild = true;
   }
   ''

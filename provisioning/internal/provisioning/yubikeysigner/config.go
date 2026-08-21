@@ -46,15 +46,17 @@ type Config struct {
 // Signer signs exactly one file snapshot through the fixed YubiKey object and
 // verifies the returned RSA signature against the fixed public key.
 type Signer struct {
-	opensslPath       string
-	opensslConfigPath string
-	pkcs11URI         string
-	pinPath           string
-	temporaryRoot     string
-	publicKeyPEM      []byte
-	runtimeOwnerUID   uint32
-	timeout           time.Duration
-	runner            Runner
+	opensslPath         string
+	opensslConfigPath   string
+	pkcs11URI           string
+	pinPath             string
+	temporaryRoot       string
+	publicKeyPEM        []byte
+	trustedOwnerUID     uint32
+	runtimeOwnerUID     uint32
+	credentialValidator func(string, uint32, uint32) (fileIdentity, error)
+	timeout             time.Duration
+	runner              Runner
 }
 
 func New(config Config) (*Signer, error) {
@@ -123,8 +125,10 @@ func New(config Config) (*Signer, error) {
 		opensslPath: config.OpenSSLPath, opensslConfigPath: config.OpenSSLConfigPath,
 		pkcs11URI: config.PKCS11URI, pinPath: config.PINCredentialPath,
 		temporaryRoot: config.PrivateTemporaryRootPath,
-		publicKeyPEM:  bytes.Clone(publicKeyPEM), runtimeOwnerUID: config.RuntimeOwnerUID,
-		timeout: config.OperationTimeout, runner: config.Runner,
+		publicKeyPEM:  bytes.Clone(publicKeyPEM), trustedOwnerUID: config.TrustedOwnerUID,
+		runtimeOwnerUID:     config.RuntimeOwnerUID,
+		credentialValidator: validateCredential,
+		timeout:             config.OperationTimeout, runner: config.Runner,
 	}, nil
 }
 

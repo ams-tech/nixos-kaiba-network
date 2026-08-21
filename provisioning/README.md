@@ -20,6 +20,12 @@ module and uses only the Go standard library.
   `kaiba-provision-signing-gate` enforce the immutable approval boundary.
 - `kaiba-provision-yubikey-wrapper` performs the fixed RSA-2048/SHA-256 PIV 9c
   operation through the pinned OpenSSL PKCS#11 provider chain.
+- `kaiba-provision-sign-boot` submits one immutable public boot plan to the
+  fixed signing gate and offline-finalizes its public result. The generic build
+  has no signing authority and can only finalize.
+- `kaiba-provision-media-stager` preflights, writes, and reopens exactly three
+  digest-bound payload extents. Its regular-file fixture mode is the safe
+  rehearsal path; whole-device mode remains an explicit, root-only operation.
 - `kaiba-provision-station` serves the separate live, loopback-only operator
   interface. It never falls back to the browser simulation.
 
@@ -27,6 +33,12 @@ The generic lane and signer binaries are deliberately unconfigured and fail
 closed. A deployment must instantiate `lib.mkRpi5PhysicalLaneGuard` and
 `lib.mkDevelopmentYubiKeySigning`, then use the corresponding NixOS modules.
 The YubiKey PIN is a runtime systemd credential; it is never a Nix value.
+Normal-boot signing additionally uses `lib.mkRpi5BootSigningPlan` and
+`lib.mkRpi5VerifiedSignedBoot`. A signer-verified capsule can be wrapped in a
+deterministic outer FAT/GPT regular-file rehearsal with
+`lib.mkRpi5MediaStagingFixture`; see the
+[signed-boot workflow](../docs/raspberry-pi-5-signed-boot-workflow.md) and
+[media-staging prototype](../docs/target-media-staging-prototype.md).
 
 Command entry points live under `cmd/`. Implementation packages and embedded
 station assets live under `internal/`. Device-class profiles and their schema

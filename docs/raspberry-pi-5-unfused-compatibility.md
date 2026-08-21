@@ -24,61 +24,147 @@ must be one RSA-2048 `PUBLIC KEY` PEM block using exponent 65537, and its
 fingerprint must match that immutable anchor.
 
 In Nix, derive that verifier anchor from the same public metadata as the
-development signing package rather than copying a runtime flag. For example,
-the following complete consuming flake exposes one signer-pinned verifier
-package. Replace the revision and marked deployment values; the customer-key
-hash must match the reviewed public key:
+development signing package rather than copying a runtime flag. The repository
+profile in [`nix/development-signing.nix`](../nix/development-signing.nix)
+does that and exposes a signer-pinned verifier directly. Materialize the named
+result used by both commands in this runbook:
+
+```console
+nix build path:.#rpi5-unfused-verifier \
+  --out-link result-rpi5-unfused-verifier
+verifier_path="$(readlink -f result-rpi5-unfused-verifier)"
+reviewed_public_key="$(readlink -f \
+  provisioning/signers/development-prototype/reviewed-boot-public.pem)"
+```
+
+Other deployments must instantiate `mkDevelopmentYubiKeySigning` with their
+independently reviewed public metadata and pass
+`signing.kaibaSigning.publicKeyFingerprint` to `mkRpi5UnfusedVerifier` in the
+same way. A runtime flag must never select the trust anchor.
+
+## Nix-built four-role capsule
+
+`mkRpi5VerifiedUnfusedCapsule` is the fail-closed assembly boundary for the
+offline prototype. It accepts only typed Nix-store outputs from
+`mkRpi5VerifiedSignedBoot` and `mkRpi5SecureBootArtifacts`, plus an
+independently reviewed signer fingerprint. The factory constructs the pinned
+verifier itself, and the reviewed fingerprint must match the fingerprint
+retained by the signed-boot signing plan.
+
+The derivation checks that the signed `boot.img` is byte-for-byte identical to
+the boot image in the unsigned artifact set, revalidates that artifact set's
+domain-separated manifest digest, checks all three declared artifact digests,
+extracts the root-integrity record and active command line from the signed FAT
+image, and requires both to select the same dm-verity root hash and devices.
+It runs `veritysetup verify` over the final copied root-data and root-hash
+images, then emits this exact tree:
+
+```text
+capsule/
+├── boot.img
+├── boot.sig
+└── nvme/
+    ├── root-data.img
+    └── root-hash.img
+```
+
+The public key and evidence stay outside `capsule/`, because any extra entry in
+the capsule tree is rejected:
+
+```text
+capsule-manifest.json
+compatibility-result.json
+public.pem
+unfused-fixture.json
+```
+
+The repository profile exposes a release-bound helper that selects its reviewed
+signing plan, unsigned artifact set, and development signer metadata. Instantiate
+it only after the two-file public `signedOutput` from the signing ceremony has
+been placed in the Nix store as shown in the signed-boot workflow:
 
 ```nix
-{
-  inputs = {
-    kaiba.url = "github:ams-tech/nixos-kaiba-network/<PINNED_REVISION>";
-    nixpkgs.follows = "kaiba/nixpkgs";
+packages.x86_64-linux.verified-unfused-capsule =
+  kaiba.lib.mkRpi5PrototypeVerifiedUnfusedCapsule {
+    inherit signedOutput;
   };
-
-  outputs = { kaiba, ... }:
-    let
-      system = "x86_64-linux";
-      developmentSigning = kaiba.lib.mkDevelopmentYubiKeySigning {
-        inherit system;
-        name = "kaiba-prototype-signing";
-        cohortID = "cohort:prototype";
-        signerID = "signer:prototype";
-        tokenSerial = "<YUBIKEY_DECIMAL_SERIAL>";
-        publicKeyPEM = ./reviewed-boot-public.pem;
-        publicKeyFingerprint = "sha256:<64_LOWERCASE_HEX_DIGITS>";
-        expectedCustomerKeyHash = "<64_LOWERCASE_HEX_DIGITS>";
-        grantRegistryPath = "/etc/kaiba-provisioning/signing-grants.json";
-      };
-    in
-    {
-      packages.${system}.unfused-verifier =
-        kaiba.lib.mkRpi5UnfusedVerifier {
-          inherit system;
-          trustedPublicKeyFingerprint =
-            developmentSigning.kaibaSigning.publicKeyFingerprint;
-        };
-    };
-}
 ```
 
-Save that expression as `flake.nix` beside `reviewed-boot-public.pem`, then
-materialize the `./result` used by both commands in this runbook:
+Other deployments can use `mkRpi5VerifiedUnfusedCapsule` directly, but must
+supply their independently reviewed `trustedPublicKeyFingerprint` as well as
+the typed verified-boot and unsigned-artifact outputs. The factory constructs
+the signer-pinned verifier internally.
+
+Build the resulting package and inspect its already verified result:
 
 ```console
-nix build .#unfused-verifier
+nix build path:.#verified-unfused-capsule \
+  --out-link result-verified-unfused-capsule
+jq . result-verified-unfused-capsule/compatibility-result.json
 ```
 
-The signer-pinned command verifies the manifest-bound `boot.sig` as RSA PKCS#1
-v1.5/SHA-256 over `boot.img` and emits a domain-separated receipt that includes
-the signer-policy digest:
+The fixture deliberately sets the complete compatibility sequence to true so
+the offline contract can be exercised. It is synthetic, is named as such, and
+cannot establish that any Pi booted. The derivation metadata and result keep
+hardware observation, security enforcement, mutation eligibility, block-device
+access, EEPROM programming, and OTP capability false.
+
+## Synthetic outer-media fixture
+
+The four-role capsule is not directly bootable whole-device media. After it is
+verified, `mkRpi5MediaStagingFixture` can wrap its inner `boot.img` and
+`boot.sig` in a deterministic outer FAT and construct a regular-file GPT
+rehearsal:
+
+```nix
+packages.x86_64-linux.media-staging-fixture =
+  kaiba.lib.mkRpi5MediaStagingFixture {
+    system = "x86_64-linux";
+    verifiedCapsule = verifiedUnfusedCapsule;
+  };
+```
+
+The outer FAT contains exactly these three regular files:
+
+```text
+config.txt
+boot.img
+boot.sig
+```
+
+`config.txt` contains only `boot_ramdisk=1`. The factory binds the other two
+files to the verified capsule, constructs deterministic primary and backup GPT
+metadata around fixed boot, root-data, and root-hash extents, and exposes the
+fixture-only `kaiba-provision-media-fixture` command. Its safe sequence is:
+
+1. `init --workspace /absolute/new/workspace` to create `target.img` and its
+   exact `fixture-plan.json`;
+2. run the generic media stager's `fixture-dry-run`, `fixture-stage`, and
+   `fixture-readback` commands with that plan; and
+3. `verify --workspace /absolute/new/workspace` to take a locked regular-file
+   snapshot and inspect its raw GPT regions, complete partition digests, FAT
+   allowlist and payloads, extent digests, and dm-verity pair.
+
+The detailed commands are in the [target-media staging prototype]. The factory
+and fixture commands accept only regular-file rehearsal state; they do not
+select or write a block device. Although the final fixture verifier checks the
+expected GPT structure, the generic staging plan and receipt bind only the three
+payload extents, not GPT metadata. A successful run makes no cold-power,
+hardware-observation, live-boot, secure-boot-enforcement, EEPROM, or OTP claim.
+It is not SB-04 ceremony evidence.
+
+The signer-pinned command requires the canonical three-line Raspberry Pi
+`boot.sig`, checks that its first line is the manifest-bound SHA-256 of
+`boot.img`, and verifies its RSA-2048 PKCS#1 v1.5/SHA-256 signature with the
+reviewed key. It emits a domain-separated receipt that includes the
+signer-policy digest:
 
 ```console
-./result/bin/kaiba-provision-unfused-compat verify-signed-offline-fixture \
+"$verifier_path/bin/kaiba-provision-unfused-compat" verify-signed-offline-fixture \
   --manifest /absolute/path/capsule-manifest.json \
   --capsule-root /absolute/path/capsule \
   --fixture /absolute/path/unfused-fixture.json \
-  --public-key /absolute/path/reviewed-boot-public.pem
+  --public-key "$reviewed_public_key"
 ```
 
 A successful result is always limited to:
@@ -121,11 +207,11 @@ The UART transcript must contain exactly one capsule-bound compatibility record
 and exactly one root-data/root-hash-bound dm-verity record. Then run:
 
 ```console
-./result/bin/kaiba-provision-unfused-evidence verify-operator-observation \
+"$verifier_path/bin/kaiba-provision-unfused-evidence" verify-operator-observation \
   --manifest /absolute/path/capsule-manifest.json \
   --capsule-root /absolute/path/capsule \
   --fixture /absolute/path/unfused-fixture.json \
-  --public-key /absolute/path/reviewed-boot-public.pem \
+  --public-key "$reviewed_public_key" \
   --observation /absolute/path/operator-observation.json \
   --uart-capture /absolute/path/uart.txt
 ```
@@ -159,3 +245,5 @@ allowed to carry an OTP or EEPROM programming bundle. The current unfused files
 can support operator correlation, but live hardware provenance and
 customer-signature enforcement remain unproven until the authenticated
 collector and separately reviewed irreversible ceremony exist.
+
+[target-media staging prototype]: target-media-staging-prototype.md

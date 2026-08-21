@@ -219,6 +219,58 @@
             provisioning.packages.${system}.provisioning-suite
           ];
         };
+
+      developmentSigningFor =
+        system:
+        import ./nix/development-signing.nix {
+          inherit provisioning system;
+        };
+
+      rpi5PrototypeRelease =
+        let
+          system = "x86_64-linux";
+          pkgs = import nixpkgs { inherit system; };
+        in
+        import ./nix/rpi5-prototype-release.nix {
+          developmentSigning = developmentSigningFor system;
+          inherit
+            lib
+            mkRpi5SecureBootTarget
+            pkgs
+            provisioning
+            system
+            ;
+          sourceDateEpoch = self.lastModified;
+          sourceRevision = defaultTargetSourceRevision;
+        };
+
+      mkRpi5PrototypeVerifiedUnfusedCapsule =
+        {
+          signedOutput,
+          capsuleID ? "capsule:rpi5-prototype:${builtins.substring 0 12 defaultTargetSourceRevision}",
+          fixtureID ? "${capsuleID}:synthetic",
+          name ? "kaiba-rpi5-prototype-verified-unfused-capsule",
+        }:
+        let
+          system = "x86_64-linux";
+          developmentSigning = developmentSigningFor system;
+          verifiedSignedBoot = provisioning.lib.mkRpi5VerifiedSignedBoot {
+            inherit system signedOutput;
+            name = "${name}-signed-boot";
+            signingPlan = rpi5PrototypeRelease.signingPlan;
+          };
+        in
+        provisioning.lib.mkRpi5VerifiedUnfusedCapsule {
+          inherit
+            capsuleID
+            fixtureID
+            name
+            system
+            verifiedSignedBoot
+            ;
+          trustedPublicKeyFingerprint = developmentSigning.metadata.publicKeyFingerprint;
+          unsignedArtifacts = rpi5PrototypeRelease.unsignedArtifacts;
+        };
     in
     {
       nixosModules = {
@@ -248,13 +300,21 @@
       };
 
       lib = provisioning.lib // {
-        inherit mkRpi5SecureBootTarget rpi5SecureBootFirmwareAllowlist;
+        inherit
+          mkRpi5PrototypeVerifiedUnfusedCapsule
+          mkRpi5SecureBootTarget
+          rpi5SecureBootFirmwareAllowlist
+          ;
       };
 
       packages = forAllSystems (
         system:
+        let
+          developmentSigning = developmentSigningFor system;
+        in
         {
           default = compatibilitySuiteFor system;
+          rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
           inherit (dns.packages.${system})
             kaiba-agent
             kaiba-controller
@@ -271,6 +331,7 @@
             kaiba-provision-signer-foundation
             kaiba-provision-signing-client-foundation
             kaiba-provision-signing-gate-foundation
+            kaiba-provision-sign-boot
             kaiba-provision-station
             kaiba-provision-station-demo
             kaiba-provision-station-pages
@@ -281,6 +342,9 @@
             ;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
+          development-signing = developmentSigning.signing;
+          rpi5-prototype-release-review = rpi5PrototypeRelease.review;
+          rpi5-prototype-signing-plan = rpi5PrototypeRelease.signingPlan;
           inherit (dns.packages.${system})
             dns-schema-gate
             dns-security-gate
@@ -293,6 +357,7 @@
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
           rpi5-provisioning-sd-image = rpi5ProvisioningSystem.config.system.build.sdImage;
+          rpi5-prototype-unsigned-artifacts = rpi5PrototypeRelease.unsignedArtifacts;
         }
       );
 
@@ -300,6 +365,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
+          developmentSigning = developmentSigningFor system;
           laneGuardFixtureBundle = "${provisioning.packages.${system}.rpi5-probe-bundle}/bundle";
           laneGuardFixture = provisioning.lib.mkRpi5PhysicalLaneGuard {
             inherit system;
@@ -337,7 +403,11 @@
           provisioning-test-result = provisioning.checks.${system}.provisioning-test-result;
           station-ui = provisioning.checks.${system}.station-ui;
           rpiboot-metadata-stdout = provisioning.checks.${system}.rpiboot-metadata-stdout;
+          rpi5-unfused-capsule = provisioning.checks.${system}.unfused-capsule;
+          rpi5-media-staging-fixture = provisioning.checks.${system}.media-staging-fixture;
+          rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
           secure-boot-artifacts = provisioning.checks.${system}.secure-boot-artifacts;
+          signed-boot-plan = provisioning.checks.${system}.signed-boot-plan;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
               {
@@ -355,6 +425,7 @@
               '';
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
+          development-signing = developmentSigning.signing;
           report-unit = dns.checks.${system}.report-unit;
           dns-schema = dns.checks.${system}.dns-schema;
           dns-topology = dns.checks.${system}.dns-topology;
@@ -379,6 +450,11 @@
               expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
               sourceRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
             };
+          };
+          rpi5-prototype-release-eval = import ./tests/rpi5-prototype-release-eval.nix {
+            inherit lib pkgs;
+            prototype = rpi5PrototypeRelease;
+            signingProfile = developmentSigning;
           };
         }
       );

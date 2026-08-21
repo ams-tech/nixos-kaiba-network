@@ -73,7 +73,8 @@ nix run ./nix/provisioning#kaiba-provision-integrated-rehearsal -- \
 | Integrated authority rehearsal | `kaiba-provision-integrated-rehearsal` | Fresh local JSON stores only | Software-only, non-authoritative |
 | Standalone campaign model | `kaiba-provision-rehearsal` | Nothing | Synthetic campaign evidence |
 | Signed capsule verification | signer-anchored `kaiba-provision-unfused-compat` | Nothing | Offline signature and exact-tree verification |
-| Media fixture staging | `kaiba-provision-media-stager fixture-*` | One explicitly named regular file | Reopened extent-digest receipt |
+| Media fixture construction | `mkRpi5MediaStagingFixture` and `kaiba-provision-media-fixture` | One new regular-file workspace | Synthetic GPT/FAT and dm-verity verification only |
+| Media fixture staging | `kaiba-provision-media-stager fixture-*` | One explicitly named regular file | Reopened extent-digest receipt; no GPT or cold-power binding |
 | Device media staging | `kaiba-provision-media-stager` | One explicitly approved whole block device | Reopened extent-digest receipt; no cold-power claim |
 | Unfused boot correlation | signer-anchored `kaiba-provision-unfused-evidence` | Nothing; consumes captured files | Consistent offline records; no hardware or enforcement claim |
 
@@ -85,22 +86,40 @@ device selector, subprocess runner, or network listener. It cannot emit
 
 ## Optional read-only and reversible next layers
 
-Once a real development capsule exists, verify its exact file tree and detached
-signature with the procedure in
+Build a deterministic public signing plan, obtain an approval-gated YubiKey
+signature at runtime, and admit the two-file public result into an
+offline-verification derivation using the
+[Raspberry Pi 5 signed-boot workflow](raspberry-pi-5-signed-boot-workflow.md).
+That path exercises the real key only for signing and cannot write a Pi, NVMe,
+EEPROM, or OTP.
+
+Once the public signing result has been admitted, assemble the signed boot pair
+and the reviewed dm-verity root images with `mkRpi5VerifiedUnfusedCapsule`.
+That derivation verifies the exact four-role tree, the root-data/hash
+relationship, and the detached signature using the signer-pinned verifier. Its
+fixture remains explicitly synthetic and its result makes no hardware or
+enforcement claim. See
 [Raspberry Pi 5 unfused compatibility prototype](raspberry-pi-5-unfused-compatibility.md).
-This is read-only.
 
-Exercise media staging against a sparse regular-file fixture before considering
-a dedicated device. The fixture path runs the same extent preflight, write,
-fsync, reopen, and digest comparison while rejecting every path beneath
-`/dev`. See [Target-media staging prototype](target-media-staging-prototype.md).
+Build the regular-file rehearsal from the verified capsule with
+`mkRpi5MediaStagingFixture`. Its fixture command initializes a deterministic GPT
+target and an outer FAT containing exactly `config.txt`, `boot.img`, and
+`boot.sig`. Run `fixture-dry-run`, `fixture-stage`, and `fixture-readback` with
+the generated plan, then run the fixture verifier. This exercises the real
+extent preflight, write, fsync, reopen, digest comparison, FAT inspection, GPT
+inspection, complete-partition digest verification, and dm-verity verification
+while rejecting every path beneath `/dev`. See
+[Target-media staging prototype](target-media-staging-prototype.md).
 
-An optional physical compatibility exercise uses a fresh unfused Pi, never
-supplies an OTP- or EEPROM-programming bundle, and records the all-zero
-customer-key hash before and after the run. The passive verifier correlates the
-operator-authored record and UART transcript with an in-process, signer-anchored
-capsule verification. Because neither capture is authenticated or fresh, it
-emits `record_consistent:true` but keeps `hardware_observed:false`,
+This closes only the synthetic outer-media rehearsal gap. A physical
+compatibility exercise remains blocked on a transaction-reviewed device layout,
+a writer and receipt that bind and independently verify the device GPT/FAT, and
+an unfused target mode that emits the required UART records. When those exist,
+the exercise must use a fresh unfused Pi, never supply an OTP- or
+EEPROM-programming bundle, and record the all-zero customer-key hash before and
+after the run. The passive verifier can correlate the operator-authored record
+and UART transcript with an in-process, signer-anchored capsule verification,
+but unauthenticated capture still keeps `hardware_observed:false`,
 `security_enforced:false`, and `mutation_eligible:false`.
 
 ## Boundary before any real ownership ceremony
@@ -112,3 +131,6 @@ digests, verified GPT/FAT and dm-verity media layout, a qualified BOOTSEL/power
 lane, authenticated service transport around the compiler, the complete
 crash/failure campaign, live development-token evidence, and an explicit
 go/no-go review for one sacrificial board.
+
+The synthetic fixture does not satisfy any physical staging, cold-power,
+hardware-observation, secure-boot-enforcement, EEPROM, or OTP gate.

@@ -87,6 +87,57 @@ func openRegularNoFollow(path string) (*os.File, os.FileInfo, error) {
 	return file, opened, nil
 }
 
+func openDirectoryNoFollow(path string) (*os.File, os.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+		return nil, nil, errors.New("path must identify a non-symlink directory")
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	directory := os.NewFile(uintptr(fd), path)
+	opened, err := directory.Stat()
+	if err != nil {
+		_ = directory.Close()
+		return nil, nil, err
+	}
+	if !opened.IsDir() || !os.SameFile(before, opened) {
+		_ = directory.Close()
+		return nil, nil, errors.New("directory changed while opening")
+	}
+	return directory, opened, nil
+}
+
+func openRegularAtNoFollow(parent *os.File, name string) (*os.File, os.FileInfo, error) {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return nil, nil, errors.New("credential name must be one path component")
+	}
+	fd, err := syscall.Openat(
+		int(parent.Fd()),
+		name,
+		syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
+		0,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	opened, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, err
+	}
+	if !opened.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, nil, errors.New("path must identify a regular non-symlink file")
+	}
+	return file, opened, nil
+}
+
 func statIdentity(info os.FileInfo) (fileIdentity, error) {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -145,29 +196,39 @@ func trustedFile(path string, ownerUID uint32, executable bool, maxBytes int64) 
 	return data, nil
 }
 
-func validateCredential(path string, runtimeOwnerUID uint32) (fileIdentity, error) {
-	parentInfo, err := os.Lstat(filepath.Dir(path))
+func validateCredential(path string, trustedOwnerUID, runtimeOwnerUID uint32) (fileIdentity, error) {
+	parentPath := filepath.Dir(path)
+	parent, parentInfo, err := openDirectoryNoFollow(parentPath)
 	if err != nil {
 		return fileIdentity{}, err
 	}
-	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
-		return fileIdentity{}, errors.New("credential parent must be a non-symlink directory")
-	}
+	defer parent.Close()
 	parentIdentity, err := statIdentity(parentInfo)
 	if err != nil {
 		return fileIdentity{}, err
 	}
-	if parentIdentity.uid != 0 && parentIdentity.uid != runtimeOwnerUID {
-		return fileIdentity{}, errors.New("credential parent has an untrusted owner")
+	parentAccessACL, err := readCredentialACL(parent, posixACLAccessXattr)
+	if err != nil {
+		return fileIdentity{}, fmt.Errorf("credential parent access ACL: %w", err)
 	}
-	if parentInfo.Mode().Perm()&0o077 != 0 {
-		return fileIdentity{}, errors.New("credential parent must not grant group or world access")
+	parentDefaultACLPresent, err := credentialACLPresent(parent, posixACLDefaultXattr)
+	if err != nil {
+		return fileIdentity{}, fmt.Errorf("credential parent default ACL: %w", err)
 	}
-	if parentInfo.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
-		return fileIdentity{}, errors.New("credential parent must not have special permission bits")
+	parentDefaultACL := credentialACL{present: parentDefaultACLPresent}
+	parentAfter, err := parent.Stat()
+	if err != nil {
+		return fileIdentity{}, err
+	}
+	parentAfterIdentity, err := statIdentity(parentAfter)
+	if err != nil {
+		return fileIdentity{}, err
+	}
+	if parentIdentity != parentAfterIdentity {
+		return fileIdentity{}, errors.New("credential parent changed while validating")
 	}
 
-	file, info, err := openRegularNoFollow(path)
+	file, info, err := openRegularAtNoFollow(parent, filepath.Base(path))
 	if err != nil {
 		return fileIdentity{}, err
 	}
@@ -176,11 +237,68 @@ func validateCredential(path string, runtimeOwnerUID uint32) (fileIdentity, erro
 	if err != nil {
 		return fileIdentity{}, err
 	}
-	if identity.uid != runtimeOwnerUID {
-		return fileIdentity{}, fmt.Errorf("credential owner UID is %d, want runtime UID %d", identity.uid, runtimeOwnerUID)
+	accessACL, err := readCredentialACL(file, posixACLAccessXattr)
+	if err != nil {
+		return fileIdentity{}, fmt.Errorf("credential file access ACL: %w", err)
 	}
-	if info.Mode().Perm() != 0o400 || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
-		return fileIdentity{}, errors.New("credential mode must be 0400")
+	parentFileSystemReadOnly := false
+	credentialFileSystemReadOnly := false
+	if !parentAccessACL.present && !accessACL.present {
+		parentFileSystemReadOnly, err = fileSystemReadOnly(parent)
+		if err != nil {
+			return fileIdentity{}, fmt.Errorf("credential parent filesystem: %w", err)
+		}
+		credentialFileSystemReadOnly, err = fileSystemReadOnly(file)
+		if err != nil {
+			return fileIdentity{}, fmt.Errorf("credential file filesystem: %w", err)
+		}
+	}
+	pathAfter, err := os.Lstat(path)
+	if err != nil {
+		return fileIdentity{}, err
+	}
+	parentPathAfter, err := os.Lstat(parentPath)
+	if err != nil {
+		return fileIdentity{}, err
+	}
+	openedAfter, err := file.Stat()
+	if err != nil {
+		return fileIdentity{}, err
+	}
+	pathAfterIdentity, err := statIdentity(pathAfter)
+	if err != nil {
+		return fileIdentity{}, err
+	}
+	openedAfterIdentity, err := statIdentity(openedAfter)
+	if err != nil {
+		return fileIdentity{}, err
+	}
+	parentPathAfterIdentity, err := statIdentity(parentPathAfter)
+	if err != nil {
+		return fileIdentity{}, err
+	}
+	if parentPathAfter.Mode()&os.ModeSymlink != 0 || !os.SameFile(parentInfo, parentPathAfter) ||
+		parentIdentity != parentPathAfterIdentity {
+		return fileIdentity{}, errors.New("credential parent changed while validating")
+	}
+	if pathAfter.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, pathAfter) ||
+		identity != pathAfterIdentity || identity != openedAfterIdentity {
+		return fileIdentity{}, errors.New("credential file changed while validating")
+	}
+	if err := validateCredentialLayout(
+		parentIdentity,
+		parentInfo.Mode(),
+		parentAccessACL,
+		parentDefaultACL,
+		identity,
+		info.Mode(),
+		accessACL,
+		parentFileSystemReadOnly,
+		credentialFileSystemReadOnly,
+		trustedOwnerUID,
+		runtimeOwnerUID,
+	); err != nil {
+		return fileIdentity{}, err
 	}
 	if info.Size() < minPINFileBytes || info.Size() > maxPINFileBytes {
 		return fileIdentity{}, fmt.Errorf("credential size must be between %d and %d bytes", minPINFileBytes, maxPINFileBytes)

@@ -7,6 +7,7 @@
   config,
   lib,
   modulesPath,
+  pkgs,
   ...
 }:
 
@@ -35,7 +36,16 @@
     inherit expectedCustomerKeyHash sourceRevision;
   };
 
+  documentation.enable = false;
   networking.hostName = "kaiba-rpi5-secure-target";
+  nix = {
+    enable = false;
+    # The generic SD-image builder still invokes nix-store and nix-env to
+    # initialize the filesystem database. The modular CLI output supplies
+    # those commands without pulling the manual and full Nix test aggregate
+    # into this native AArch64 image-construction dependency.
+    package = pkgs.nix.nix-cli;
+  };
 
   boot.loader.raspberry-pi = {
     bootloader = "kernel";
@@ -60,7 +70,11 @@
   sdImage = {
     compressImage = false;
     expandOnBoot = false;
-    firmwareSize = 96;
+    # nixos-raspberrypi's SD-image profile fixes this at 1024 MiB. This target
+    # uses the SD-image module only to obtain its root image and firmware tree;
+    # the separately assembled boot.img must stay within the Pi 5
+    # boot_ramdisk ceiling.
+    firmwareSize = lib.mkForce 96;
     populateRootCommands = lib.mkAfter ''
       mkdir -p ./files/etc ./files/root ./files/run ./files/tmp ./files/var
       chmod 0555 ./files/etc ./files/root
@@ -78,6 +92,7 @@
       enable = true;
       mutable = false;
     };
+    disableInstallerTools = true;
     stateVersion = "26.05";
     switch.enable = false;
   };

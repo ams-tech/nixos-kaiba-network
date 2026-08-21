@@ -145,7 +145,6 @@ func newFixture(t *testing.T, runner Runner) fixture {
 	writeTestFile(t, publicKeyPath, publicKeyPEM, 0o400)
 	writeTestFile(t, pinPath, []byte("654321\n"), 0o400)
 	writeTestFile(t, inputPath, artifact, 0o400)
-
 	return fixture{
 		config: Config{
 			OpenSSLPath: opensslPath, OpenSSLConfigPath: configPath,
@@ -160,6 +159,26 @@ func newFixture(t *testing.T, runner Runner) fixture {
 		privateKey: privateKey, inputPath: inputPath, pinPath: pinPath,
 		configPath: configPath, openssl: opensslPath, artifact: artifact,
 	}
+}
+
+func newTestSigner(t *testing.T, config Config) *Signer {
+	t.Helper()
+	signer, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Credential layout is exercised independently with real Linux ACL xattrs.
+	// Signer flow tests substitute only that boundary so they remain rootless,
+	// root-capable, and independent of the test filesystem's ACL support.
+	signer.credentialValidator = func(path string, _, _ uint32) (fileIdentity, error) {
+		file, info, err := openRegularNoFollow(path)
+		if err != nil {
+			return fileIdentity{}, err
+		}
+		defer file.Close()
+		return statIdentity(info)
+	}
+	return signer
 }
 
 func writeTestFile(t *testing.T, path string, data []byte, mode os.FileMode) {
@@ -178,10 +197,7 @@ func TestSignerUsesExactProviderContractAndVerifiesSignature(t *testing.T) {
 		return fake.Run(ctx, invocation)
 	}))
 	fake = &fakeOpenSSL{privateKey: fixture.privateKey, sourcePath: fixture.inputPath}
-	signer, err := New(fixture.config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer := newTestSigner(t, fixture.config)
 	signature, err := signer.Sign(context.Background(), fixture.inputPath)
 	if err != nil {
 		t.Fatal(err)
@@ -227,10 +243,7 @@ func TestSignerRejectsChangedInputAfterSnapshot(t *testing.T) {
 		return fake.Run(ctx, invocation)
 	}))
 	fake = &fakeOpenSSL{privateKey: fixture.privateKey, sourcePath: fixture.inputPath, mutateInput: true}
-	signer, err := New(fixture.config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer := newTestSigner(t, fixture.config)
 	if signature, err := signer.Sign(context.Background(), fixture.inputPath); err == nil || signature != nil || !strings.Contains(err.Error(), "changed during signing") {
 		t.Fatalf("signature/error = %x/%v", signature, err)
 	}
@@ -255,10 +268,7 @@ func TestSignerFailsClosedOnOutputOrVerificationDrift(t *testing.T) {
 				privateKey: fixture.privateKey, sourcePath: fixture.inputPath,
 				signOutput: test.signOutput, badVerify: test.badVerify,
 			}
-			signer, err := New(fixture.config)
-			if err != nil {
-				t.Fatal(err)
-			}
+			signer := newTestSigner(t, fixture.config)
 			if signature, err := signer.Sign(context.Background(), fixture.inputPath); err == nil || signature != nil {
 				t.Fatalf("signature/error = %x/%v", signature, err)
 			}
@@ -266,7 +276,7 @@ func TestSignerFailsClosedOnOutputOrVerificationDrift(t *testing.T) {
 	}
 }
 
-func TestSignerRejectsUnsafeInputAndCredentialFiles(t *testing.T) {
+func TestSignerRejectsUnsafeInput(t *testing.T) {
 	fixture := newFixture(t, runnerFunc(func(context.Context, Invocation) (Result, error) {
 		t.Fatal("runner must not be called")
 		return Result{}, nil
@@ -281,18 +291,9 @@ func TestSignerRejectsUnsafeInputAndCredentialFiles(t *testing.T) {
 	if _, err := signer.Sign(context.Background(), fixture.inputPath); err == nil || !strings.Contains(err.Error(), "mode must be 0400") {
 		t.Fatalf("unsafe input error = %v", err)
 	}
-	if err := os.Chmod(fixture.inputPath, 0o400); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(fixture.pinPath, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := signer.Sign(context.Background(), fixture.inputPath); err == nil || !strings.Contains(err.Error(), "credential mode") {
-		t.Fatalf("unsafe credential error = %v", err)
-	}
 }
 
-func TestSignerRejectsSymlinks(t *testing.T) {
+func TestSignerRejectsOverlappingCredentialTrustIdentities(t *testing.T) {
 	fixture := newFixture(t, runnerFunc(func(context.Context, Invocation) (Result, error) {
 		t.Fatal("runner must not be called")
 		return Result{}, nil
@@ -301,6 +302,24 @@ func TestSignerRejectsSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = signer.Sign(context.Background(), fixture.inputPath)
+	if os.Geteuid() == 0 {
+		if err == nil || !strings.Contains(err.Error(), "must be non-root") {
+			t.Fatalf("root runtime credential error = %v", err)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), "must differ") {
+		t.Fatalf("overlapping credential owner error = %v", err)
+	}
+}
+
+func TestSignerRejectsSymlinks(t *testing.T) {
+	fixture := newFixture(t, runnerFunc(func(context.Context, Invocation) (Result, error) {
+		t.Fatal("runner must not be called")
+		return Result{}, nil
+	}))
+	signer := newTestSigner(t, fixture.config)
 	link := filepath.Join(filepath.Dir(fixture.inputPath), "input-link")
 	if err := os.Symlink(fixture.inputPath, link); err != nil {
 		t.Fatal(err)
@@ -370,10 +389,7 @@ func TestSignerBoundsOperationWithContext(t *testing.T) {
 		return Result{}, ctx.Err()
 	}))
 	fixture.config.OperationTimeout = 20 * time.Millisecond
-	signer, err := New(fixture.config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer := newTestSigner(t, fixture.config)
 	started := time.Now()
 	if _, err := signer.Sign(context.Background(), fixture.inputPath); err == nil {
 		t.Fatal("timed-out signer succeeded")

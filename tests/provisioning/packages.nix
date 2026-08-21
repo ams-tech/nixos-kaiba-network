@@ -17,25 +17,54 @@ let
     printf '%s\n' 'fixture-device-tree' > "$out/bcm2712-rpi-5-b.dtb"
     printf '%s\n' 'fixture-overlay' > "$out/overlays/README"
   '';
-  secureBootFixtureRoot =
-    pkgs.runCommand "kaiba-secure-boot-fixture-root.img" { nativeBuildInputs = [ pkgs.e2fsprogs ]; }
-      ''
-        mkdir root
-        printf '%s\n' 'kaiba dm-verity fixture' > root/README
-        truncate --size=16M "$out"
-        mkfs.ext4 \
-          -F \
-          -L KAIBA_ROOT \
-          -U 4b414942-4152-4f4f-9400-000000000001 \
-          -d root \
-          "$out" \
-          > /dev/null
-      '';
+  mkSecureBootFixtureRoot =
+    name:
+    pkgs.runCommand name { nativeBuildInputs = [ pkgs.e2fsprogs ]; } ''
+      set -euo pipefail
+      export E2FSPROGS_FAKE_TIME=315532800
+      export LC_ALL=C
+      export SOURCE_DATE_EPOCH=315532800
+      export TZ=UTC
+
+      printf '%s\n' 'kaiba dm-verity fixture' > "$TMPDIR/README"
+      truncate --size=16M "$out"
+      mkfs.ext4 \
+        -F \
+        -L KAIBA_ROOT \
+        -U 4b414942-4152-4f4f-9400-000000000001 \
+        -E hash_seed=4b414942-4152-4f4f-9400-000000000002,root_owner=0:0,lazy_itable_init=0,lazy_journal_init=0 \
+        "$out" \
+        > /dev/null
+
+      # e2fsprogs otherwise selects signed or unsigned directory hashing from
+      # the host architecture's plain-char signedness.  Normalize the primary
+      # and backup superblocks before adding files so this fixture is identical
+      # on x86_64 and aarch64.  flags=1 is EXT2_FLAGS_SIGNED_HASH; close -a
+      # propagates it to every backup superblock.
+      printf '%s\n' \
+        'set_super_value flags 1' \
+        'close -a' \
+        | debugfs -w "$out" > /dev/null
+
+      # Import through debugfs under a fixed e2fsprogs clock instead of using
+      # mkfs.ext4 -d, which preserves nondeterministic host ctime/ownership.
+      debugfs -w -R "write $TMPDIR/README /README" "$out" > /dev/null
+      debugfs -w -R 'set_inode_field /README uid 0' "$out" > /dev/null
+      debugfs -w -R 'set_inode_field /README gid 0' "$out" > /dev/null
+      debugfs -w -R 'set_inode_field /README mode 0100644' "$out" > /dev/null
+      for field in atime ctime mtime crtime; do
+        debugfs -w -R "set_inode_field /README $field @315532800" "$out" > /dev/null
+      done
+      e2fsck -fn "$out" > /dev/null
+    '';
+  secureBootFixtureRootA = mkSecureBootFixtureRoot "kaiba-secure-boot-fixture-root-a.img";
+  secureBootFixtureRootB = mkSecureBootFixtureRoot "kaiba-secure-boot-fixture-root-b.img";
   canonicalSourceRevision40 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   canonicalSourceRevision64 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   mkSecureBootFixture =
     {
       name,
+      rootImage ? secureBootFixtureRootA,
       sourceRevision ? canonicalSourceRevision40,
     }:
     secureBootArtifactBuilder {
@@ -49,11 +78,14 @@ let
         "overlays/README"
       ];
       firmwareTree = secureBootFixtureFirmware;
-      rootImage = secureBootFixtureRoot;
+      inherit rootImage;
       inherit sourceRevision;
     };
   secureBootFixtureA = mkSecureBootFixture { name = "kaiba-secure-boot-artifacts-fixture-a"; };
-  secureBootFixtureB = mkSecureBootFixture { name = "kaiba-secure-boot-artifacts-fixture-b"; };
+  secureBootFixtureB = mkSecureBootFixture {
+    name = "kaiba-secure-boot-artifacts-fixture-b";
+    rootImage = secureBootFixtureRootB;
+  };
   sourceRevisionAccepted =
     sourceRevision:
     (builtins.tryEval (
@@ -108,6 +140,7 @@ let
   );
   developmentYubiKeyCustomerKeyHash = "f06d7ff084a6c69d60d7ca5a7554afa199132c31b54f9366d2852711053fa7de";
   developmentYubiKeyPublicKeyFingerprint = "sha256:21bfca39f5db869c81f1fdab5f1d2569bdd5e67ef07ccfe0e3b6ddd792a6cfe1";
+  developmentYubiKeySignerPolicyDigest = "sha256:498534e04cf7a511356fbec7fac4ad994a692e352fa0db65e99e8ba0bdbc5d61";
   developmentYubiKeyPublicKeyPEM = pkgs.writeText "kaiba-development-boot-public-key.pem" (
     builtins.readFile ./fixtures/development-boot-public.pem
   );
@@ -118,14 +151,206 @@ let
     tokenSerial = "12345678";
     publicKeyPEM = developmentYubiKeyPublicKeyPEM;
     publicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
+    signerPolicyDigest = developmentYubiKeySignerPolicyDigest;
     expectedCustomerKeyHash = developmentYubiKeyCustomerKeyHash;
     grantRegistryPath = "/etc/kaiba-provisioning/signing-grants.json";
   };
   unfusedVerifierFixture = built.mkRpi5UnfusedVerifier {
     name = "kaiba-rpi5-unfused-verifier-fixture";
-    trustedPublicKeyFingerprint =
-      developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+    trustedPublicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
   };
+  bootSigningPlanFixture = built.mkRpi5BootSigningPlan {
+    name = "kaiba-rpi5-boot-signing-plan-fixture";
+    bootImage = "${secureBootFixtureA}/unsigned/boot.img";
+    planID = "plan:rpi5-development-fixture:1";
+    publicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+    # Exercise a key nested directly below the flake source.  The factory must
+    # preserve its Nix path context so the sandbox mounts it as an input.
+    reviewedPublicKeyPEM = ./fixtures/development-boot-public.pem;
+    signerPolicyDigest = developmentYubiKeySigning.kaibaSigning.signerPolicyDigest;
+    sourceDateEpoch = 1786968000;
+  };
+  bootSigningPlanInputAccepted =
+    overrides:
+    (builtins.tryEval (
+      (built.mkRpi5BootSigningPlan (
+        {
+          name = "kaiba-rpi5-boot-signing-plan-evaluation";
+          bootImage = "${secureBootFixtureA}/unsigned/boot.img";
+          planID = "plan:rpi5-development-fixture:1";
+          publicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+          reviewedPublicKeyPEM = developmentYubiKeyPublicKeyPEM;
+          signerPolicyDigest = developmentYubiKeySigning.kaibaSigning.signerPolicyDigest;
+          sourceDateEpoch = 1786968000;
+        }
+        // overrides
+      )).drvPath
+    )).success;
+  emptySignedOutputFixture = pkgs.runCommand "kaiba-empty-signed-output-fixture" { } ''
+    mkdir "$out"
+  '';
+  verifiedSignedBootEvaluationFixture = built.mkRpi5VerifiedSignedBoot {
+    name = "kaiba-rpi5-verified-signed-boot-metadata-fixture";
+    signingPlan = bootSigningPlanFixture;
+    signedOutput = emptySignedOutputFixture;
+  };
+  signedBootFinalizerBootImage = pkgs.writeText "kaiba-signed-boot-finalizer-boot.img" ''
+    kaiba signed-boot finalizer fixture
+  '';
+  signedBootFinalizerPublicKey = pkgs.writeText "kaiba-signed-boot-finalizer-public.pem" (
+    builtins.readFile ./fixtures/signed-boot-finalizer-public.pem
+  );
+  signedBootFinalizerPlan = built.mkRpi5BootSigningPlan {
+    name = "kaiba-rpi5-signed-boot-finalizer-plan";
+    bootImage = signedBootFinalizerBootImage;
+    planID = "plan:rpi5-finalizer-fixture:1";
+    publicKeyFingerprint = "sha256:104dbbf42aacd5c3357ed4229237f8d8d848af868b8f680b46cba5505d8f67fc";
+    reviewedPublicKeyPEM = signedBootFinalizerPublicKey;
+    signerPolicyDigest = "sha256:68498f57aa811b8a714260a4ac4390118c78efdb2af416cc64bfbd8eac4c42e3";
+    sourceDateEpoch = 1786968000;
+  };
+  signedBootFinalizerSignedOutput = pkgs.runCommand "kaiba-signed-boot-finalizer-result" { } ''
+    mkdir "$out"
+    install -m 0444 \
+      ${./fixtures/signed-boot-finalizer/boot.sig} \
+      "$out/boot.sig"
+    install -m 0444 \
+      ${./fixtures/signed-boot-finalizer/signing-result.json} \
+      "$out/signing-result.json"
+  '';
+  signedBootFinalizerHSMWrapper = pkgs.writeShellScript "kaiba-signed-boot-finalizer-hsm-wrapper" ''
+    set -euo pipefail
+    test "$#" -eq 3
+    test "$1" = '-a'
+    test "$2" = 'rsa2048-sha256'
+    test -f "$3"
+    sed -n 's/^rsa2048: //p' ${./fixtures/signed-boot-finalizer/boot.sig}
+  '';
+  verifiedSignedBootFixture = built.mkRpi5VerifiedSignedBoot {
+    name = "kaiba-rpi5-verified-signed-boot-fixture";
+    signingPlan = signedBootFinalizerPlan;
+    signedOutput = signedBootFinalizerSignedOutput;
+  };
+  unfusedCapsulePublicKey = pkgs.writeText "kaiba-unfused-capsule-public.pem" (
+    builtins.readFile ./fixtures/unfused-capsule/public.pem
+  );
+  unfusedCapsulePublicKeyFingerprint = "sha256:82c052b2366dee3e8831baf823dc192aa4ac344373d694e980cbc27d663e3c1d";
+  unfusedCapsuleSigningPlan = built.mkRpi5BootSigningPlan {
+    name = "kaiba-rpi5-unfused-capsule-signing-plan-fixture";
+    bootImage = "${secureBootFixtureA}/unsigned/boot.img";
+    planID = "plan:rpi5-unfused-capsule-fixture:1";
+    publicKeyFingerprint = unfusedCapsulePublicKeyFingerprint;
+    reviewedPublicKeyPEM = unfusedCapsulePublicKey;
+    signerPolicyDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    sourceDateEpoch = 1786968000;
+  };
+  unfusedCapsuleSignedOutput =
+    pkgs.runCommand "kaiba-rpi5-unfused-capsule-signing-output-fixture"
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        export LC_ALL=C
+
+        mkdir "$out"
+        install -m 0444 \
+          ${./fixtures/unfused-capsule/boot.sig} \
+          "$out/boot.sig"
+        canonical_plan="$(cat ${unfusedCapsuleSigningPlan}/plan.json)"
+        plan_digest="sha256:$({
+          printf '%s\0' 'kaiba.provisioning.rpi5-boot-signing-plan.v1alpha1'
+          printf '%s' "$canonical_plan"
+        } | sha256sum | cut -d ' ' -f 1)"
+        boot_signature_digest="sha256:$(
+          sha256sum "$out/boot.sig" | cut -d ' ' -f 1
+        )"
+        boot_signature_size="$(stat --format=%s "$out/boot.sig")"
+
+        jq \
+          --null-input \
+          --compact-output \
+          --arg schema_version \
+            'kaiba.provisioning.rpi5-boot-signing-result/v1alpha1' \
+          --arg plan_id \
+            "$(jq -r .plan_id ${unfusedCapsuleSigningPlan}/plan.json)" \
+          --arg plan_digest "$plan_digest" \
+          --arg boot_image_digest \
+            "$(jq -r .boot_image_digest ${unfusedCapsuleSigningPlan}/plan.json)" \
+          --argjson boot_image_size_bytes \
+            "$(jq -r .boot_image_size_bytes ${unfusedCapsuleSigningPlan}/plan.json)" \
+          --arg boot_signature_digest "$boot_signature_digest" \
+          --argjson boot_signature_size_bytes "$boot_signature_size" \
+          --arg public_key_fingerprint \
+            "$(jq -r .public_key_fingerprint ${unfusedCapsuleSigningPlan}/plan.json)" \
+          --arg signer_policy_digest \
+            "$(jq -r .signer_policy_digest ${unfusedCapsuleSigningPlan}/plan.json)" \
+          --arg gate_receipt_digest \
+            'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' \
+          --argjson source_date_epoch \
+            "$(jq -r .source_date_epoch ${unfusedCapsuleSigningPlan}/plan.json)" \
+          '{
+            schema_version: $schema_version,
+            plan_id: $plan_id,
+            plan_digest: $plan_digest,
+            boot_image_digest: $boot_image_digest,
+            boot_image_size_bytes: $boot_image_size_bytes,
+            boot_signature_digest: $boot_signature_digest,
+            boot_signature_size_bytes: $boot_signature_size_bytes,
+            public_key_fingerprint: $public_key_fingerprint,
+            signer_policy_digest: $signer_policy_digest,
+            gate_receipt_digest: $gate_receipt_digest,
+            source_date_epoch: $source_date_epoch
+          }' > "$out/signing-result.json"
+        chmod 0444 "$out/signing-result.json"
+      '';
+  unfusedCapsuleVerifiedSignedBoot = built.mkRpi5VerifiedSignedBoot {
+    name = "kaiba-rpi5-unfused-capsule-verified-signed-boot-fixture";
+    signingPlan = unfusedCapsuleSigningPlan;
+    signedOutput = unfusedCapsuleSignedOutput;
+  };
+  verifiedUnfusedCapsuleFixture = built.mkRpi5VerifiedUnfusedCapsule {
+    name = "kaiba-rpi5-verified-unfused-capsule-fixture";
+    capsuleID = "capsule:rpi5-unfused-fixture:1";
+    fixtureID = "fixture:rpi5-unfused-fixture:synthetic:1";
+    trustedPublicKeyFingerprint = unfusedCapsulePublicKeyFingerprint;
+    unsignedArtifacts = secureBootFixtureA;
+    verifiedSignedBoot = unfusedCapsuleVerifiedSignedBoot;
+  };
+  mediaStagingFixture = built.mkRpi5MediaStagingFixture {
+    name = "kaiba-rpi5-media-staging-fixture";
+    verifiedCapsule = verifiedUnfusedCapsuleFixture;
+  };
+  verifiedUnfusedCapsuleInputAccepted =
+    overrides:
+    (builtins.tryEval (
+      (built.mkRpi5VerifiedUnfusedCapsule (
+        {
+          name = "kaiba-rpi5-verified-unfused-capsule-evaluation";
+          capsuleID = "capsule:rpi5-unfused-fixture:1";
+          fixtureID = "fixture:rpi5-unfused-fixture:synthetic:1";
+          trustedPublicKeyFingerprint = unfusedCapsulePublicKeyFingerprint;
+          unsignedArtifacts = secureBootFixtureA;
+          verifiedSignedBoot = unfusedCapsuleVerifiedSignedBoot;
+        }
+        // overrides
+      )).drvPath
+    )).success;
+  verifiedSignedBootInputAccepted =
+    overrides:
+    (builtins.tryEval (
+      (built.mkRpi5VerifiedSignedBoot (
+        {
+          name = "kaiba-rpi5-verified-signed-boot-evaluation";
+          signingPlan = bootSigningPlanFixture;
+          signedOutput = emptySignedOutputFixture;
+        }
+        // overrides
+      )).drvPath
+    )).success;
   expectedDevelopmentYubiKeyOpenSSLConfiguration = pkgs.writeText "kaiba-development-yubikey-openssl-expected.cnf" ''
     config_diagnostics = 1
     openssl_conf = kaiba_openssl_init
@@ -242,6 +467,8 @@ let
         check-jsonschema --check-metaschema \
           ${built.goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json
         check-jsonschema --check-metaschema \
+          ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-boot-signing-result-v1alpha1.schema.json \
           ${built.goSource}/schemas/secure-boot-bundle-v1alpha1.schema.json \
           ${built.goSource}/schemas/signing-grant-registry-v1alpha1.schema.json \
           ${built.goSource}/schemas/signing-request-v1alpha1.schema.json \
@@ -557,6 +784,10 @@ let
       description = "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.";
     }
     {
+      id = "media-staging-fixture";
+      description = "Synthetic capsule-bound regular-file fixture validates FAT/GPT layout, staged extents, reopened readback, complete partition digests, dm-verity, and fail-closed tamper rejection without making hardware or enforcement claims.";
+    }
+    {
       id = "nixos-module-evaluation";
       description = "Provisioning-probe NixOS module evaluation and its narrow USB access boundary.";
     }
@@ -695,6 +926,21 @@ let
     assert lib.assertMsg (lib.all (sourceRevision: !(sourceRevisionAccepted sourceRevision))
       invalidSourceRevisions
     ) "the secure-boot artifact builder accepted a non-canonical source revision";
+    assert lib.assertMsg (
+      secureBootFixtureA.kaibaUnsignedArtifacts.schemaVersion
+      == "provisioning.kaiba.network/unsigned-artifact-set/v1alpha1"
+      && secureBootFixtureA.kaibaUnsignedArtifacts.signingStatus == "unsigned"
+      && lib.all (value: value == false) [
+        secureBootFixtureA.kaibaUnsignedArtifacts.blockDeviceWriteCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.directHardwareAccess
+        secureBootFixtureA.kaibaUnsignedArtifacts.eepromProgrammingCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.mutationCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.oneTimeSettingCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.otpCapable
+        secureBootFixtureA.kaibaUnsignedArtifacts.privateKeyAccess
+        secureBootFixtureA.kaibaUnsignedArtifacts.signingAuthorityConfigured
+      ]
+    ) "the unsigned artifact builder gained signing, hardware, or mutation capability";
     pkgs.runCommand "kaiba-secure-boot-artifact-contract"
       {
         nativeBuildInputs = [
@@ -764,6 +1010,1083 @@ let
         touch "$out/passed"
       '';
 
+  signedBootPlanContract =
+    assert lib.assertMsg (bootSigningPlanInputAccepted
+      { }
+    ) "the signed-boot plan factory rejected valid public store inputs";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        bootImage = "/tmp/kaiba-untrusted-boot.img";
+      })
+    ) "the signed-boot plan factory accepted a boot image outside the Nix store";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        reviewedPublicKeyPEM = "/tmp/kaiba-untrusted-public.pem";
+      })
+    ) "the signed-boot plan factory accepted a public key outside the Nix store";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        planID = "Plan With Spaces";
+      })
+    ) "the signed-boot plan factory accepted a non-canonical plan ID";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        publicKeyFingerprint = "sha256:21BFCA39F5DB869C81F1FDAB5F1D2569BDD5E67EF07CCFE0E3B6DDD792A6CFE1";
+      })
+    ) "the signed-boot plan factory accepted a non-canonical public-key fingerprint";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        sourceDateEpoch = -1;
+      })
+    ) "the signed-boot plan factory accepted a negative source epoch";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        sourceDateEpoch = 253402300800;
+      })
+    ) "the signed-boot plan factory accepted an out-of-range source epoch";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
+        signerPolicyDigest = "sha256:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
+      })
+    ) "the signed-boot plan factory accepted a non-canonical signer-policy digest";
+    assert lib.assertMsg (verifiedSignedBootInputAccepted
+      { }
+    ) "the signed-boot finalizer factory rejected public store inputs";
+    assert lib.assertMsg (
+      !(verifiedSignedBootInputAccepted {
+        signingPlan = "/tmp/kaiba-untrusted-signing-plan";
+      })
+    ) "the signed-boot finalizer factory accepted a plan outside the Nix store";
+    assert lib.assertMsg (
+      !(verifiedSignedBootInputAccepted {
+        signedOutput = "/tmp/kaiba-untrusted-signed-output";
+      })
+    ) "the signed-boot finalizer factory accepted signed output outside the Nix store";
+    pkgs.runCommand "kaiba-signed-boot-plan-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.check-jsonschema
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.jq
+          pkgs.openssl
+          pkgs.xxd
+        ];
+      }
+      ''
+        set -euo pipefail
+
+        find ${bootSigningPlanFixture} -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
+          > "$TMPDIR/actual-plan-files"
+        printf '%s\n' boot.img plan.json public.pem \
+          > "$TMPDIR/expected-plan-files"
+        cmp "$TMPDIR/expected-plan-files" "$TMPDIR/actual-plan-files"
+
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha1.schema.json \
+          ${bootSigningPlanFixture}/plan.json
+
+        cmp \
+          ${secureBootFixtureA}/unsigned/boot.img \
+          ${bootSigningPlanFixture}/boot.img
+        cmp \
+          ${./fixtures/development-boot-public.pem} \
+          ${bootSigningPlanFixture}/public.pem
+        test "$(jq -r .schema_version ${bootSigningPlanFixture}/plan.json)" = \
+          'kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1'
+        test "$(jq -r .plan_id ${bootSigningPlanFixture}/plan.json)" = \
+          'plan:rpi5-development-fixture:1'
+        test "$(jq -r .public_key_fingerprint ${bootSigningPlanFixture}/plan.json)" = \
+          '${developmentYubiKeyPublicKeyFingerprint}'
+        test "$(jq -r .source_date_epoch ${bootSigningPlanFixture}/plan.json)" = \
+          '1786968000'
+        test "$(jq -r .signer_policy_digest ${bootSigningPlanFixture}/plan.json)" = \
+          '${developmentYubiKeySignerPolicyDigest}'
+        test "$(jq -r .boot_image_size_bytes ${bootSigningPlanFixture}/plan.json)" = \
+          "$(stat --format=%s ${bootSigningPlanFixture}/boot.img)"
+        test "$(jq -r .boot_image_digest ${bootSigningPlanFixture}/plan.json)" = \
+          "sha256:$(sha256sum ${bootSigningPlanFixture}/boot.img | cut -d ' ' -f 1)"
+        jq -e '
+          keys == [
+            "boot_image_digest",
+            "boot_image_size_bytes",
+            "plan_id",
+            "public_key_fingerprint",
+            "schema_version",
+            "signer_policy_digest",
+            "source_date_epoch"
+          ]
+          and (.boot_image_size_bytes | type) == "number"
+          and (.source_date_epoch | type) == "number"
+        ' ${bootSigningPlanFixture}/plan.json > /dev/null
+
+        openssl pkey \
+          -pubin \
+          -in ${bootSigningPlanFixture}/public.pem \
+          -outform DER \
+          -out "$TMPDIR/boot-signing-public.der"
+        test "$(
+          openssl pkey \
+            -pubin \
+            -in ${bootSigningPlanFixture}/public.pem \
+            -text \
+            -noout \
+            | sed -n '1p'
+        )" = 'Public-Key: (2048 bit)'
+        openssl pkey \
+          -pubin \
+          -in ${bootSigningPlanFixture}/public.pem \
+          -text \
+          -noout \
+          | grep -Fx 'Exponent: 65537 (0x10001)' > /dev/null
+        test "sha256:$(sha256sum "$TMPDIR/boot-signing-public.der" | cut -d ' ' -f 1)" = \
+          '${developmentYubiKeyPublicKeyFingerprint}'
+
+        test -x ${built.signedBootTool}/bin/kaiba-provision-sign-boot
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.privateKeyAccess}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.signingAuthorityConfigured}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.directHardwareAccess}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON built.signedBootTool.kaibaSignedBootTool.otpCapable}' = 'false'
+        test '${builtins.toJSON bootSigningPlanFixture.kaibaBootSigningPlan.privateKeyAccess}' = 'false'
+        test '${builtins.toJSON bootSigningPlanFixture.kaibaBootSigningPlan.signingAuthorityConfigured}' = 'false'
+        test '${builtins.toJSON bootSigningPlanFixture.kaibaBootSigningPlan.mutationCapable}' = 'false'
+        test '${bootSigningPlanFixture.kaibaBootSigningPlan.schemaVersion}' = \
+          'kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1'
+        test '${bootSigningPlanFixture.kaibaBootSigningPlan.signerPolicyDigest}' = \
+          '${developmentYubiKeySignerPolicyDigest}'
+        test '${builtins.toJSON verifiedSignedBootEvaluationFixture.kaibaVerifiedSignedBoot.privateKeyAccess}' = \
+          'false'
+        test '${builtins.toJSON verifiedSignedBootEvaluationFixture.kaibaVerifiedSignedBoot.mutationCapable}' = \
+          'false'
+        test '${builtins.toJSON verifiedSignedBootEvaluationFixture.kaibaVerifiedSignedBoot.signatureVerificationRequired}' = \
+          'true'
+        test '${verifiedSignedBootEvaluationFixture.kaibaVerifiedSignedBoot.verificationMode}' = \
+          'pure_offline'
+
+        find ${verifiedSignedBootFixture} -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
+          > "$TMPDIR/actual-final-files"
+        printf '%s\n' \
+          boot.img \
+          boot.sig \
+          manifest.json \
+          public.pem \
+          signing-plan.json \
+          signing-result.json \
+          > "$TMPDIR/expected-final-files"
+        cmp "$TMPDIR/expected-final-files" "$TMPDIR/actual-final-files"
+        cmp ${signedBootFinalizerBootImage} ${verifiedSignedBootFixture}/boot.img
+        cmp ${./fixtures/signed-boot-finalizer/boot.sig} ${verifiedSignedBootFixture}/boot.sig
+        cmp ${signedBootFinalizerPublicKey} ${verifiedSignedBootFixture}/public.pem
+        cmp ${signedBootFinalizerPlan}/plan.json ${verifiedSignedBootFixture}/signing-plan.json
+        cmp \
+          ${./fixtures/signed-boot-finalizer/signing-result.json} \
+          ${verifiedSignedBootFixture}/signing-result.json
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/rpi5-boot-signing-result-v1alpha1.schema.json \
+          ${verifiedSignedBootFixture}/signing-result.json
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/secure-boot-bundle-v1alpha1.schema.json \
+          ${verifiedSignedBootFixture}/manifest.json
+        jq -e '
+          .schema_version == "kaiba.provisioning.secure-boot-bundle/v1alpha1"
+          and .manifest_id == "plan:rpi5-finalizer-fixture:1"
+          and .device_class == "raspberry-pi-5"
+          and .signing_policy_digest == "sha256:68498f57aa811b8a714260a4ac4390118c78efdb2af416cc64bfbd8eac4c42e3"
+          and [.artifacts[].role] == [
+            "boot_public_key",
+            "rpi5.boot_image",
+            "rpi5.boot_signature"
+          ]
+        ' ${verifiedSignedBootFixture}/manifest.json > /dev/null
+        ${pkgs.bash}/bin/bash ${pkgs.raspberrypi-eeprom.src}/rpi-eeprom-digest \
+          -k ${verifiedSignedBootFixture}/public.pem \
+          -i ${verifiedSignedBootFixture}/boot.img \
+          -v ${verifiedSignedBootFixture}/boot.sig
+        SOURCE_DATE_EPOCH=1786968000 \
+          ${pkgs.bash}/bin/bash ${pkgs.raspberrypi-eeprom.src}/rpi-eeprom-digest \
+          -H ${signedBootFinalizerHSMWrapper} \
+          -i ${verifiedSignedBootFixture}/boot.img \
+          -o "$TMPDIR/upstream-boot.sig"
+        cmp ${verifiedSignedBootFixture}/boot.sig "$TMPDIR/upstream-boot.sig"
+
+        set +e
+        ${built.signedBootTool}/bin/kaiba-provision-sign-boot sign \
+          --plan ${bootSigningPlanFixture} \
+          --output "$TMPDIR/generic-sign-output" \
+          > "$TMPDIR/generic-sign.stdout" \
+          2> "$TMPDIR/generic-sign.stderr"
+        generic_sign_status="$?"
+        set -e
+        test "$generic_sign_status" -eq 1
+        test ! -e "$TMPDIR/generic-sign-output"
+        grep -F 'linker-fixed public-key fingerprint' \
+          "$TMPDIR/generic-sign.stderr"
+
+        mkdir -p "$out"
+        touch "$out/passed"
+      '';
+
+  unfusedCapsuleContract =
+    assert lib.assertMsg (verifiedUnfusedCapsuleInputAccepted
+      { }
+    ) "the unfused capsule factory rejected valid typed store inputs";
+    assert lib.assertMsg (
+      !(verifiedUnfusedCapsuleInputAccepted {
+        verifiedSignedBoot = "/tmp/kaiba-untrusted-verified-signed-boot";
+      })
+    ) "the unfused capsule factory accepted a signed bundle outside the Nix store";
+    assert lib.assertMsg (
+      !(verifiedUnfusedCapsuleInputAccepted {
+        unsignedArtifacts = "/tmp/kaiba-untrusted-unsigned-artifacts";
+      })
+    ) "the unfused capsule factory accepted root images outside the Nix store";
+    assert lib.assertMsg (
+      !(verifiedUnfusedCapsuleInputAccepted {
+        capsuleID = "Capsule With Spaces";
+      })
+    ) "the unfused capsule factory accepted a non-canonical capsule ID";
+    assert lib.assertMsg (
+      !(verifiedUnfusedCapsuleInputAccepted {
+        fixtureID = "fixture:rpi5:UPPERCASE";
+      })
+    ) "the unfused capsule factory accepted a non-canonical fixture ID";
+    assert lib.assertMsg (
+      !(verifiedUnfusedCapsuleInputAccepted {
+        trustedPublicKeyFingerprint = "sha256:941775DDAEDDDBC068EE6802FD90E2CBBC606DBADBEFE2A743375DB4F0233A81";
+      })
+    ) "the unfused capsule factory accepted a non-canonical signer trust anchor";
+    assert lib.assertMsg (
+      !(verifiedUnfusedCapsuleInputAccepted {
+        trustedPublicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
+      })
+    ) "the unfused capsule factory accepted a mismatched signer trust anchor";
+    assert lib.assertMsg (
+      let
+        contract = verifiedUnfusedCapsuleFixture.kaibaVerifiedUnfusedCapsule;
+      in
+      contract.dmVerityVerified
+      && contract.fixtureSynthetic
+      && contract.signatureVerificationRequired
+      && contract.signerTrustAnchored
+      && contract.evidenceMode == "offline_fixture"
+      && contract.verificationMode == "pure_offline_synthetic_fixture"
+      && lib.all (value: value == false) [
+        contract.blockDeviceWriteCapable
+        contract.directHardwareAccess
+        contract.eepromProgrammingCapable
+        contract.hardwareObservationClaim
+        contract.mutationCapable
+        contract.oneTimeSettingCapable
+        contract.otpCapable
+        contract.privateKeyAccess
+        contract.securityEnforcementClaim
+        contract.signingAuthorityConfigured
+      ]
+    ) "the unfused capsule derivation gained hardware, mutation, signing, or enforcement authority";
+    pkgs.runCommand "kaiba-rpi5-unfused-capsule-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.cryptsetup
+          pkgs.findutils
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        export LC_ALL=C
+
+        readonly bundle=${verifiedUnfusedCapsuleFixture}
+        readonly capsule="$bundle/capsule"
+        readonly manifest="$bundle/capsule-manifest.json"
+        readonly fixture="$bundle/unfused-fixture.json"
+        readonly result="$bundle/compatibility-result.json"
+        readonly public_key="$bundle/public.pem"
+        readonly verifier="${verifiedUnfusedCapsuleFixture.kaibaVerifiedUnfusedCapsule.unfusedVerifier}/bin/kaiba-provision-unfused-compat"
+
+        find "$bundle" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
+          > "$TMPDIR/actual-output-files"
+        printf '%s\n' \
+          capsule \
+          capsule-manifest.json \
+          compatibility-result.json \
+          public.pem \
+          unfused-fixture.json \
+          > "$TMPDIR/expected-output-files"
+        cmp "$TMPDIR/expected-output-files" "$TMPDIR/actual-output-files"
+
+        find "$capsule" -type f -printf '%P\n' | sort \
+          > "$TMPDIR/actual-capsule-files"
+        printf '%s\n' \
+          boot.img \
+          boot.sig \
+          nvme/root-data.img \
+          nvme/root-hash.img \
+          > "$TMPDIR/expected-capsule-files"
+        cmp "$TMPDIR/expected-capsule-files" "$TMPDIR/actual-capsule-files"
+        test "$(find "$capsule" -mindepth 1 -type d -printf '%P\n')" = nvme
+        test -z "$(find "$bundle" -type l -print -quit)"
+        test -z "$(find "$bundle" ! -type d ! -type f -print -quit)"
+
+        cmp ${unfusedCapsuleVerifiedSignedBoot}/boot.img "$capsule/boot.img"
+        cmp ${unfusedCapsuleVerifiedSignedBoot}/boot.sig "$capsule/boot.sig"
+        cmp ${unfusedCapsuleVerifiedSignedBoot}/public.pem "$public_key"
+        cmp \
+          ${secureBootFixtureA}/nvme/root-data.img \
+          "$capsule/nvme/root-data.img"
+        cmp \
+          ${secureBootFixtureA}/nvme/root-hash.img \
+          "$capsule/nvme/root-hash.img"
+
+        root_hash="$(jq -r .root_integrity_digest \
+          ${secureBootFixtureA}/manifest.json | cut -d: -f2)"
+        veritysetup verify \
+          "$capsule/nvme/root-data.img" \
+          "$capsule/nvme/root-hash.img" \
+          "$root_hash"
+
+        jq -e '
+          keys == [
+            "boot_image_path",
+            "boot_signature_path",
+            "capsule_digest",
+            "capsule_id",
+            "files",
+            "root_data_path",
+            "root_hash_path",
+            "schema_version"
+          ]
+          and .schema_version
+            == "provisioning.kaiba.network/rpi5-unfused-capsule-manifest/v1alpha1"
+          and .capsule_id == "capsule:rpi5-unfused-fixture:1"
+          and .boot_image_path == "boot.img"
+          and .boot_signature_path == "boot.sig"
+          and .root_data_path == "nvme/root-data.img"
+          and .root_hash_path == "nvme/root-hash.img"
+          and [.files[].path] == [
+            "boot.img",
+            "boot.sig",
+            "nvme/root-data.img",
+            "nvme/root-hash.img"
+          ]
+          and ([.files[].size_bytes | type] | all(. == "number"))
+          and ([.files[].sha256]
+            | all(test("^sha256:[0-9a-f]{64}$")))
+        ' "$manifest" > /dev/null
+
+        while IFS= read -r relative; do
+          test "$(jq -r --arg path "$relative" \
+            '.files[] | select(.path == $path) | .size_bytes' "$manifest")" = \
+            "$(stat --format=%s "$capsule/$relative")"
+          test "$(jq -r --arg path "$relative" \
+            '.files[] | select(.path == $path) | .sha256' "$manifest")" = \
+            "sha256:$(sha256sum "$capsule/$relative" | cut -d ' ' -f 1)"
+        done < "$TMPDIR/expected-capsule-files"
+
+        expected_capsule_digest="sha256:$({
+          printf '%s\0' 'kaiba.rpi5.unfused-capsule.v1'
+          while IFS= read -r relative; do
+            printf '%s\0%s\0sha256:%s\0' \
+              "$relative" \
+              "$(stat --format=%s "$capsule/$relative")" \
+              "$(sha256sum "$capsule/$relative" | cut -d ' ' -f 1)"
+          done < "$TMPDIR/expected-capsule-files"
+        } | sha256sum | cut -d ' ' -f 1)"
+        test "$(jq -r .capsule_digest "$manifest")" = \
+          "$expected_capsule_digest"
+
+        jq -e --slurpfile manifest "$manifest" '
+          keys == [
+            "boot_image_digest",
+            "boot_mode",
+            "boot_signature_digest",
+            "capsule_digest",
+            "capsule_id",
+            "compatibility_marker_observed",
+            "firmware_loaded",
+            "fixture_id",
+            "initramfs_started",
+            "kernel_started",
+            "root_data_digest",
+            "root_hash_digest",
+            "schema_version"
+          ]
+          and .schema_version
+            == "provisioning.kaiba.network/rpi5-unfused-compatibility-fixture/v1alpha1"
+          and .fixture_id == "fixture:rpi5-unfused-fixture:synthetic:1"
+          and .capsule_id == $manifest[0].capsule_id
+          and .capsule_digest == $manifest[0].capsule_digest
+          and .boot_image_digest == $manifest[0].files[0].sha256
+          and .boot_signature_digest == $manifest[0].files[1].sha256
+          and .root_data_digest == $manifest[0].files[2].sha256
+          and .root_hash_digest == $manifest[0].files[3].sha256
+          and .boot_mode == "boot_ramdisk"
+          and .firmware_loaded == true
+          and .kernel_started == true
+          and .initramfs_started == true
+          and .compatibility_marker_observed == true
+        ' "$fixture" > /dev/null
+
+        jq -e --slurpfile manifest "$manifest" --slurpfile fixture "$fixture" '
+          keys == [
+            "boot_image_digest",
+            "boot_public_key_fingerprint",
+            "boot_signature_digest",
+            "capsule_digest",
+            "capsule_id",
+            "evidence_mode",
+            "files_verified",
+            "fixture_digest",
+            "fixture_id",
+            "hardware_observed",
+            "manifest_digest",
+            "mutation_eligible",
+            "root_data_digest",
+            "root_hash_digest",
+            "schema_version",
+            "security_enforced",
+            "signature_verification_receipt",
+            "signature_verified",
+            "signer_trust_anchored",
+            "signer_trust_policy_digest",
+            "status"
+          ]
+          and .schema_version
+            == "provisioning.kaiba.network/rpi5-unfused-compatibility-result/v1alpha2"
+          and .status == "compatibility_passed"
+          and .evidence_mode == "offline_fixture"
+          and .fixture_id == $fixture[0].fixture_id
+          and .capsule_id == $manifest[0].capsule_id
+          and .capsule_digest == $manifest[0].capsule_digest
+          and .boot_image_digest == $manifest[0].files[0].sha256
+          and .boot_signature_digest == $manifest[0].files[1].sha256
+          and .root_data_digest == $manifest[0].files[2].sha256
+          and .root_hash_digest == $manifest[0].files[3].sha256
+          and .boot_public_key_fingerprint
+            == "${unfusedCapsulePublicKeyFingerprint}"
+          and (.manifest_digest | test("^sha256:[0-9a-f]{64}$"))
+          and (.fixture_digest | test("^sha256:[0-9a-f]{64}$"))
+          and (.signature_verification_receipt | test("^sha256:[0-9a-f]{64}$"))
+          and (.signer_trust_policy_digest | test("^sha256:[0-9a-f]{64}$"))
+          and .files_verified == 4
+          and .signature_verified == true
+          and .signer_trust_anchored == true
+          and .hardware_observed == false
+          and .security_enforced == false
+          and .mutation_eligible == false
+        ' "$result" > /dev/null
+
+        cp -R --no-preserve=ownership "$capsule" "$TMPDIR/tampered-capsule"
+        chmod u+w "$TMPDIR/tampered-capsule/nvme/root-hash.img"
+        printf 'X' | dd \
+          of="$TMPDIR/tampered-capsule/nvme/root-hash.img" \
+          bs=1 \
+          seek=0 \
+          conv=notrunc \
+          status=none
+        set +e
+        "$verifier" verify-signed-offline-fixture \
+          --manifest "$manifest" \
+          --capsule-root "$TMPDIR/tampered-capsule" \
+          --fixture "$fixture" \
+          --public-key "$public_key" \
+          > "$TMPDIR/tampered.stdout" \
+          2> "$TMPDIR/tampered.stderr"
+        tampered_status="$?"
+        set -e
+        test "$tampered_status" -eq 3
+        test ! -s "$TMPDIR/tampered.stdout"
+        grep -F 'digest does not match the capsule manifest' \
+          "$TMPDIR/tampered.stderr"
+
+        mkdir -p "$out"
+        touch "$out/passed"
+      '';
+
+  mediaStagingFixtureContract =
+    assert lib.assertMsg
+      (
+        let
+          contract = mediaStagingFixture.kaibaMediaStagingFixture;
+        in
+        contract.verifiedCapsule == verifiedUnfusedCapsuleFixture
+        && contract.mediaStager == built.mediaStager
+        && contract.bootFilesystemSizeMiB == 128
+        && contract.alignmentBytes == 1048576
+        && contract.sectorSizeBytes == 512
+        && contract.fixtureFileWriteCapable
+        && contract.snapshotExclusiveLockRequired
+        && contract.snapshotPinnedRegularFile
+        && contract.fixtureSnapshot.kaibaFixtureSnapshot.regularFileOnly
+        && contract.fixtureSnapshot.kaibaFixtureSnapshot.destinationFileWriteCapable
+        && lib.all (value: value == false) [
+          contract.fixtureSnapshot.kaibaFixtureSnapshot.blockDeviceAccess
+          contract.fixtureSnapshot.kaibaFixtureSnapshot.directHardwareAccess
+          contract.fixtureSnapshot.kaibaFixtureSnapshot.mutationCapable
+          contract.fixtureSnapshot.kaibaFixtureSnapshot.sourceWriteCapable
+        ]
+        && lib.all (value: value == false) [
+          contract.blockDeviceAccess
+          contract.blockDeviceWriteCapable
+          contract.coldPowerCycleClaim
+          contract.gptBoundByStagerReceipt
+          contract.hardwareObservationClaim
+          contract.mutationCapable
+          contract.oneTimeSettingCapable
+          contract.otpCapable
+          contract.securityEnforcementClaim
+        ]
+      )
+      "the media-staging fixture gained block-device, hardware, enforcement, or one-time-setting authority";
+    pkgs.runCommand "kaiba-rpi5-media-staging-fixture-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.cryptsetup
+          pkgs.diffutils
+          pkgs.findutils
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.gptfdisk
+          pkgs.jq
+          pkgs.mtools
+          pkgs.util-linux
+        ];
+      }
+      ''
+        set -euo pipefail
+        export LC_ALL=C
+
+        readonly fixture=${mediaStagingFixture}
+        readonly fixture_tool="$fixture/bin/kaiba-provision-media-fixture"
+        readonly media_stager=${built.mediaStager}/bin/kaiba-provision-media-stager
+        readonly boot_filesystem="$fixture/boot-filesystem.img"
+        readonly gpt_template="$fixture/gpt-template.img"
+        readonly layout="$fixture/layout.json"
+        readonly gpt_template_source="$(jq -r .gpt.template_path "$layout")"
+        readonly boot_source="$(jq -r \
+          '.images[] | select(.role == "boot-filesystem") | .source_path' \
+          "$layout")"
+        readonly capsule=${verifiedUnfusedCapsuleFixture}/capsule
+        readonly capsule_manifest=${verifiedUnfusedCapsuleFixture}/capsule-manifest.json
+        readonly workspace="$TMPDIR/media-fixture-workspace"
+
+        test -x "$fixture_tool"
+        test -x "$media_stager"
+        test -f "$boot_filesystem"
+        test -s "$boot_filesystem"
+        test -f "$gpt_template"
+        test -s "$gpt_template"
+        test -f "$gpt_template_source"
+        test ! -L "$gpt_template_source"
+        test "$(readlink -f "$gpt_template")" = "$gpt_template_source"
+        test -f "$layout"
+        test -s "$layout"
+        test -f "$boot_source"
+        test ! -L "$boot_source"
+        cmp "$boot_source" "$boot_filesystem"
+
+        find "$fixture" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
+          > "$TMPDIR/actual-fixture-entries"
+        printf '%s\n' \
+          bin \
+          boot-filesystem.img \
+          gpt-template.img \
+          layout.json \
+          > "$TMPDIR/expected-fixture-entries"
+        cmp "$TMPDIR/expected-fixture-entries" "$TMPDIR/actual-fixture-entries"
+        test "$(find "$fixture/bin" -mindepth 1 -maxdepth 1 -printf '%f\n')" = \
+          kaiba-provision-media-fixture
+
+        mdir -b -i "$boot_filesystem" :: \
+          | sed 's#^::/##' \
+          | sort > "$TMPDIR/actual-boot-files"
+        printf '%s\n' boot.img boot.sig config.txt \
+          > "$TMPDIR/expected-boot-files"
+        cmp "$TMPDIR/expected-boot-files" "$TMPDIR/actual-boot-files"
+        test "$(mtype -i "$boot_filesystem" ::config.txt | tr -d '\r')" = \
+          'boot_ramdisk=1'
+        mcopy -n -i "$boot_filesystem" ::boot.img "$TMPDIR/outer-boot.img"
+        mcopy -n -i "$boot_filesystem" ::boot.sig "$TMPDIR/outer-boot.sig"
+        cmp "$capsule/boot.img" "$TMPDIR/outer-boot.img"
+        cmp "$capsule/boot.sig" "$TMPDIR/outer-boot.sig"
+
+        ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" init --workspace "$workspace" \
+          > "$TMPDIR/init.json"
+        jq -e \
+          --arg workspace "$workspace" \
+          --arg layout_digest "$(jq -r .layout_digest "$layout")" \
+          '
+            keys == [
+              "block_device_access",
+              "evidence_mode",
+              "layout_digest",
+              "one_time_settings_changed",
+              "plan",
+              "status",
+              "target",
+              "workspace"
+            ]
+            and .status == "fixture_initialized"
+            and .evidence_mode == "regular_file_fixture"
+            and .workspace == $workspace
+            and .target == ($workspace + "/target.img")
+            and .plan == ($workspace + "/fixture-plan.json")
+            and .layout_digest == $layout_digest
+            and .block_device_access == false
+            and .one_time_settings_changed == false
+          ' "$TMPDIR/init.json" > /dev/null
+        test -d "$workspace"
+        test ! -L "$workspace"
+        find "$workspace" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
+          > "$TMPDIR/actual-workspace-files"
+        printf '%s\n' fixture-plan.json target.img \
+          > "$TMPDIR/expected-workspace-files"
+        cmp "$TMPDIR/expected-workspace-files" "$TMPDIR/actual-workspace-files"
+
+        readonly plan="$workspace/fixture-plan.json"
+        readonly target="$workspace/target.img"
+        cmp "$gpt_template" "$target"
+        test "$(stat --format=%a "$plan")" = 600
+        test -f "$plan"
+        test ! -L "$plan"
+        test -s "$plan"
+        test -f "$target"
+        test ! -L "$target"
+
+        jq -e \
+          --arg target "$target" \
+          --arg boot_filesystem "$boot_source" \
+          --arg root_data "$capsule/nvme/root-data.img" \
+          --arg root_hash "$capsule/nvme/root-hash.img" \
+          '
+            keys == ["images", "schema_version", "target"]
+            and .schema_version
+              == "provisioning.kaiba.network/media-staging-plan/v1alpha1"
+            and (.target | keys)
+              == ["expected_identity", "expected_size_bytes", "path"]
+            and .target.path == $target
+            and .target.expected_identity == "target.img"
+            and .target.expected_size_bytes > 0
+            and [.images[].role]
+              == ["boot-filesystem", "root-data", "root-hash"]
+            and [.images[].path]
+              == [$boot_filesystem, $root_data, $root_hash]
+            and ([.images[] | keys]
+              | all(. == ["digest", "offset_bytes", "path", "role", "size_bytes"]))
+            and ([.images[].digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and ([.images[].size_bytes] | all(. > 0))
+            and ([.images[].offset_bytes] | all(. >= 1048576 and . % 4096 == 0))
+            and .images[0].offset_bytes + .images[0].size_bytes
+              <= .images[1].offset_bytes
+            and .images[1].offset_bytes + .images[1].size_bytes
+              <= .images[2].offset_bytes
+            and .images[2].offset_bytes + .images[2].size_bytes
+              <= .target.expected_size_bytes
+          ' "$plan" > /dev/null
+        test "$(stat --format=%s "$target")" = \
+          "$(jq -r .target.expected_size_bytes "$plan")"
+
+        for index in 0 1 2; do
+          source="$(jq -r ".images[$index].path" "$plan")"
+          test -f "$source"
+          test ! -L "$source"
+          test "$(stat --format=%s "$source")" = \
+            "$(jq -r ".images[$index].size_bytes" "$plan")"
+          test "sha256:$(sha256sum "$source" | cut -d ' ' -f 1)" = \
+            "$(jq -r ".images[$index].digest" "$plan")"
+        done
+
+        jq -e \
+          --arg gpt_template "$gpt_template_source" \
+          --slurpfile plan "$plan" \
+          --slurpfile capsule_manifest "$capsule_manifest" \
+          '
+            keys == [
+              "alignment_bytes",
+              "boot_filesystem",
+              "capsule",
+              "evidence_mode",
+              "fixture_id",
+              "gpt",
+              "images",
+              "layout_digest",
+              "safety",
+              "schema_version",
+              "sector_size_bytes",
+              "target_size_bytes",
+              "verity"
+            ]
+            and .schema_version
+              == "provisioning.kaiba.network/rpi5-media-staging-fixture/v1alpha1"
+            and .fixture_id
+              == ($capsule_manifest[0].capsule_id + ":media-staging-fixture")
+            and .evidence_mode == "regular_file_fixture"
+            and .capsule.capsule_id == $capsule_manifest[0].capsule_id
+            and .capsule.capsule_digest == $capsule_manifest[0].capsule_digest
+            and (.capsule.manifest_file_digest
+              | test("^sha256:[0-9a-f]{64}$"))
+            and (.layout_digest | test("^sha256:[0-9a-f]{64}$"))
+            and .sector_size_bytes == 512
+            and .alignment_bytes == 1048576
+            and .target_size_bytes == $plan[0].target.expected_size_bytes
+            and (.gpt.disk_guid
+              | test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$"))
+            and .gpt.template_path == $gpt_template
+            and (.gpt.template_digest | test("^sha256:[0-9a-f]{64}$"))
+            and .gpt.backup_reserved_bytes == 1048576
+            and .gpt.first_usable_lba == 34
+            and .gpt.last_usable_lba
+              == (.target_size_bytes / .sector_size_bytes - 34)
+            and [.gpt.metadata_regions[].role] == ["primary", "backup"]
+            and [.gpt.metadata_regions[].offset_bytes]
+              == [0, (.target_size_bytes - .alignment_bytes)]
+            and [.gpt.metadata_regions[].size_bytes]
+              == [.alignment_bytes, .alignment_bytes]
+            and ([.gpt.metadata_regions[].digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and .gpt.partitions[0].offset_bytes == .alignment_bytes
+            and .gpt.partitions[1].offset_bytes
+              == (.gpt.partitions[0].offset_bytes
+                + .gpt.partitions[0].partition_size_bytes)
+            and .gpt.partitions[2].offset_bytes
+              == (.gpt.partitions[1].offset_bytes
+                + .gpt.partitions[1].partition_size_bytes)
+            and .gpt.metadata_regions[1].offset_bytes
+              == (.gpt.partitions[2].offset_bytes
+                + .gpt.partitions[2].partition_size_bytes)
+            and (.gpt.metadata_regions[1].offset_bytes
+              + .gpt.metadata_regions[1].size_bytes) == .target_size_bytes
+            and [.gpt.partitions[].number] == [1, 2, 3]
+            and [.gpt.partitions[].attributes] == [null, null, null]
+            and ([.gpt.partitions[].content_digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and [.gpt.partitions[].name]
+              == ["kaiba-boot", "kaiba-root", "kaiba-root-verity"]
+            and [.gpt.partitions[].role]
+              == ["boot-filesystem", "root-data", "root-hash"]
+            and [.gpt.partitions[].type_code] == ["ef00", "8305", "830e"]
+            and [.gpt.partitions[].offset_bytes]
+              == [$plan[0].images[].offset_bytes]
+            and ([.gpt.partitions[].partition_size_bytes] | all(. > 0))
+            and ([.gpt.partitions[].unique_guid]
+              | all(test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$")))
+            and .boot_filesystem.filesystem == "fat32"
+            and .boot_filesystem.label == "KAIBA_BOOT"
+            and .boot_filesystem.volume_id == "4b414942"
+            and [.boot_filesystem.allowlist[].path]
+              == ["boot.img", "boot.sig", "config.txt"]
+            and ([.boot_filesystem.allowlist[].digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and [.images[].role]
+              == ["boot-filesystem", "root-data", "root-hash"]
+            and [.images[].source_path] == [$plan[0].images[].path]
+            and [.images[].digest] == [$plan[0].images[].digest]
+            and [.images[].size_bytes] == [$plan[0].images[].size_bytes]
+            and [.images[].offset_bytes] == [$plan[0].images[].offset_bytes]
+            and .verity.algorithm == "sha256"
+            and (.verity.root_hash | test("^sha256:[0-9a-f]{64}$"))
+            and .verity.data_block_size == 4096
+            and .verity.hash_block_size == 4096
+            and .safety == {
+              synthetic: true,
+              block_device_access: false,
+              hardware_observed: false,
+              security_enforced: false,
+              mutation_eligible: false,
+              one_time_settings_changed: false,
+              gpt_bound_by_stager_receipt: false,
+              cold_power_cycle_observed: false
+            }
+          ' "$layout" > /dev/null
+        jq --compact-output --sort-keys 'del(.layout_digest)' "$layout" \
+          > "$TMPDIR/canonical-layout"
+        expected_layout_digest="sha256:$({
+          printf '%s\0' \
+            'kaiba.provisioning.rpi5-media-staging-fixture.v1alpha1'
+          cat "$TMPDIR/canonical-layout"
+        } | sha256sum | cut -d ' ' -f 1)"
+        test "$(jq -r .layout_digest "$layout")" = "$expected_layout_digest"
+        test "sha256:$(sha256sum "$gpt_template" | cut -d ' ' -f 1)" = \
+          "$(jq -r .gpt.template_digest "$layout")"
+
+        sgdisk --verify "$target" > "$TMPDIR/gpt-before.txt"
+        dd if="$target" of="$TMPDIR/primary-gpt.before" \
+          bs=1M count=1 status=none
+        target_size="$(stat --format=%s "$target")"
+        dd if="$target" of="$TMPDIR/backup-gpt.before" \
+          bs=1M skip="$((target_size - 1048576))" count=1 \
+          iflag=skip_bytes status=none
+        test "sha256:$(sha256sum "$TMPDIR/primary-gpt.before" | cut -d ' ' -f 1)" = \
+          "$(jq -r '.gpt.metadata_regions[] | select(.role == "primary") | .digest' "$layout")"
+        test "sha256:$(sha256sum "$TMPDIR/backup-gpt.before" | cut -d ' ' -f 1)" = \
+          "$(jq -r '.gpt.metadata_regions[] | select(.role == "backup") | .digest' "$layout")"
+
+        "$media_stager" fixture-dry-run --plan "$plan" \
+          > "$TMPDIR/dry-run.json"
+        "$media_stager" fixture-stage --plan "$plan" \
+          > "$TMPDIR/stage.json"
+        "$media_stager" fixture-readback --plan "$plan" \
+          > "$TMPDIR/readback.json"
+
+        dd if="$target" of="$TMPDIR/primary-gpt.after" \
+          bs=1M count=1 status=none
+        dd if="$target" of="$TMPDIR/backup-gpt.after" \
+          bs=1M skip="$((target_size - 1048576))" count=1 \
+          iflag=skip_bytes status=none
+        cmp "$TMPDIR/primary-gpt.before" "$TMPDIR/primary-gpt.after"
+        cmp "$TMPDIR/backup-gpt.before" "$TMPDIR/backup-gpt.after"
+        sgdisk --verify "$target" > "$TMPDIR/gpt-after.txt"
+
+        jq -e -s \
+          --slurpfile plan "$plan" \
+          '
+            length == 3
+            and ([.[].schema_version]
+              | all(. == "provisioning.kaiba.network/media-staging-result/v1alpha1"))
+          ' \
+          "$TMPDIR/dry-run.json" \
+          "$TMPDIR/stage.json" \
+          "$TMPDIR/readback.json" > /dev/null
+        jq -e -s \
+          --slurpfile plan "$plan" \
+          '
+            [.[].action] == ["dry_run", "stage", "readback"]
+            and [.[].status] == [
+              "validated_no_write",
+              "fsync_complete_readback_required",
+              "reopened_readback_verified"
+            ]
+            and ([.[].plan_digest] | unique | length) == 1
+            and ([.[].plan_digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and ([.[].receipt_digest] | unique | length) == 3
+            and ([.[].receipt_digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and ([.[].target_path]
+              | all(. == $plan[0].target.path))
+          ' \
+          "$TMPDIR/dry-run.json" \
+          "$TMPDIR/stage.json" \
+          "$TMPDIR/readback.json" > /dev/null
+        jq -e -s \
+          --slurpfile plan "$plan" \
+          '
+            ([.[].target_identity]
+              | all(. == $plan[0].target.expected_identity))
+            and ([.[].target_size_bytes]
+              | all(. == $plan[0].target.expected_size_bytes))
+            and ([.[].images]
+              | all(. == ($plan[0].images | map(del(.path)))))
+            and [.[].reopened_target] == [false, false, true]
+            and ([.[].cold_power_cycle_observed] | all(. == false))
+            and ([.[].one_time_settings_changed] | all(. == false))
+          ' \
+          "$TMPDIR/dry-run.json" \
+          "$TMPDIR/stage.json" \
+          "$TMPDIR/readback.json" > /dev/null
+
+        for index in 0 1 2; do
+          source="$(jq -r ".images[$index].path" "$plan")"
+          offset="$(jq -r ".images[$index].offset_bytes" "$plan")"
+          size="$(jq -r ".images[$index].size_bytes" "$plan")"
+          dd if="$target" of="$TMPDIR/staged-$index.img" \
+            bs=1M skip="$offset" count="$size" \
+            iflag=skip_bytes,count_bytes status=none
+          cmp "$source" "$TMPDIR/staged-$index.img"
+        done
+
+        mdir -b -i "$TMPDIR/staged-0.img" :: \
+          | sed 's#^::/##' \
+          | sort > "$TMPDIR/actual-staged-boot-files"
+        cmp "$TMPDIR/expected-boot-files" "$TMPDIR/actual-staged-boot-files"
+        test "$(mtype -i "$TMPDIR/staged-0.img" ::config.txt | tr -d '\r')" = \
+          'boot_ramdisk=1'
+        root_hash="$(jq -r .verity.root_hash "$layout")"
+        test "$root_hash" = "$(jq -r .root_integrity_digest \
+          ${secureBootFixtureA}/manifest.json)"
+        veritysetup verify \
+          --data-block-size="$(jq -r .verity.data_block_size "$layout")" \
+          --hash-block-size="$(jq -r .verity.hash_block_size "$layout")" \
+          "$TMPDIR/staged-1.img" \
+          "$TMPDIR/staged-2.img" \
+          "''${root_hash#sha256:}"
+
+        cp "$plan" "$TMPDIR/original-fixture-plan.json"
+        sed 's/schema_version/schema_versioN/' "$plan" \
+          > "$TMPDIR/unexpected-fixture-plan.json"
+        install -m 0400 "$TMPDIR/unexpected-fixture-plan.json" "$plan"
+        if ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" verify --workspace "$workspace" \
+          > "$TMPDIR/unexpected-plan.json" \
+          2> "$TMPDIR/unexpected-plan.stderr"
+        then
+          echo 'fixture verifier accepted a plan with an unknown field' >&2
+          exit 1
+        fi
+        grep -Fqx \
+          'kaiba-provision-media-fixture: fixture plan differs from the immutable layout' \
+          "$TMPDIR/unexpected-plan.stderr"
+        install -m 0400 "$TMPDIR/original-fixture-plan.json" "$plan"
+
+        exec {fixture_lock_fd}<>"$target"
+        flock --exclusive --nonblock "$fixture_lock_fd"
+        if ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" verify --workspace "$workspace" \
+          > "$TMPDIR/locked-target.json" \
+          2> "$TMPDIR/locked-target.stderr"
+        then
+          echo 'fixture verifier accepted an exclusively locked target' >&2
+          exit 1
+        fi
+        grep -Fq 'source fixture is busy' "$TMPDIR/locked-target.stderr"
+        flock --unlock "$fixture_lock_fd"
+        exec {fixture_lock_fd}>&-
+
+        ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" verify --workspace "$workspace" \
+          > "$TMPDIR/verification.json"
+        jq -e \
+          --slurpfile layout "$layout" \
+          '
+            keys == [
+              "cold_power_cycle_observed",
+              "dm_verity_verified",
+              "evidence_mode",
+              "extent_digests_verified",
+              "fat_allowlist_verified",
+              "gpt_verified",
+              "hardware_observed",
+              "layout_digest",
+              "mutation_eligible",
+              "one_time_settings_changed",
+              "partition_contents_verified",
+              "pinned_regular_file_snapshot_verified",
+              "security_enforced",
+              "status"
+            ]
+            and .status == "fixture_layout_verified"
+            and .evidence_mode == "regular_file_fixture"
+            and .layout_digest == $layout[0].layout_digest
+            and .gpt_verified == true
+            and .fat_allowlist_verified == true
+            and .extent_digests_verified == true
+            and .dm_verity_verified == true
+            and .partition_contents_verified == true
+            and .pinned_regular_file_snapshot_verified == true
+            and .hardware_observed == false
+            and .security_enforced == false
+            and .mutation_eligible == false
+            and .cold_power_cycle_observed == false
+            and .one_time_settings_changed == false
+          ' "$TMPDIR/verification.json" > /dev/null
+
+        root_hash_padding_offset=$((
+          $(jq -r '.images[] | select(.role == "root-hash") | .offset_bytes' "$layout")
+          + $(jq -r '.images[] | select(.role == "root-hash") | .size_bytes' "$layout")
+        ))
+        root_hash_partition_end=$((
+          $(jq -r '.gpt.partitions[] | select(.role == "root-hash") | .offset_bytes' "$layout")
+          + $(jq -r '.gpt.partitions[] | select(.role == "root-hash") | .partition_size_bytes' "$layout")
+        ))
+        readonly root_hash_padding_offset root_hash_partition_end
+        test "$root_hash_padding_offset" -lt "$root_hash_partition_end"
+        printf '\377' | dd of="$target" bs=1 \
+          seek="$root_hash_padding_offset" count=1 conv=notrunc status=none
+        if ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" verify --workspace "$workspace" \
+          > "$TMPDIR/nonzero-padding.json" \
+          2> "$TMPDIR/nonzero-padding.stderr"
+        then
+          echo 'fixture verifier accepted nonzero root-hash partition padding' >&2
+          exit 1
+        fi
+        grep -Fqx \
+          'kaiba-provision-media-fixture: root-hash partition content differs from the immutable layout' \
+          "$TMPDIR/nonzero-padding.stderr"
+        printf '\000' | dd of="$target" bs=1 \
+          seek="$root_hash_padding_offset" count=1 conv=notrunc status=none
+
+        expect_gpt_rejection() {
+          local label="$1"
+          local region="$2"
+          if ${pkgs.coreutils}/bin/env -i \
+            LC_ALL=C \
+            PATH="$TMPDIR/empty-path" \
+            TMPDIR="$TMPDIR" \
+            "$fixture_tool" verify --workspace "$workspace" \
+            > "$TMPDIR/$label.json" \
+            2> "$TMPDIR/$label.stderr"
+          then
+            echo "fixture verifier accepted invalid GPT: $label" >&2
+            exit 1
+          fi
+          grep -Fqx \
+            "kaiba-provision-media-fixture: $region GPT metadata differs from the immutable layout" \
+            "$TMPDIR/$label.stderr"
+        }
+
+        dd if=/dev/zero of="$target" bs=1 seek=512 count=8 \
+          conv=notrunc status=none
+        expect_gpt_rejection corrupt-primary-gpt primary
+        dd if="$TMPDIR/primary-gpt.after" of="$target" bs=1M count=1 \
+          conv=notrunc status=none
+        sgdisk --verify "$target" > /dev/null
+
+        dd if=/dev/zero of="$target" bs=1 \
+          seek="$((target_size - 512))" count=8 conv=notrunc status=none
+        expect_gpt_rejection corrupt-backup-gpt backup
+        dd if="$TMPDIR/backup-gpt.after" of="$target" bs=1M \
+          seek="$((target_size - 1048576))" count=1 \
+          oflag=seek_bytes conv=notrunc status=none
+        sgdisk --verify "$target" > /dev/null
+
+        sgdisk --attributes=2:set:63 "$target" > /dev/null
+        sgdisk --verify "$target" > /dev/null
+        expect_gpt_rejection unexpected-partition-attribute primary
+        sgdisk --attributes=2:clear:63 "$target" > /dev/null
+        sgdisk --verify "$target" > /dev/null
+
+        sector_size="$(jq -r .sector_size_bytes "$layout")"
+        root_hash_start=$(( $(jq -r '.gpt.partitions[] | select(.number == 3) | .offset_bytes' "$layout") / sector_size ))
+        root_hash_size=$(( $(jq -r '.gpt.partitions[] | select(.number == 3) | .partition_size_bytes' "$layout") / sector_size ))
+        root_hash_end=$((root_hash_start + root_hash_size - 1))
+        readonly sector_size root_hash_start root_hash_size root_hash_end
+        sgdisk \
+          --delete=3 \
+          --new=4:"$root_hash_start":"$root_hash_end" \
+          --typecode=4:"$(jq -r '.gpt.partitions[] | select(.number == 3) | .type_code' "$layout")" \
+          --change-name=4:"$(jq -r '.gpt.partitions[] | select(.number == 3) | .name' "$layout")" \
+          --partition-guid=4:"$(jq -r '.gpt.partitions[] | select(.number == 3) | .unique_guid' "$layout")" \
+          "$target" > /dev/null
+        sgdisk --verify "$target" > /dev/null
+        expect_gpt_rejection wrong-partition-number primary
+
+        mkdir -p "$out"
+        touch "$out/passed"
+      '';
+
   developmentYubiKeySigningContract =
     pkgs.runCommand "kaiba-development-yubikey-signing-contract"
       {
@@ -771,6 +2094,7 @@ let
           pkgs.coreutils
           pkgs.findutils
           pkgs.gnugrep
+          pkgs.jq
           pkgs.openssl
         ];
       }
@@ -778,6 +2102,7 @@ let
         set -euo pipefail
 
         expected_binaries="$(${pkgs.coreutils}/bin/printf '%s\n' \
+          kaiba-provision-sign-boot \
           kaiba-provision-signer \
           kaiba-provision-signing-client \
           kaiba-provision-signing-gate \
@@ -804,6 +2129,24 @@ let
           '${developmentYubiKeyPublicKeyFingerprint}'
         test '${developmentYubiKeySigning.kaibaSigning.expectedCustomerKeyHash}' = \
           '${developmentYubiKeyCustomerKeyHash}'
+        test '${developmentYubiKeySigning.kaibaSigning.signerPolicyDigest}' = \
+          '${developmentYubiKeySignerPolicyDigest}'
+        test -x \
+          ${developmentYubiKeySigning.kaibaSigning.signedBoot}/bin/kaiba-provision-sign-boot
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.gateSocketPath}' = \
+          '/run/kaiba-provision-signing/signing.sock'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.signerID}' = \
+          'signer:development-fixture'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.cohortID}' = \
+          'cohort:development-fixture'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.pkcs11URI}' = \
+          'pkcs11:serial=12345678;id=%02;type=private'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.publicKeyFingerprint}' = \
+          '${developmentYubiKeyPublicKeyFingerprint}'
+        test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.expectedPublicKeyPath}' = \
+          '${developmentYubiKeyPublicKeyPEM}'
+        test '${builtins.toJSON developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.runtimeAuthoritySelectors}' = \
+          'false'
         test "$(cat ${developmentYubiKeySigning.kaibaSigning.customerKeyHashFile})" = \
           '${developmentYubiKeyCustomerKeyHash}'
         test "$(stat --format=%s \
@@ -811,6 +2154,21 @@ let
         test "$(sha256sum \
           ${developmentYubiKeySigning.kaibaSigning.customerPublicKeyBinary} \
           | cut -d ' ' -f 1)" = '${developmentYubiKeyCustomerKeyHash}'
+        test "$(cat ${developmentYubiKeySigning.kaibaSigning.signerPolicyDigestFile})" = \
+          '${developmentYubiKeySignerPolicyDigest}'
+        jq -e '
+          .schema_version == "kaiba.provisioning.yubikey-signing-policy/v1alpha1"
+          and .signer_id == "signer:development-fixture"
+          and .cohort_id == "cohort:development-fixture"
+          and .provider == "yubikey-piv"
+          and .piv_slot == "9c"
+          and .pkcs11_uri == "pkcs11:serial=12345678;id=%02;type=private"
+          and .public_key_fingerprint == "${developmentYubiKeyPublicKeyFingerprint}"
+          and .key_algorithm == "rsa-2048"
+          and .pin_required == true
+          and .touch_required == true
+          and .private_key_exportable == false
+        ' ${developmentYubiKeySigning.kaibaSigning.signerPolicyJSON} > /dev/null
         test '${developmentYubiKeySigning.kaibaSigning.pinCredentialPath}' = \
           '/run/credentials/kaiba-provision-signing-gate.service/yubikey-pin'
         test '${developmentYubiKeySigning.kaibaSigning.socketPath}' = \
@@ -849,6 +2207,27 @@ let
           "$TMPDIR/wrapper.stderr"
         test "$(wc -l < "$TMPDIR/wrapper.stderr")" -eq 1
 
+        # The configured adapter fixes every authority value at link time and
+        # rejects attempts to replace any of them on the command line.
+        set +e
+        ${developmentYubiKeySigning}/bin/kaiba-provision-sign-boot \
+          sign \
+          --plan /tmp/kaiba-plan \
+          --output /tmp/kaiba-signed \
+          --socket /tmp/attacker.sock \
+          > "$TMPDIR/sign-boot.stdout" \
+          2> "$TMPDIR/sign-boot.stderr"
+        sign_boot_status="$?"
+        set -e
+        test "$sign_boot_status" -eq 2
+        test ! -s "$TMPDIR/sign-boot.stdout"
+        grep -Fx \
+          'usage: kaiba-provision-sign-boot sign --plan ABSOLUTE_PLAN_DIR --output ABSOLUTE_OUTPUT_DIR' \
+          "$TMPDIR/sign-boot.stderr"
+        grep -Fx \
+          '       kaiba-provision-sign-boot finalize --plan ABSOLUTE_PLAN_DIR --signed ABSOLUTE_SIGNED_DIR --output ABSOLUTE_OUTPUT_DIR' \
+          "$TMPDIR/sign-boot.stderr"
+
         mkdir -p "$out"
         touch "$out/passed"
       '';
@@ -872,13 +2251,14 @@ let
         test -x ${built.serviceSuite}/bin/kaiba-provision-signing-gate
         test -x ${built.serviceSuite}/bin/kaiba-provision-station
         test -x ${built.serviceSuite}/bin/kaiba-provision-yubikey-wrapper
+        test -x ${built.signedBootTool}/bin/kaiba-provision-sign-boot
         test -x ${built.provision}/bin/kaiba-provision
         test -x ${built.rehearsal}/bin/kaiba-provision-rehearsal
         test '${built.rehearsal.kaibaRehearsal.authority}' = \
           'rehearsal_only_non_authoritative'
-        test '${toString built.rehearsal.kaibaRehearsal.hardwareAccess}' = 'false'
-        test '${toString built.rehearsal.kaibaRehearsal.mutationCapable}' = 'false'
-        test '${toString built.rehearsal.kaibaRehearsal.otpCapable}' = 'false'
+        test '${builtins.toJSON built.rehearsal.kaibaRehearsal.hardwareAccess}' = 'false'
+        test '${builtins.toJSON built.rehearsal.kaibaRehearsal.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.rehearsal.kaibaRehearsal.otpCapable}' = 'false'
         ${built.rehearsal}/bin/kaiba-provision-rehearsal \
           --rehearsal-id nix-contract > "$TMPDIR/rehearsal.json"
         jq -e '
@@ -892,17 +2272,17 @@ let
           and ([.evidence[].otp_write_attempted] | all(. == false))
         ' "$TMPDIR/rehearsal.json" > /dev/null
         if strings ${built.rehearsal}/bin/kaiba-provision-rehearsal \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)'; then
           echo 'software rehearsal binary links a physical provisioning package' >&2
           exit 1
         fi
         test -x ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal
         test '${built.integratedRehearsal.kaibaIntegratedRehearsal.authority}' = 'non_authoritative'
         test '${built.integratedRehearsal.kaibaIntegratedRehearsal.executionMode}' = 'software_only'
-        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.directHardwareAccess}' = 'false'
-        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.mutationCapable}' = 'false'
-        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.oneTimeSettingCapable}' = 'false'
-        test '${toString built.integratedRehearsal.kaibaIntegratedRehearsal.otpCapable}' = 'false'
+        test '${builtins.toJSON built.integratedRehearsal.kaibaIntegratedRehearsal.directHardwareAccess}' = 'false'
+        test '${builtins.toJSON built.integratedRehearsal.kaibaIntegratedRehearsal.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.integratedRehearsal.kaibaIntegratedRehearsal.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON built.integratedRehearsal.kaibaIntegratedRehearsal.otpCapable}' = 'false'
         ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal \
           --state-dir "$TMPDIR/integrated-rehearsal-state" \
           --rehearsal-id nix-integrated > "$TMPDIR/integrated-rehearsal.json"
@@ -921,58 +2301,58 @@ let
           and .simulation.outcome == "rehearsal_passed"
         ' "$TMPDIR/integrated-rehearsal.json" > /dev/null
         if strings ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal \
-          | grep -E 'internal/provisioning/(physicalrpi5|rpi5)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|rpi5)([./]|$)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
           echo 'integrated rehearsal links a live physical provisioning capability' >&2
           exit 1
         fi
         test -x ${built.unfusedCompat}/bin/kaiba-provision-unfused-compat
         test '${built.unfusedCompat.kaibaUnfusedCompatibility.evidenceMode}' = \
           'offline_fixture'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.hardwareAccess}' = 'false'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.mutationCapable}' = 'false'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.otpCapable}' = 'false'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.securityEnforcementClaim}' = 'false'
-        test '${toString built.unfusedCompat.kaibaUnfusedCompatibility.signerTrustAnchored}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.hardwareAccess}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.otpCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.securityEnforcementClaim}' = 'false'
+        test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.signerTrustAnchored}' = 'false'
         if strings ${built.unfusedCompat}/bin/kaiba-provision-unfused-compat \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset'; then
           echo 'unfused compatibility verifier links a physical provisioning capability' >&2
           exit 1
         fi
         test -x ${built.unfusedEvidence}/bin/kaiba-provision-unfused-evidence
         test '${built.unfusedEvidence.kaibaUnfusedEvidence.evidenceMode}' = \
           'offline_operator_correlation'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.captureAuthenticated}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.directHardwareAccess}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.hardwareObservationClaim}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.mutationCapable}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.oneTimeSettingCapable}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.otpCapable}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.securityEnforcementClaim}' = 'false'
-        test '${toString built.unfusedEvidence.kaibaUnfusedEvidence.signerTrustAnchored}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.captureAuthenticated}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.directHardwareAccess}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.hardwareObservationClaim}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.otpCapable}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.securityEnforcementClaim}' = 'false'
+        test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.signerTrustAnchored}' = 'false'
         if strings ${built.unfusedEvidence}/bin/kaiba-provision-unfused-evidence \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
           echo 'unfused evidence verifier links a live physical provisioning capability' >&2
           exit 1
         fi
         test -x ${unfusedVerifierFixture}/bin/kaiba-provision-unfused-compat
         test -x ${unfusedVerifierFixture}/bin/kaiba-provision-unfused-evidence
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.signerTrustAnchored}' = 'true'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.signerTrustAnchored}' = 'true'
         test '${unfusedVerifierFixture.kaibaUnfusedVerifier.trustedPublicKeyFingerprint}' = \
           '${developmentYubiKeyPublicKeyFingerprint}'
         test '${unfusedVerifierFixture.kaibaUnfusedVerifier.evidenceMode}' = \
           'offline_operator_correlation'
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.captureAuthenticated}' = 'false'
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.hardwareObservationClaim}' = 'false'
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.oneTimeSettingCapable}' = 'false'
-        test '${toString unfusedVerifierFixture.kaibaUnfusedVerifier.securityEnforcementClaim}' = 'false'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.captureAuthenticated}' = 'false'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.hardwareObservationClaim}' = 'false'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON unfusedVerifierFixture.kaibaUnfusedVerifier.securityEnforcementClaim}' = 'false'
         test -x ${built.mediaStager}/bin/kaiba-provision-media-stager
-        test '${toString built.mediaStager.kaibaMediaStager.blockDeviceWriteCapable}' = 'true'
-        test '${toString built.mediaStager.kaibaMediaStager.oneTimeSettingCapable}' = 'false'
-        test '${toString built.mediaStager.kaibaMediaStager.otpCapable}' = 'false'
-        test '${toString built.mediaStager.kaibaMediaStager.eepromProgrammingCapable}' = 'false'
-        test '${toString built.mediaStager.kaibaMediaStager.fixtureModeAvailable}' = 'true'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.blockDeviceWriteCapable}' = 'true'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.oneTimeSettingCapable}' = 'false'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.otpCapable}' = 'false'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.eepromProgrammingCapable}' = 'false'
+        test '${builtins.toJSON built.mediaStager.kaibaMediaStager.fixtureModeAvailable}' = 'true'
         if strings ${built.mediaStager}/bin/kaiba-provision-media-stager \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)|/rpiboot|/gpioset'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset'; then
           echo 'media stager links a Pi ownership or lane-control capability' >&2
           exit 1
         fi
@@ -1001,8 +2381,20 @@ let
         test -f ${probeBundleIntegrity}/passed
         test -f ${rpibootMetadataStdoutCompatibility}/passed
         test -f ${secureBootArtifactContract}/passed
+        test -f ${signedBootPlanContract}/passed
+        test -f ${unfusedCapsuleContract}/passed
+        test -f ${mediaStagingFixtureContract}/passed
         test -f ${developmentYubiKeySigningContract}/passed
         test -f ${moduleEval}/results.txt
+
+        jq -e '[.checks[] | select(.id == "media-staging-fixture") | .status] == ["passed"]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "media-staging-fixture")
+            | [.system, .status]
+          ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
+        ' ${canonicalJSON}/report-input.json > /dev/null
 
         mkdir -p "$out/evidence/provisioning/hardware-qualification"
         ${lib.optionalString (qualificationEvidence != null) ''
@@ -1042,10 +2434,13 @@ in
   inherit
     developmentYubiKeySigningContract
     deviceProfileSchema
+    mediaStagingFixtureContract
     moduleEval
     probeBundleIntegrity
     provisioningTestResult
     rpibootMetadataStdoutCompatibility
     secureBootArtifactContract
+    signedBootPlanContract
+    unfusedCapsuleContract
     ;
 }

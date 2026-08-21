@@ -6,11 +6,15 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rpi5bootsig"
 )
 
 type signedTestInputs struct {
@@ -35,6 +39,7 @@ func TestVerifyDetachedSignatureBindsReviewedKeyAndCapsule(t *testing.T) {
 	}
 	if !first.SignatureValid || first.SecurityEnforced || first.Algorithm != SignatureAlgorithmRSA2048SHA256 ||
 		first.CapsuleDigest != inputs.manifest.CapsuleDigest || first.ReceiptDigest == "" ||
+		first.BootSignatureDigest != inputs.manifest.Files[1].SHA256 ||
 		first.BootPublicKeyFingerprint != policy.ExpectedPublicKeyFingerprint ||
 		!first.SignerTrustAnchored || first.SignerTrustPolicyDigest == "" {
 		t.Fatalf("signature receipt = %#v", first)
@@ -62,16 +67,54 @@ func TestVerifyDetachedSignatureRejectsCryptographicMismatch(t *testing.T) {
 	t.Run("manifest-bound altered signature", func(t *testing.T) {
 		inputs := makeSignedTestInputs(t)
 		policy := trustedPolicyFor(t, inputs.publicKeyPath)
-		signature := make([]byte, inputs.privateKey.PublicKey.Size())
-		if _, err := rand.Read(signature); err != nil {
+		rawSignature := make([]byte, inputs.privateKey.PublicKey.Size())
+		if _, err := rand.Read(rawSignature); err != nil {
 			t.Fatal(err)
 		}
+		signature := marshalBootSignature(t, bundle.Digest(inputs.manifest.Files[0].SHA256), rawSignature)
 		mustWrite(t, filepath.Join(inputs.root, "boot.sig"), signature)
 		inputs.manifest.Files[1].SizeBytes = int64(len(signature))
 		inputs.manifest.Files[1].SHA256 = digestBytes(signature)
 		refreshSignedManifest(t, &inputs.testInputs)
 		_, err := VerifyDetachedSignature(inputs.manifestPath, inputs.root, inputs.publicKeyPath, policy)
 		if err == nil || !strings.Contains(err.Error(), "does not verify") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("raw signature representation", func(t *testing.T) {
+		inputs := makeSignedTestInputs(t)
+		policy := trustedPolicyFor(t, inputs.publicKeyPath)
+		rawSignature, err := rsa.SignPKCS1v15(rand.Reader, inputs.privateKey, crypto.SHA256, mustDigestBytes(t, inputs.manifest.Files[0].SHA256))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWrite(t, filepath.Join(inputs.root, "boot.sig"), rawSignature)
+		inputs.manifest.Files[1].SizeBytes = int64(len(rawSignature))
+		inputs.manifest.Files[1].SHA256 = digestBytes(rawSignature)
+		refreshSignedManifest(t, &inputs.testInputs)
+		_, err = VerifyDetachedSignature(inputs.manifestPath, inputs.root, inputs.publicKeyPath, policy)
+		if err == nil || !strings.Contains(err.Error(), "parse boot signature") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("self-consistent signature for different image digest", func(t *testing.T) {
+		inputs := makeSignedTestInputs(t)
+		policy := trustedPolicyFor(t, inputs.publicKeyPath)
+		otherDigestBytes := sha256.Sum256([]byte("attacker-selected image"))
+		otherDigest := bundle.Digest("sha256:" + fmtHex(otherDigestBytes[:]))
+		rawSignature, err := rsa.SignPKCS1v15(rand.Reader, inputs.privateKey, crypto.SHA256, otherDigestBytes[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		signatureDocument := marshalBootSignature(t, otherDigest, rawSignature)
+		mustWrite(t, filepath.Join(inputs.root, "boot.sig"), signatureDocument)
+		inputs.manifest.Files[1].SizeBytes = int64(len(signatureDocument))
+		inputs.manifest.Files[1].SHA256 = digestBytes(signatureDocument)
+		refreshSignedManifest(t, &inputs.testInputs)
+		_, err = VerifyDetachedSignature(inputs.manifestPath, inputs.root, inputs.publicKeyPath, policy)
+		if err == nil || !strings.Contains(err.Error(), "does not match the manifest boot image") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -165,13 +208,40 @@ func makeSignedTestInputs(t *testing.T) signedTestInputs {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustWrite(t, filepath.Join(inputs.root, "boot.sig"), signature)
-	inputs.manifest.Files[1].SizeBytes = int64(len(signature))
-	inputs.manifest.Files[1].SHA256 = digestBytes(signature)
+	signatureDocument := marshalBootSignature(t, bundle.Digest("sha256:"+fmtHex(digest[:])), signature)
+	mustWrite(t, filepath.Join(inputs.root, "boot.sig"), signatureDocument)
+	inputs.manifest.Files[1].SizeBytes = int64(len(signatureDocument))
+	inputs.manifest.Files[1].SHA256 = digestBytes(signatureDocument)
 	refreshSignedManifest(t, &inputs)
 	publicKeyPath := filepath.Join(filepath.Dir(inputs.root), "public.pem")
 	writePublicKey(t, publicKeyPath, &privateKey.PublicKey)
 	return signedTestInputs{testInputs: inputs, privateKey: privateKey, publicKeyPath: publicKeyPath}
+}
+
+func marshalBootSignature(t *testing.T, digest bundle.Digest, signature []byte) []byte {
+	t.Helper()
+	document, err := rpi5bootsig.New(digest, 1_725_000_123, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := document.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func mustDigestBytes(t *testing.T, digest string) []byte {
+	t.Helper()
+	decoded, err := hex.DecodeString(strings.TrimPrefix(digest, "sha256:"))
+	if err != nil || len(decoded) != sha256.Size {
+		t.Fatalf("invalid test digest %q", digest)
+	}
+	return decoded
+}
+
+func fmtHex(value []byte) string {
+	return hex.EncodeToString(value)
 }
 
 func refreshSignedManifest(t *testing.T, inputs *testInputs) {
