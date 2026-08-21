@@ -36,6 +36,16 @@ let
         "$out" \
         > /dev/null
 
+      # e2fsprogs otherwise selects signed or unsigned directory hashing from
+      # the host architecture's plain-char signedness.  Normalize the primary
+      # and backup superblocks before adding files so this fixture is identical
+      # on x86_64 and aarch64.  flags=1 is EXT2_FLAGS_SIGNED_HASH; close -a
+      # propagates it to every backup superblock.
+      printf '%s\n' \
+        'set_super_value flags 1' \
+        'close -a' \
+        | debugfs -w "$out" > /dev/null
+
       # Import through debugfs under a fixed e2fsprogs clock instead of using
       # mkfs.ext4 -d, which preserves nondeterministic host ctime/ownership.
       debugfs -w -R "write $TMPDIR/README /README" "$out" > /dev/null
