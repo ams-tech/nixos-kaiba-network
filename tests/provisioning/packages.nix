@@ -802,6 +802,10 @@ let
       description = "Pinned rpiboot host tool emits one bounded metadata object on stdout without creating a side file.";
     }
     {
+      id = "rpi5-eeprom-release-contract";
+      description = "Pinned Raspberry Pi 5 EEPROM firmware and A/B-aware signing-tool sources match exact public provenance, digest, and mandatory boot_img_sha256 capability contracts without signing or hardware authority.";
+    }
+    {
       id = "signed-release-manifest-contract";
       description = "Complete signed-release manifest requires the exact 18-role set and canonical RPIBOOT directory-tree bindings while preserving partial signed-boot manifests.";
     }
@@ -924,6 +928,251 @@ let
         mkdir -p "$out"
         jq --sort-keys . ${platformJSON} > "$out/platform.json"
         jq --sort-keys . ${reportInputJSON} > "$out/report-input.json"
+      '';
+
+  eepromReleaseContract =
+    assert lib.assertMsg (
+      let
+        contract = built.rpi5EEPROMRelease.kaibaRpi5EEPROMRelease;
+      in
+      contract.schemaVersion == "kaiba.provisioning.rpi5-eeprom-release/v1alpha1"
+      &&
+        contract.requiredBootImageSHA256DeviceTreePath
+        == "/proc/device-tree/chosen/bootloader/boot_img_sha256"
+      && contract.releaseManifest.required_capability.required
+      && contract.releaseManifest.required_capability.fail_closed
+      && contract.releaseManifest.required_capability.hardware_emission_must_be_observed
+      && lib.all (value: value == false) [
+        contract.blockDeviceWriteCapable
+        contract.directHardwareAccess
+        contract.eepromProgrammingCapable
+        contract.hardwareEmissionObserved
+        contract.mutationCapable
+        contract.oneTimeSettingCapable
+        contract.otpCapable
+        contract.privateKeyAccess
+        contract.signedEEPROMProduced
+        contract.signingAuthorityConfigured
+      ]
+    ) "the pinned EEPROM release gained signing, hardware, mutation, or observation authority";
+    pkgs.runCommand "kaiba-rpi5-eeprom-release-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.check-jsonschema
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        export LC_ALL=C
+
+        readonly release=${built.rpi5EEPROMRelease}
+        readonly manifest="$release/release.json"
+        readonly schema=${built.goSource}/schemas/rpi5-eeprom-release-v1alpha1.schema.json
+        readonly source=${built.rpi5EEPROMRelease.kaibaRpi5EEPROMRelease.eepromSource}
+        readonly update_script=${built.rpi5EEPROMRelease.kaibaRpi5EEPROMRelease.updatePieeprom}
+        readonly verifier=${built.rpi5EEPROMReleaseVerifier}/bin/kaiba-verify-rpi5-eeprom-release
+
+        check-jsonschema --check-metaschema "$schema"
+        check-jsonschema --schemafile "$schema" "$manifest"
+        jq --sort-keys --compact-output . "$manifest" > "$TMPDIR/canonical.json"
+        cmp "$manifest" "$TMPDIR/canonical.json"
+
+        jq -e '
+          .schema_version == "kaiba.provisioning.rpi5-eeprom-release/v1alpha1"
+          and .device_class == "raspberry-pi-5-model-b-v1alpha1"
+          and .source.revision == "05d94be4554ce44a057bfce8d0dd37d951703dab"
+          and .source.nix_hash == "sha256-duzftioXXrLizQVLwAS285n6ve4Y3rCt/ERjcGQG+Dc="
+          and .firmware.release == "2026-05-26"
+          and .firmware.build_epoch == 1779807685
+          and .firmware.revision == "086b83e3"
+          and .firmware.image.upstream_channel == "default"
+          and .firmware.image.upstream_path == "firmware-2712/default/pieeprom-2026-05-26.bin"
+          and .firmware.recovery.upstream_channel == "latest"
+          and .firmware.recovery.upstream_path == "firmware-2712/latest/recovery.bin"
+          and [.firmware.extracted_components[].id] == ["bootcode.bin", "bootsys"]
+          and .toolchain.update_workflow == {
+            "repository": "https://github.com/raspberrypi/usbboot",
+            "revision": "42ca50932f67f4571951a11da3c3161561cb49c2",
+            "ab_signing_revision": "08d4060ecfd85d402d2134572fe1e11d8b1b2dc8"
+          }
+          and .toolchain.usbboot_rpi_eeprom_submodule == {
+            "repository": "https://github.com/raspberrypi/rpi-eeprom",
+            "revision": "25f837ab8009a643ed85b9aad94d911baddaf0c4",
+            "selected_helper_source_revision": "05d94be4554ce44a057bfce8d0dd37d951703dab",
+            "selected_helpers_byte_identical": true
+          }
+          and [.toolchain.tools[].id] == [
+            "update-pieeprom.sh",
+            "rpi-eeprom-config",
+            "rpi-eeprom-digest",
+            "rpi-sign-bootcode",
+            "rpi-bootloader-key-convert"
+          ]
+          and .required_capability == {
+            "id": "boot_img_sha256",
+            "device_tree_path": "/proc/device-tree/chosen/bootloader/boot_img_sha256",
+            "enabled_when": "signed_boot",
+            "introduced_release": "2025-01-22",
+            "introduced_revision": "7918c84b4b9d7695c3b734e628139dd78b14a6b3",
+            "introduced_build_epoch": 1737505011,
+            "required": true,
+            "fail_closed": true,
+            "hardware_emission_must_be_observed": true
+          }
+          and ([.authority[]] | all(. == false))
+        ' "$manifest" > /dev/null
+
+        jq -r '
+          [
+            .firmware.image,
+            .firmware.recovery,
+            .firmware.extracted_components[],
+            .provenance[],
+            .toolchain.tools[]
+          ][]
+          | [.path, (.size_bytes | tostring), .sha256]
+          | @tsv
+        ' "$manifest" > "$TMPDIR/manifest-files.tsv"
+        while IFS=$'\t' read -r relative expected_size expected_sha256; do
+          candidate="$release/$relative"
+          test -f "$candidate"
+          test ! -L "$candidate"
+          test "$(stat --format=%s "$candidate")" = "$expected_size"
+          test "sha256:$(sha256sum "$candidate" | cut -d ' ' -f 1)" = \
+            "$expected_sha256"
+          test "$(stat --format=%a "$candidate")" = 444
+        done < "$TMPDIR/manifest-files.tsv"
+        test "$(wc -l < "$TMPDIR/manifest-files.tsv")" -eq 11
+        test "$(stat --format=%a "$manifest")" = 444
+        test -z "$(find "$release" -type l -print -quit)"
+        test -z "$(find "$release" ! -type d ! -type f -print -quit)"
+        test -z "$(find "$release" -type f -perm /111 -print -quit)"
+
+        "$verifier" "$source" "$update_script" > "$TMPDIR/positive.stdout"
+        test "$(cat "$TMPDIR/positive.stdout")" = \
+          'rpi5 EEPROM release verification: pass'
+
+        mkdir -p \
+          "$TMPDIR/source/firmware-2712/default" \
+          "$TMPDIR/source/firmware-2712/latest" \
+          "$TMPDIR/source/tools"
+        install -m 0644 \
+          "$source/firmware-2712/default/pieeprom-2026-05-26.bin" \
+          "$TMPDIR/source/firmware-2712/default/pieeprom-2026-05-26.bin"
+        install -m 0644 \
+          "$source/firmware-2712/latest/recovery.bin" \
+          "$TMPDIR/source/firmware-2712/latest/recovery.bin"
+        install -m 0644 \
+          "$source/firmware-2712/release-notes.md" \
+          "$TMPDIR/source/firmware-2712/release-notes.md"
+        install -m 0644 \
+          "$source/firmware-2712/versions.txt" \
+          "$TMPDIR/source/firmware-2712/versions.txt"
+        install -m 0644 "$source/rpi-eeprom-config" "$TMPDIR/source/rpi-eeprom-config"
+        install -m 0644 "$source/rpi-eeprom-digest" "$TMPDIR/source/rpi-eeprom-digest"
+        install -m 0644 "$source/tools/rpi-sign-bootcode" "$TMPDIR/source/tools/rpi-sign-bootcode"
+        install -m 0644 \
+          "$source/tools/rpi-bootloader-key-convert" \
+          "$TMPDIR/source/tools/rpi-bootloader-key-convert"
+
+        cp -R "$TMPDIR/source" "$TMPDIR/missing-capability-source"
+        sed -i '/boot_img_sha256/d' \
+          "$TMPDIR/missing-capability-source/firmware-2712/release-notes.md"
+        set +e
+        "$verifier" "$TMPDIR/missing-capability-source" "$update_script" \
+          > "$TMPDIR/missing-capability.stdout" \
+          2> "$TMPDIR/missing-capability.stderr"
+        missing_capability_status="$?"
+        set -e
+        test "$missing_capability_status" -eq 1
+        test ! -s "$TMPDIR/missing-capability.stdout"
+        grep -F 'required boot_img_sha256 device-tree path is missing' \
+          "$TMPDIR/missing-capability.stderr"
+
+        cp -R "$TMPDIR/source" "$TMPDIR/old-firmware-source"
+        install -m 0644 \
+          "$source/firmware-2712/old/latest/pieeprom-2025-01-14.bin" \
+          "$TMPDIR/old-firmware-source/firmware-2712/default/pieeprom-2026-05-26.bin"
+        set +e
+        "$verifier" "$TMPDIR/old-firmware-source" "$update_script" \
+          > "$TMPDIR/old-firmware.stdout" \
+          2> "$TMPDIR/old-firmware.stderr"
+        old_firmware_status="$?"
+        set -e
+        test "$old_firmware_status" -eq 1
+        test ! -s "$TMPDIR/old-firmware.stdout"
+        grep -F 'firmware image predates the required boot_img_sha256 capability' \
+          "$TMPDIR/old-firmware.stderr"
+
+        cp "$update_script" "$TMPDIR/non-ab-update-pieeprom.sh"
+        chmod u+w "$TMPDIR/non-ab-update-pieeprom.sh"
+        sed -i '/sign_firmware_blob.*bootsys.*bootsys.signed/d' \
+          "$TMPDIR/non-ab-update-pieeprom.sh"
+        set +e
+        "$verifier" "$source" "$TMPDIR/non-ab-update-pieeprom.sh" \
+          > "$TMPDIR/non-ab.stdout" \
+          2> "$TMPDIR/non-ab.stderr"
+        non_ab_status="$?"
+        set -e
+        test "$non_ab_status" -eq 1
+        test ! -s "$TMPDIR/non-ab.stdout"
+        grep -F 'update workflow does not counter-sign bootsys' \
+          "$TMPDIR/non-ab.stderr"
+
+        cp -R "$TMPDIR/source" "$TMPDIR/tampered-source"
+        printf X | dd \
+          of="$TMPDIR/tampered-source/firmware-2712/default/pieeprom-2026-05-26.bin" \
+          bs=1 seek=0 conv=notrunc status=none
+        set +e
+        "$verifier" "$TMPDIR/tampered-source" "$update_script" \
+          > "$TMPDIR/tampered.stdout" \
+          2> "$TMPDIR/tampered.stderr"
+        tampered_status="$?"
+        set -e
+        test "$tampered_status" -eq 1
+        test ! -s "$TMPDIR/tampered.stdout"
+        grep -F 'EEPROM image digest differs from the reviewed pin' \
+          "$TMPDIR/tampered.stderr"
+
+        jq 'del(.required_capability)' "$manifest" \
+          > "$TMPDIR/missing-required-capability.json"
+        jq '.required_capability.fail_closed = false' "$manifest" \
+          > "$TMPDIR/non-fail-closed-capability.json"
+        jq '.firmware.release = "2026-05-22"' "$manifest" \
+          > "$TMPDIR/different-release.json"
+        jq '.firmware.recovery.upstream_channel = "default"' "$manifest" \
+          > "$TMPDIR/wrong-recovery-channel.json"
+        jq '.firmware.recovery.upstream_path = "firmware-2712/default/recovery.bin"' "$manifest" \
+          > "$TMPDIR/wrong-recovery-path.json"
+        jq '.toolchain.usbboot_rpi_eeprom_submodule.repository = "https://github.com/raspberrypi/usbboot"' \
+          "$manifest" > "$TMPDIR/wrong-helper-repository.json"
+        jq '.toolchain.tools |= reverse' "$manifest" \
+          > "$TMPDIR/reordered-tools.json"
+        jq '.unexpected = true' "$manifest" \
+          > "$TMPDIR/unknown-field.json"
+        for invalid_manifest in \
+          "$TMPDIR/missing-required-capability.json" \
+          "$TMPDIR/non-fail-closed-capability.json" \
+          "$TMPDIR/different-release.json" \
+          "$TMPDIR/wrong-recovery-channel.json" \
+          "$TMPDIR/wrong-recovery-path.json" \
+          "$TMPDIR/wrong-helper-repository.json" \
+          "$TMPDIR/reordered-tools.json" \
+          "$TMPDIR/unknown-field.json"
+        do
+          if check-jsonschema --schemafile "$schema" "$invalid_manifest"; then
+            echo "EEPROM release schema accepted invalid manifest: $invalid_manifest" >&2
+            exit 1
+          fi
+        done
+
+        mkdir -p "$out"
+        touch "$out/passed"
       '';
 
   signedReleaseManifestContract =
@@ -2455,6 +2704,7 @@ let
         test -f ${deviceProfileSchema}/passed
         test -f ${probeBundleIntegrity}/passed
         test -f ${rpibootMetadataStdoutCompatibility}/passed
+        test -f ${eepromReleaseContract}/passed
         test -f ${signedReleaseManifestContract}/passed
         test -f ${secureBootArtifactContract}/passed
         test -f ${signedBootPlanContract}/passed
@@ -2468,6 +2718,16 @@ let
         jq -e '
           [.automated.checks[]
             | select(.id == "media-staging-fixture")
+            | [.system, .status]
+          ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
+        ' ${canonicalJSON}/report-input.json > /dev/null
+        jq -e \
+          '[.checks[] | select(.id == "rpi5-eeprom-release-contract") | .status]
+            == ["passed"]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "rpi5-eeprom-release-contract")
             | [.system, .status]
           ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
         ' ${canonicalJSON}/report-input.json > /dev/null
@@ -2520,6 +2780,7 @@ in
   inherit
     developmentYubiKeySigningContract
     deviceProfileSchema
+    eepromReleaseContract
     mediaStagingFixtureContract
     moduleEval
     probeBundleIntegrity
