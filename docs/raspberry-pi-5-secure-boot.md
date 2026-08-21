@@ -15,10 +15,12 @@ guard. See the [live implementation runbook]. It has not been qualified on the
 physical rig and deliberately does not claim production enrollment. Do not
 translate this checklist into ad hoc shell commands.
 
-The primary sources were checked on 2026-08-15. Raspberry Pi's maintained
+The primary sources were checked on 2026-08-21. Raspberry Pi's maintained
 documentation and repositories are authoritative for the hardware mechanism;
-the implementation must additionally pin the exact `usbboot`, EEPROM firmware,
-signing-tool, and boot-image inputs used for a device transaction.
+the repository's public foundation now pins the exact EEPROM firmware and
+A/B-aware `usbboot` signing-tool sources described below. A device transaction
+must additionally bind its exact configuration, signed EEPROM output, and
+boot-image inputs rather than rely on a moving upstream release.
 
 ## Intended production outcome and current stop
 
@@ -311,9 +313,11 @@ The final record contains no secret values. At minimum retain:
   state, and any quarantine reason.
 
 Raspberry Pi added the signed `boot.img` SHA-256 device-tree property in the
-2025-01-22 BCM2712 bootloader release. Its presence must be a capability of the
-pinned firmware, not silently assumed for an older image. It is local
-reconciliation evidence, not remote attestation.
+2025-01-22 BCM2712 bootloader release at the immutable
+[capability-introduction commit]. The pinned source selects the later default
+Pi 5 `pieeprom-2026-05-26.bin` and requires this capability in its public
+contract. Actual emission must still be observed after a physical cold boot;
+the property is local reconciliation evidence, not remote attestation.
 
 ## Updates and recovery after ownership
 
@@ -345,8 +349,24 @@ observation path and are not widened to accept an owned key hash. The current
 development reference now supplies the deterministic Pi 5 target and
 `boot.img`/dm-verity builder, external approval-gated signing chain, durable
 control and independent audit services, and journaled target-bound physical
-adapter. Generic binaries and modules stay non-mutating until instantiated
-with fixed store paths, digests, lane devices, and an explicit mutation flag.
+adapter. It also supplies a pure, secret-free EEPROM release contract: the
+[pinned rpi-eeprom source] is tag `v2026.05.17-2711-0138c0` at commit
+`05d94be4554ce44a057bfce8d0dd37d951703dab`, selecting the default Pi 5
+firmware [dated 2026-05-26][pinned Pi 5 EEPROM firmware] and the distinct
+[`firmware-2712/latest/recovery.bin` payload][pinned Pi 5 recovery payload]. The
+manifest records the upstream channel and path for each artifact. The
+[pinned A/B signing workflow] is usbboot
+commit `42ca50932f67f4571951a11da3c3161561cb49c2` and includes the
+[`bootsys` signing feature][bootsys signing feature] introduced at
+`08d4060ecfd85d402d2134572fe1e11d8b1b2dc8`. The workflow's rpi-eeprom
+submodule is separately attributed to
+[rpi-eeprom commit `25f837ab8009a643ed85b9aad94d911baddaf0c4`][EEPROM helper compatibility commit];
+the selected release's helper files are byte-identical. The contract verifies public
+provenance, bytes, digests, and required capability without a signing key or
+hardware authority. It does not produce the still-required signed EEPROM, and
+hardware emission of `boot_img_sha256` remains a cold-boot gate. Generic
+binaries and modules stay non-mutating until instantiated with fixed store
+paths, digests, lane devices, and an explicit mutation flag.
 
 Production still requires hardware execution and evidence on the qualified
 rig, a distinct owned-device profile and signed probe bundle, independently
@@ -372,6 +392,14 @@ than assumed.
   SD/eMMC ROM recovery and the separate JTAG-lock warning.
 - [Raspberry Pi `update-pieeprom.sh`][update-pieeprom script]: exact `-f`
   EEPROM-firmware and `-r` recovery counter-signing semantics.
+- [Pinned rpi-eeprom source]: immutable source revision and exact default Pi 5
+  `pieeprom-2026-05-26.bin` selected by the public contract.
+- [Signed boot-image hash capability][capability-introduction commit]: upstream
+  change that introduced `boot_img_sha256` for signed boot.
+- [Pinned A/B signing workflow]: coherent usbboot source with the current
+  `rpi-eeprom-config` dependency and A/B-aware update procedure; its separate
+  [`bootsys` signing feature][bootsys signing feature] identifies the feature
+  introduction.
 - [Raspberry Pi `config.txt` reference][secure-boot configuration reference]:
   RPIBOOT-only irreversible properties and JTAG warning.
 - [Raspberry Pi `boot_ramdisk` reference][boot ramdisk documentation]:
@@ -388,17 +416,24 @@ than assumed.
 - [Raspberry Pi Secure Boot Provisioner]: current official higher-level
   provisioning reference implementation.
 
-[secure-boot overview]: https://github.com/raspberrypi/usbboot/blob/master/docs/secure-boot.md
-[official signing documentation]: https://github.com/raspberrypi/usbboot/blob/master/docs/secure-boot.md#signing-the-boot-image
-[Pi 5 programming guide]: https://github.com/raspberrypi/usbboot/blob/master/secure-boot-recovery5/README.md
-[Raspberry Pi 5 recovery configuration]: https://github.com/raspberrypi/usbboot/blob/master/secure-boot-recovery5/config.txt
-[update-pieeprom script]: https://github.com/raspberrypi/usbboot/blob/master/tools/update-pieeprom.sh
+[secure-boot overview]: https://github.com/raspberrypi/usbboot/blob/42ca50932f67f4571951a11da3c3161561cb49c2/docs/secure-boot.md
+[official signing documentation]: https://github.com/raspberrypi/usbboot/blob/42ca50932f67f4571951a11da3c3161561cb49c2/docs/secure-boot.md#signing-the-boot-image
+[Pi 5 programming guide]: https://github.com/raspberrypi/usbboot/blob/42ca50932f67f4571951a11da3c3161561cb49c2/secure-boot-recovery5/README.md
+[Raspberry Pi 5 recovery configuration]: https://github.com/raspberrypi/usbboot/blob/42ca50932f67f4571951a11da3c3161561cb49c2/secure-boot-recovery5/config.txt
+[update-pieeprom script]: https://github.com/raspberrypi/usbboot/blob/42ca50932f67f4571951a11da3c3161561cb49c2/tools/update-pieeprom.sh
+[pinned rpi-eeprom source]: https://github.com/raspberrypi/rpi-eeprom/commit/05d94be4554ce44a057bfce8d0dd37d951703dab
+[pinned Pi 5 EEPROM firmware]: https://github.com/raspberrypi/rpi-eeprom/blob/05d94be4554ce44a057bfce8d0dd37d951703dab/firmware-2712/default/pieeprom-2026-05-26.bin
+[pinned Pi 5 recovery payload]: https://github.com/raspberrypi/rpi-eeprom/blob/05d94be4554ce44a057bfce8d0dd37d951703dab/firmware-2712/latest/recovery.bin
+[capability-introduction commit]: https://github.com/raspberrypi/rpi-eeprom/commit/7918c84b4b9d7695c3b734e628139dd78b14a6b3
+[pinned A/B signing workflow]: https://github.com/raspberrypi/usbboot/commit/42ca50932f67f4571951a11da3c3161561cb49c2
+[bootsys signing feature]: https://github.com/raspberrypi/usbboot/commit/08d4060ecfd85d402d2134572fe1e11d8b1b2dc8
+[EEPROM helper compatibility commit]: https://github.com/raspberrypi/rpi-eeprom/commit/25f837ab8009a643ed85b9aad94d911baddaf0c4
 [secure-boot configuration reference]: https://www.raspberrypi.com/documentation/computers/config_txt.html#secure-boot-configuration-properties
 [boot ramdisk documentation]: https://www.raspberrypi.com/documentation/computers/config_txt.html#boot_ramdisk
 [tryboot documentation]: https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#fail-safe-os-updates-tryboot
 [Raspberry Pi bootloader documentation]: https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#raspberry-pi-bootloader-configuration
 [Raspberry Pi bootloader device-tree properties]: https://www.raspberrypi.com/documentation/computers/configuration.html#bcm2711-and-bcm2712-specific-bootloader-properties-chosenbootloader
-[Official BCM2712 chain-of-trust diagram]: https://github.com/raspberrypi/usbboot/blob/master/docs/secure-boot-chain-of-trust-2712.pdf
-[BCM2712 EEPROM release notes]: https://github.com/raspberrypi/rpi-eeprom/blob/master/firmware-2712/release-notes.md
+[Official BCM2712 chain-of-trust diagram]: https://github.com/raspberrypi/usbboot/blob/42ca50932f67f4571951a11da3c3161561cb49c2/docs/secure-boot-chain-of-trust-2712.pdf
+[BCM2712 EEPROM release notes]: https://github.com/raspberrypi/rpi-eeprom/blob/05d94be4554ce44a057bfce8d0dd37d951703dab/firmware-2712/release-notes.md
 [Raspberry Pi Secure Boot Provisioner]: https://github.com/raspberrypi/rpi-sb-provisioner
 [live implementation runbook]: ./raspberry-pi-5-live-provisioning.md

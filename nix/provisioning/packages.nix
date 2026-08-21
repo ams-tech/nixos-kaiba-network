@@ -456,6 +456,17 @@ let
   storeBacked =
     value: cleanAbsolute (toString value) && lib.hasPrefix "${builtins.storeDir}/" (toString value);
 
+  eepromReleaseFactories = import ./eeprom-release.nix {
+    inherit lib pkgs;
+    eepromPackageVersion = pkgs.raspberrypi-eeprom.version;
+    eepromSource = pkgs.raspberrypi-eeprom.src;
+    eepromSourceHash = pkgs.raspberrypi-eeprom.src.outputHash;
+    eepromSourceRevision = pkgs.raspberrypi-eeprom.src.rev;
+  };
+  inherit (eepromReleaseFactories) mkRpi5EEPROMRelease;
+  rpi5EEPROMRelease = mkRpi5EEPROMRelease { };
+  rpi5EEPROMReleaseVerifier = eepromReleaseFactories.verifier;
+
   signedBootFactories = import ./signed-boot.nix {
     inherit lib pkgs signedBootTool;
   };
@@ -899,6 +910,7 @@ in
     mediaStager
     mkDevelopmentYubiKeySigning
     mkRpi5BootSigningPlan
+    mkRpi5EEPROMRelease
     mkRpi5PhysicalLaneGuard
     mkRpi5MediaStagingFixture
     mkRpi5UnfusedVerifier
@@ -908,6 +920,8 @@ in
     rehearsal
     rpiboot
     rpibootSource
+    rpi5EEPROMRelease
+    rpi5EEPROMReleaseVerifier
     rpi5ProbeBundle
     stationDemo
     stationGraphGenerator

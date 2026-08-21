@@ -1,0 +1,593 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-eeprom-release-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 EEPROM release contract v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "device_class",
+    "source",
+    "firmware",
+    "provenance",
+    "toolchain",
+    "required_capability",
+    "authority"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-eeprom-release/v1alpha1"
+    },
+    "device_class": {
+      "const": "raspberry-pi-5-model-b-v1alpha1"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "tag",
+        "revision",
+        "package_version",
+        "nix_hash"
+      ],
+      "properties": {
+        "repository": {
+          "const": "https://github.com/raspberrypi/rpi-eeprom"
+        },
+        "tag": {
+          "const": "v2026.05.17-2711-0138c0"
+        },
+        "revision": {
+          "const": "05d94be4554ce44a057bfce8d0dd37d951703dab"
+        },
+        "package_version": {
+          "const": "2026.05.17-2711-0138c0"
+        },
+        "nix_hash": {
+          "const": "sha256-duzftioXXrLizQVLwAS285n6ve4Y3rCt/ERjcGQG+Dc="
+        }
+      }
+    },
+    "firmware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release",
+        "build_epoch",
+        "revision",
+        "manufacturing_version",
+        "image",
+        "recovery",
+        "extracted_components"
+      ],
+      "properties": {
+        "release": {
+          "const": "2026-05-26"
+        },
+        "build_epoch": {
+          "const": 1779807685
+        },
+        "revision": {
+          "const": "086b83e3"
+        },
+        "manufacturing_version": {
+          "const": 1
+        },
+        "image": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/upstream_file"
+            },
+            {
+              "properties": {
+                "path": {
+                  "const": "firmware/pieeprom.original.bin"
+                },
+                "size_bytes": {
+                  "const": 2097152
+                },
+                "sha256": {
+                  "const": "sha256:fee8bee6a738a1a61004f0770f15534de7a48a2a199dc4c7af7ed73ab04f18dd"
+                },
+                "upstream_channel": {
+                  "const": "default"
+                },
+                "upstream_path": {
+                  "const": "firmware-2712/default/pieeprom-2026-05-26.bin"
+                }
+              }
+            }
+          ]
+        },
+        "recovery": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/upstream_file"
+            },
+            {
+              "properties": {
+                "path": {
+                  "const": "firmware/recovery.original.bin"
+                },
+                "size_bytes": {
+                  "const": 105396
+                },
+                "sha256": {
+                  "const": "sha256:73dab9a01c139b7d995ac9a4055ee0d15551d7f8dbf1c2605bae584ef7126e0c"
+                },
+                "upstream_channel": {
+                  "const": "latest"
+                },
+                "upstream_path": {
+                  "const": "firmware-2712/latest/recovery.bin"
+                }
+              }
+            }
+          ]
+        },
+        "extracted_components": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/named_file"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "const": "bootcode.bin"
+                    },
+                    "path": {
+                      "const": "firmware/components/bootcode.bin"
+                    },
+                    "size_bytes": {
+                      "const": 25984
+                    },
+                    "sha256": {
+                      "const": "sha256:78c1035aae86a25f4e92ed43e4b82bab01ecfa9e4e9a9b81d59b99a62ba9b26e"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/named_file"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "const": "bootsys"
+                    },
+                    "path": {
+                      "const": "firmware/components/bootsys"
+                    },
+                    "size_bytes": {
+                      "const": 78332
+                    },
+                    "sha256": {
+                      "const": "sha256:cb72681190fb140eaddc3f42327217121eeff088626a5e7026d49f804420ed72"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "provenance": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/named_file"
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "firmware-2712-release-notes"
+                },
+                "path": {
+                  "const": "provenance/firmware-2712-release-notes.md"
+                },
+                "size_bytes": {
+                  "const": 48758
+                },
+                "sha256": {
+                  "const": "sha256:5c4edbadca75281a9fddca478c4fd69373e89fe232f46ab3e1578b1242559fdd"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/named_file"
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "firmware-2712-versions"
+                },
+                "path": {
+                  "const": "provenance/firmware-2712-versions.txt"
+                },
+                "size_bytes": {
+                  "const": 4400
+                },
+                "sha256": {
+                  "const": "sha256:dc14d345eb16bf21f88236dfd490a62949fd28edef0d15598b8ab0b1cb3cf3cd"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "update_workflow",
+        "usbboot_rpi_eeprom_submodule",
+        "tools"
+      ],
+      "properties": {
+        "update_workflow": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "revision",
+            "ab_signing_revision"
+          ],
+          "properties": {
+            "repository": {
+              "const": "https://github.com/raspberrypi/usbboot"
+            },
+            "revision": {
+              "const": "42ca50932f67f4571951a11da3c3161561cb49c2"
+            },
+            "ab_signing_revision": {
+              "const": "08d4060ecfd85d402d2134572fe1e11d8b1b2dc8"
+            }
+          }
+        },
+        "usbboot_rpi_eeprom_submodule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "revision",
+            "selected_helper_source_revision",
+            "selected_helpers_byte_identical"
+          ],
+          "properties": {
+            "repository": {
+              "const": "https://github.com/raspberrypi/rpi-eeprom"
+            },
+            "revision": {
+              "const": "25f837ab8009a643ed85b9aad94d911baddaf0c4"
+            },
+            "selected_helper_source_revision": {
+              "const": "05d94be4554ce44a057bfce8d0dd37d951703dab"
+            },
+            "selected_helpers_byte_identical": {
+              "const": true
+            }
+          }
+        },
+        "tools": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "prefixItems": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/named_file"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "const": "update-pieeprom.sh"
+                    },
+                    "path": {
+                      "const": "toolchain/update-pieeprom.sh"
+                    },
+                    "size_bytes": {
+                      "const": 8971
+                    },
+                    "sha256": {
+                      "const": "sha256:1b23da89519d73b07decf26e8fb8f7978800d407d2beb21f66c1ceef901e4da5"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/named_file"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "const": "rpi-eeprom-config"
+                    },
+                    "path": {
+                      "const": "toolchain/rpi-eeprom-config"
+                    },
+                    "size_bytes": {
+                      "const": 26205
+                    },
+                    "sha256": {
+                      "const": "sha256:39895792eb724afe5a4ed39e5798db844292efcca4317228aa790c580ddbb70f"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/named_file"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "const": "rpi-eeprom-digest"
+                    },
+                    "path": {
+                      "const": "toolchain/rpi-eeprom-digest"
+                    },
+                    "size_bytes": {
+                      "const": 5245
+                    },
+                    "sha256": {
+                      "const": "sha256:ec84c22d54793bc68b273d1f26380280fe0453995d85660fdb5e041f4a756bbb"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/named_file"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "const": "rpi-sign-bootcode"
+                    },
+                    "path": {
+                      "const": "toolchain/rpi-sign-bootcode"
+                    },
+                    "size_bytes": {
+                      "const": 11118
+                    },
+                    "sha256": {
+                      "const": "sha256:a1995a12340dd3a76b9f085726509eee7ebc0407bd0c71c60473bf443c9549f6"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/named_file"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "const": "rpi-bootloader-key-convert"
+                    },
+                    "path": {
+                      "const": "toolchain/rpi-bootloader-key-convert"
+                    },
+                    "size_bytes": {
+                      "const": 1398
+                    },
+                    "sha256": {
+                      "const": "sha256:26502957010893e74c0036c7b86b1db209ddbed716d8f52751fb0f0ee39bf16d"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "required_capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "device_tree_path",
+        "enabled_when",
+        "introduced_release",
+        "introduced_revision",
+        "introduced_build_epoch",
+        "required",
+        "fail_closed",
+        "hardware_emission_must_be_observed"
+      ],
+      "properties": {
+        "id": {
+          "const": "boot_img_sha256"
+        },
+        "device_tree_path": {
+          "const": "/proc/device-tree/chosen/bootloader/boot_img_sha256"
+        },
+        "enabled_when": {
+          "const": "signed_boot"
+        },
+        "introduced_release": {
+          "const": "2025-01-22"
+        },
+        "introduced_revision": {
+          "const": "7918c84b4b9d7695c3b734e628139dd78b14a6b3"
+        },
+        "introduced_build_epoch": {
+          "const": 1737505011
+        },
+        "required": {
+          "const": true
+        },
+        "fail_closed": {
+          "const": true
+        },
+        "hardware_emission_must_be_observed": {
+          "const": true
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "block_device_write_capable",
+        "direct_hardware_access",
+        "eeprom_programming_capable",
+        "mutation_capable",
+        "one_time_setting_capable",
+        "otp_capable",
+        "private_key_access",
+        "signed_eeprom_produced",
+        "signing_authority_configured"
+      ],
+      "properties": {
+        "block_device_write_capable": {
+          "const": false
+        },
+        "direct_hardware_access": {
+          "const": false
+        },
+        "eeprom_programming_capable": {
+          "const": false
+        },
+        "mutation_capable": {
+          "const": false
+        },
+        "one_time_setting_capable": {
+          "const": false
+        },
+        "otp_capable": {
+          "const": false
+        },
+        "private_key_access": {
+          "const": false
+        },
+        "signed_eeprom_produced": {
+          "const": false
+        },
+        "signing_authority_configured": {
+          "const": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._/-]{0,254}$"
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "size_bytes",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "upstream_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "size_bytes",
+        "sha256",
+        "upstream_channel",
+        "upstream_path"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "upstream_channel": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "upstream_path": {
+          "$ref": "#/$defs/path"
+        }
+      }
+    },
+    "named_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path",
+        "size_bytes",
+        "sha256"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    }
+  }
+}

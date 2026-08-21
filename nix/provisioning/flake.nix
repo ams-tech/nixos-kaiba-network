@@ -66,6 +66,10 @@
           { system, ... }@args:
           (packagesFor system).mkRpi5BootSigningPlan (builtins.removeAttrs args [ "system" ]);
 
+        mkRpi5EEPROMRelease =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5EEPROMRelease (builtins.removeAttrs args [ "system" ]);
+
         mkDevelopmentYubiKeySigning =
           { system, ... }@args:
           (packagesFor system).mkDevelopmentYubiKeySigning (builtins.removeAttrs args [ "system" ]);
@@ -115,6 +119,7 @@
           provisioning-services = built.serviceSuite;
           provisioning-test-result = provisioning.provisioningTestResult;
           rpi5-probe-bundle = built.rpi5ProbeBundle;
+          rpi5-eeprom-release = built.rpi5EEPROMRelease;
           kaiba-provision-yubikey-wrapper-foundation = built.yubiKeyWrapperFoundation;
         }
       );
@@ -133,6 +138,7 @@
           module-eval = provisioning.moduleEval;
           provisioning-test-result = provisioning.provisioningTestResult;
           rpi5-probe-bundle = provisioning.probeBundleIntegrity;
+          rpi5-eeprom-release = provisioning.eepromReleaseContract;
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           secure-boot-artifacts = provisioning.secureBootArtifactContract;
           media-staging-fixture = provisioning.mediaStagingFixtureContract;

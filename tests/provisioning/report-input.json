@@ -47,6 +47,13 @@
         "evidence": []
       },
       {
+        "id": "rpi5-eeprom-release-contract",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Pinned Raspberry Pi 5 EEPROM firmware and A/B-aware signing-tool sources match exact public provenance, digest, and mandatory boot_img_sha256 capability contracts without signing or hardware authority.",
+        "evidence": []
+      },
+      {
         "id": "signed-release-manifest-contract",
         "system": "aarch64-linux",
         "status": "not-observed",
@@ -100,6 +107,13 @@
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Pinned rpiboot host tool emits one bounded metadata object on stdout without creating a side file.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-eeprom-release-contract",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Pinned Raspberry Pi 5 EEPROM firmware and A/B-aware signing-tool sources match exact public provenance, digest, and mandatory boot_img_sha256 capability contracts without signing or hardware authority.",
         "evidence": []
       },
       {
