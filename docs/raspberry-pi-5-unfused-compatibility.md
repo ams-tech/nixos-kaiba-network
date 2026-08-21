@@ -109,6 +109,50 @@ cannot establish that any Pi booted. The derivation metadata and result keep
 hardware observation, security enforcement, mutation eligibility, block-device
 access, EEPROM programming, and OTP capability false.
 
+## Synthetic outer-media fixture
+
+The four-role capsule is not directly bootable whole-device media. After it is
+verified, `mkRpi5MediaStagingFixture` can wrap its inner `boot.img` and
+`boot.sig` in a deterministic outer FAT and construct a regular-file GPT
+rehearsal:
+
+```nix
+packages.x86_64-linux.media-staging-fixture =
+  kaiba.lib.mkRpi5MediaStagingFixture {
+    system = "x86_64-linux";
+    verifiedCapsule = verifiedUnfusedCapsule;
+  };
+```
+
+The outer FAT contains exactly these three regular files:
+
+```text
+config.txt
+boot.img
+boot.sig
+```
+
+`config.txt` contains only `boot_ramdisk=1`. The factory binds the other two
+files to the verified capsule, constructs deterministic primary and backup GPT
+metadata around fixed boot, root-data, and root-hash extents, and exposes the
+fixture-only `kaiba-provision-media-fixture` command. Its safe sequence is:
+
+1. `init --workspace /absolute/new/workspace` to create `target.img` and its
+   exact `fixture-plan.json`;
+2. run the generic media stager's `fixture-dry-run`, `fixture-stage`, and
+   `fixture-readback` commands with that plan; and
+3. `verify --workspace /absolute/new/workspace` to take a locked regular-file
+   snapshot and inspect its raw GPT regions, complete partition digests, FAT
+   allowlist and payloads, extent digests, and dm-verity pair.
+
+The detailed commands are in the [target-media staging prototype]. The factory
+and fixture commands accept only regular-file rehearsal state; they do not
+select or write a block device. Although the final fixture verifier checks the
+expected GPT structure, the generic staging plan and receipt bind only the three
+payload extents, not GPT metadata. A successful run makes no cold-power,
+hardware-observation, live-boot, secure-boot-enforcement, EEPROM, or OTP claim.
+It is not SB-04 ceremony evidence.
+
 The signer-pinned command requires the canonical three-line Raspberry Pi
 `boot.sig`, checks that its first line is the manifest-bound SHA-256 of
 `boot.img`, and verifies its RSA-2048 PKCS#1 v1.5/SHA-256 signature with the
@@ -201,3 +245,5 @@ allowed to carry an OTP or EEPROM programming bundle. The current unfused files
 can support operator correlation, but live hardware provenance and
 customer-signature enforcement remain unproven until the authenticated
 collector and separately reviewed irreversible ceremony exist.
+
+[target-media staging prototype]: target-media-staging-prototype.md

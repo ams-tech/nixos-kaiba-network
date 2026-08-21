@@ -273,6 +273,36 @@ let
     };
   };
 
+  # Snapshot only a no-follow, exclusively locked regular-file fixture. Keep
+  # this helper separate from the block-device-capable media stager so the
+  # synthetic verifier does not acquire device-write capability in its closure.
+  fixtureSnapshot = pkgs.buildGoModule {
+    pname = "kaiba-provision-fixture-snapshot";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-fixture-snapshot" ];
+    vendorHash = null;
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      go test ./internal/provisioning/fixturesnapshot ./cmd/kaiba-provision-fixture-snapshot
+      runHook postCheck
+    '';
+    passthru.kaibaFixtureSnapshot = {
+      blockDeviceAccess = false;
+      directHardwareAccess = false;
+      destinationFileWriteCapable = true;
+      mutationCapable = false;
+      regularFileOnly = true;
+      sourceWriteCapable = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-fixture-snapshot";
+      description = "No-follow, locked snapshot helper for regular-file media fixtures";
+      platforms = lib.platforms.linux;
+    };
+  };
+
   # This verifier re-verifies raw signed capsule inputs and correlates them with
   # already captured operator and UART records. It has no live serial, USB,
   # GPIO, block-device, or subprocess boundary and emits no hardware claim.
@@ -436,6 +466,16 @@ let
     unsignedArtifactSchema = goSource + "/schemas/unsigned-artifact-set-v1alpha1.schema.json";
   };
   inherit (unfusedCapsuleFactories) mkRpi5VerifiedUnfusedCapsule;
+
+  mediaStagingFixtureFactories = import ./media-staging-fixture.nix {
+    inherit
+      fixtureSnapshot
+      lib
+      mediaStager
+      pkgs
+      ;
+  };
+  inherit (mediaStagingFixtureFactories) mkRpi5MediaStagingFixture;
 
   # Produces the only lane-guard build that can cross the mutation boundary.
   # Every executable, payload, and expected digest is fixed into the binary;
@@ -860,6 +900,7 @@ in
     mkDevelopmentYubiKeySigning
     mkRpi5BootSigningPlan
     mkRpi5PhysicalLaneGuard
+    mkRpi5MediaStagingFixture
     mkRpi5UnfusedVerifier
     mkRpi5VerifiedSignedBoot
     mkRpi5VerifiedUnfusedCapsule

@@ -404,6 +404,7 @@
           station-ui = provisioning.checks.${system}.station-ui;
           rpiboot-metadata-stdout = provisioning.checks.${system}.rpiboot-metadata-stdout;
           rpi5-unfused-capsule = provisioning.checks.${system}.unfused-capsule;
+          rpi5-media-staging-fixture = provisioning.checks.${system}.media-staging-fixture;
           rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
           secure-boot-artifacts = provisioning.checks.${system}.secure-boot-artifacts;
           signed-boot-plan = provisioning.checks.${system}.signed-boot-plan;

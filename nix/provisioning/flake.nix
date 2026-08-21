@@ -81,6 +81,10 @@
         mkRpi5VerifiedUnfusedCapsule =
           { system, ... }@args:
           (packagesFor system).mkRpi5VerifiedUnfusedCapsule (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5MediaStagingFixture =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5MediaStagingFixture (builtins.removeAttrs args [ "system" ]);
       };
 
       packages = forAllSystems (
@@ -131,6 +135,7 @@
           rpi5-probe-bundle = provisioning.probeBundleIntegrity;
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           secure-boot-artifacts = provisioning.secureBootArtifactContract;
+          media-staging-fixture = provisioning.mediaStagingFixtureContract;
           signed-boot-plan = provisioning.signedBootPlanContract;
           unfused-capsule = provisioning.unfusedCapsuleContract;
           station-ui =

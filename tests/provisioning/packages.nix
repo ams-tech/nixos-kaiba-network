@@ -310,6 +310,10 @@ let
     unsignedArtifacts = secureBootFixtureA;
     verifiedSignedBoot = unfusedCapsuleVerifiedSignedBoot;
   };
+  mediaStagingFixture = built.mkRpi5MediaStagingFixture {
+    name = "kaiba-rpi5-media-staging-fixture";
+    verifiedCapsule = verifiedUnfusedCapsuleFixture;
+  };
   verifiedUnfusedCapsuleInputAccepted =
     overrides:
     (builtins.tryEval (
@@ -1489,6 +1493,586 @@ let
         touch "$out/passed"
       '';
 
+  mediaStagingFixtureContract =
+    assert lib.assertMsg
+      (
+        let
+          contract = mediaStagingFixture.kaibaMediaStagingFixture;
+        in
+        contract.verifiedCapsule == verifiedUnfusedCapsuleFixture
+        && contract.mediaStager == built.mediaStager
+        && contract.bootFilesystemSizeMiB == 128
+        && contract.alignmentBytes == 1048576
+        && contract.sectorSizeBytes == 512
+        && contract.fixtureFileWriteCapable
+        && contract.snapshotExclusiveLockRequired
+        && contract.snapshotPinnedRegularFile
+        && contract.fixtureSnapshot.kaibaFixtureSnapshot.regularFileOnly
+        && contract.fixtureSnapshot.kaibaFixtureSnapshot.destinationFileWriteCapable
+        && lib.all (value: value == false) [
+          contract.fixtureSnapshot.kaibaFixtureSnapshot.blockDeviceAccess
+          contract.fixtureSnapshot.kaibaFixtureSnapshot.directHardwareAccess
+          contract.fixtureSnapshot.kaibaFixtureSnapshot.mutationCapable
+          contract.fixtureSnapshot.kaibaFixtureSnapshot.sourceWriteCapable
+        ]
+        && lib.all (value: value == false) [
+          contract.blockDeviceAccess
+          contract.blockDeviceWriteCapable
+          contract.coldPowerCycleClaim
+          contract.gptBoundByStagerReceipt
+          contract.hardwareObservationClaim
+          contract.mutationCapable
+          contract.oneTimeSettingCapable
+          contract.otpCapable
+          contract.securityEnforcementClaim
+        ]
+      )
+      "the media-staging fixture gained block-device, hardware, enforcement, or one-time-setting authority";
+    pkgs.runCommand "kaiba-rpi5-media-staging-fixture-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.cryptsetup
+          pkgs.diffutils
+          pkgs.findutils
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.gptfdisk
+          pkgs.jq
+          pkgs.mtools
+          pkgs.util-linux
+        ];
+      }
+      ''
+        set -euo pipefail
+        export LC_ALL=C
+
+        readonly fixture=${mediaStagingFixture}
+        readonly fixture_tool="$fixture/bin/kaiba-provision-media-fixture"
+        readonly media_stager=${built.mediaStager}/bin/kaiba-provision-media-stager
+        readonly boot_filesystem="$fixture/boot-filesystem.img"
+        readonly gpt_template="$fixture/gpt-template.img"
+        readonly layout="$fixture/layout.json"
+        readonly gpt_template_source="$(jq -r .gpt.template_path "$layout")"
+        readonly boot_source="$(jq -r \
+          '.images[] | select(.role == "boot-filesystem") | .source_path' \
+          "$layout")"
+        readonly capsule=${verifiedUnfusedCapsuleFixture}/capsule
+        readonly capsule_manifest=${verifiedUnfusedCapsuleFixture}/capsule-manifest.json
+        readonly workspace="$TMPDIR/media-fixture-workspace"
+
+        test -x "$fixture_tool"
+        test -x "$media_stager"
+        test -f "$boot_filesystem"
+        test -s "$boot_filesystem"
+        test -f "$gpt_template"
+        test -s "$gpt_template"
+        test -f "$gpt_template_source"
+        test ! -L "$gpt_template_source"
+        test "$(readlink -f "$gpt_template")" = "$gpt_template_source"
+        test -f "$layout"
+        test -s "$layout"
+        test -f "$boot_source"
+        test ! -L "$boot_source"
+        cmp "$boot_source" "$boot_filesystem"
+
+        find "$fixture" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
+          > "$TMPDIR/actual-fixture-entries"
+        printf '%s\n' \
+          bin \
+          boot-filesystem.img \
+          gpt-template.img \
+          layout.json \
+          > "$TMPDIR/expected-fixture-entries"
+        cmp "$TMPDIR/expected-fixture-entries" "$TMPDIR/actual-fixture-entries"
+        test "$(find "$fixture/bin" -mindepth 1 -maxdepth 1 -printf '%f\n')" = \
+          kaiba-provision-media-fixture
+
+        mdir -b -i "$boot_filesystem" :: \
+          | sed 's#^::/##' \
+          | sort > "$TMPDIR/actual-boot-files"
+        printf '%s\n' boot.img boot.sig config.txt \
+          > "$TMPDIR/expected-boot-files"
+        cmp "$TMPDIR/expected-boot-files" "$TMPDIR/actual-boot-files"
+        test "$(mtype -i "$boot_filesystem" ::config.txt | tr -d '\r')" = \
+          'boot_ramdisk=1'
+        mcopy -n -i "$boot_filesystem" ::boot.img "$TMPDIR/outer-boot.img"
+        mcopy -n -i "$boot_filesystem" ::boot.sig "$TMPDIR/outer-boot.sig"
+        cmp "$capsule/boot.img" "$TMPDIR/outer-boot.img"
+        cmp "$capsule/boot.sig" "$TMPDIR/outer-boot.sig"
+
+        ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" init --workspace "$workspace" \
+          > "$TMPDIR/init.json"
+        jq -e \
+          --arg workspace "$workspace" \
+          --arg layout_digest "$(jq -r .layout_digest "$layout")" \
+          '
+            keys == [
+              "block_device_access",
+              "evidence_mode",
+              "layout_digest",
+              "one_time_settings_changed",
+              "plan",
+              "status",
+              "target",
+              "workspace"
+            ]
+            and .status == "fixture_initialized"
+            and .evidence_mode == "regular_file_fixture"
+            and .workspace == $workspace
+            and .target == ($workspace + "/target.img")
+            and .plan == ($workspace + "/fixture-plan.json")
+            and .layout_digest == $layout_digest
+            and .block_device_access == false
+            and .one_time_settings_changed == false
+          ' "$TMPDIR/init.json" > /dev/null
+        test -d "$workspace"
+        test ! -L "$workspace"
+        find "$workspace" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
+          > "$TMPDIR/actual-workspace-files"
+        printf '%s\n' fixture-plan.json target.img \
+          > "$TMPDIR/expected-workspace-files"
+        cmp "$TMPDIR/expected-workspace-files" "$TMPDIR/actual-workspace-files"
+
+        readonly plan="$workspace/fixture-plan.json"
+        readonly target="$workspace/target.img"
+        cmp "$gpt_template" "$target"
+        test "$(stat --format=%a "$plan")" = 600
+        test -f "$plan"
+        test ! -L "$plan"
+        test -s "$plan"
+        test -f "$target"
+        test ! -L "$target"
+
+        jq -e \
+          --arg target "$target" \
+          --arg boot_filesystem "$boot_source" \
+          --arg root_data "$capsule/nvme/root-data.img" \
+          --arg root_hash "$capsule/nvme/root-hash.img" \
+          '
+            keys == ["images", "schema_version", "target"]
+            and .schema_version
+              == "provisioning.kaiba.network/media-staging-plan/v1alpha1"
+            and (.target | keys)
+              == ["expected_identity", "expected_size_bytes", "path"]
+            and .target.path == $target
+            and .target.expected_identity == "target.img"
+            and .target.expected_size_bytes > 0
+            and [.images[].role]
+              == ["boot-filesystem", "root-data", "root-hash"]
+            and [.images[].path]
+              == [$boot_filesystem, $root_data, $root_hash]
+            and ([.images[] | keys]
+              | all(. == ["digest", "offset_bytes", "path", "role", "size_bytes"]))
+            and ([.images[].digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and ([.images[].size_bytes] | all(. > 0))
+            and ([.images[].offset_bytes] | all(. >= 1048576 and . % 4096 == 0))
+            and .images[0].offset_bytes + .images[0].size_bytes
+              <= .images[1].offset_bytes
+            and .images[1].offset_bytes + .images[1].size_bytes
+              <= .images[2].offset_bytes
+            and .images[2].offset_bytes + .images[2].size_bytes
+              <= .target.expected_size_bytes
+          ' "$plan" > /dev/null
+        test "$(stat --format=%s "$target")" = \
+          "$(jq -r .target.expected_size_bytes "$plan")"
+
+        for index in 0 1 2; do
+          source="$(jq -r ".images[$index].path" "$plan")"
+          test -f "$source"
+          test ! -L "$source"
+          test "$(stat --format=%s "$source")" = \
+            "$(jq -r ".images[$index].size_bytes" "$plan")"
+          test "sha256:$(sha256sum "$source" | cut -d ' ' -f 1)" = \
+            "$(jq -r ".images[$index].digest" "$plan")"
+        done
+
+        jq -e \
+          --arg gpt_template "$gpt_template_source" \
+          --slurpfile plan "$plan" \
+          --slurpfile capsule_manifest "$capsule_manifest" \
+          '
+            keys == [
+              "alignment_bytes",
+              "boot_filesystem",
+              "capsule",
+              "evidence_mode",
+              "fixture_id",
+              "gpt",
+              "images",
+              "layout_digest",
+              "safety",
+              "schema_version",
+              "sector_size_bytes",
+              "target_size_bytes",
+              "verity"
+            ]
+            and .schema_version
+              == "provisioning.kaiba.network/rpi5-media-staging-fixture/v1alpha1"
+            and .fixture_id
+              == ($capsule_manifest[0].capsule_id + ":media-staging-fixture")
+            and .evidence_mode == "regular_file_fixture"
+            and .capsule.capsule_id == $capsule_manifest[0].capsule_id
+            and .capsule.capsule_digest == $capsule_manifest[0].capsule_digest
+            and (.capsule.manifest_file_digest
+              | test("^sha256:[0-9a-f]{64}$"))
+            and (.layout_digest | test("^sha256:[0-9a-f]{64}$"))
+            and .sector_size_bytes == 512
+            and .alignment_bytes == 1048576
+            and .target_size_bytes == $plan[0].target.expected_size_bytes
+            and (.gpt.disk_guid
+              | test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$"))
+            and .gpt.template_path == $gpt_template
+            and (.gpt.template_digest | test("^sha256:[0-9a-f]{64}$"))
+            and .gpt.backup_reserved_bytes == 1048576
+            and .gpt.first_usable_lba == 34
+            and .gpt.last_usable_lba
+              == (.target_size_bytes / .sector_size_bytes - 34)
+            and [.gpt.metadata_regions[].role] == ["primary", "backup"]
+            and [.gpt.metadata_regions[].offset_bytes]
+              == [0, (.target_size_bytes - .alignment_bytes)]
+            and [.gpt.metadata_regions[].size_bytes]
+              == [.alignment_bytes, .alignment_bytes]
+            and ([.gpt.metadata_regions[].digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and .gpt.partitions[0].offset_bytes == .alignment_bytes
+            and .gpt.partitions[1].offset_bytes
+              == (.gpt.partitions[0].offset_bytes
+                + .gpt.partitions[0].partition_size_bytes)
+            and .gpt.partitions[2].offset_bytes
+              == (.gpt.partitions[1].offset_bytes
+                + .gpt.partitions[1].partition_size_bytes)
+            and .gpt.metadata_regions[1].offset_bytes
+              == (.gpt.partitions[2].offset_bytes
+                + .gpt.partitions[2].partition_size_bytes)
+            and (.gpt.metadata_regions[1].offset_bytes
+              + .gpt.metadata_regions[1].size_bytes) == .target_size_bytes
+            and [.gpt.partitions[].number] == [1, 2, 3]
+            and [.gpt.partitions[].attributes] == [null, null, null]
+            and ([.gpt.partitions[].content_digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and [.gpt.partitions[].name]
+              == ["kaiba-boot", "kaiba-root", "kaiba-root-verity"]
+            and [.gpt.partitions[].role]
+              == ["boot-filesystem", "root-data", "root-hash"]
+            and [.gpt.partitions[].type_code] == ["ef00", "8305", "830e"]
+            and [.gpt.partitions[].offset_bytes]
+              == [$plan[0].images[].offset_bytes]
+            and ([.gpt.partitions[].partition_size_bytes] | all(. > 0))
+            and ([.gpt.partitions[].unique_guid]
+              | all(test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$")))
+            and .boot_filesystem.filesystem == "fat32"
+            and .boot_filesystem.label == "KAIBA_BOOT"
+            and .boot_filesystem.volume_id == "4b414942"
+            and [.boot_filesystem.allowlist[].path]
+              == ["boot.img", "boot.sig", "config.txt"]
+            and ([.boot_filesystem.allowlist[].digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and [.images[].role]
+              == ["boot-filesystem", "root-data", "root-hash"]
+            and [.images[].source_path] == [$plan[0].images[].path]
+            and [.images[].digest] == [$plan[0].images[].digest]
+            and [.images[].size_bytes] == [$plan[0].images[].size_bytes]
+            and [.images[].offset_bytes] == [$plan[0].images[].offset_bytes]
+            and .verity.algorithm == "sha256"
+            and (.verity.root_hash | test("^sha256:[0-9a-f]{64}$"))
+            and .verity.data_block_size == 4096
+            and .verity.hash_block_size == 4096
+            and .safety == {
+              synthetic: true,
+              block_device_access: false,
+              hardware_observed: false,
+              security_enforced: false,
+              mutation_eligible: false,
+              one_time_settings_changed: false,
+              gpt_bound_by_stager_receipt: false,
+              cold_power_cycle_observed: false
+            }
+          ' "$layout" > /dev/null
+        jq --compact-output --sort-keys 'del(.layout_digest)' "$layout" \
+          > "$TMPDIR/canonical-layout"
+        expected_layout_digest="sha256:$({
+          printf '%s\0' \
+            'kaiba.provisioning.rpi5-media-staging-fixture.v1alpha1'
+          cat "$TMPDIR/canonical-layout"
+        } | sha256sum | cut -d ' ' -f 1)"
+        test "$(jq -r .layout_digest "$layout")" = "$expected_layout_digest"
+        test "sha256:$(sha256sum "$gpt_template" | cut -d ' ' -f 1)" = \
+          "$(jq -r .gpt.template_digest "$layout")"
+
+        sgdisk --verify "$target" > "$TMPDIR/gpt-before.txt"
+        dd if="$target" of="$TMPDIR/primary-gpt.before" \
+          bs=1M count=1 status=none
+        target_size="$(stat --format=%s "$target")"
+        dd if="$target" of="$TMPDIR/backup-gpt.before" \
+          bs=1M skip="$((target_size - 1048576))" count=1 \
+          iflag=skip_bytes status=none
+        test "sha256:$(sha256sum "$TMPDIR/primary-gpt.before" | cut -d ' ' -f 1)" = \
+          "$(jq -r '.gpt.metadata_regions[] | select(.role == "primary") | .digest' "$layout")"
+        test "sha256:$(sha256sum "$TMPDIR/backup-gpt.before" | cut -d ' ' -f 1)" = \
+          "$(jq -r '.gpt.metadata_regions[] | select(.role == "backup") | .digest' "$layout")"
+
+        "$media_stager" fixture-dry-run --plan "$plan" \
+          > "$TMPDIR/dry-run.json"
+        "$media_stager" fixture-stage --plan "$plan" \
+          > "$TMPDIR/stage.json"
+        "$media_stager" fixture-readback --plan "$plan" \
+          > "$TMPDIR/readback.json"
+
+        dd if="$target" of="$TMPDIR/primary-gpt.after" \
+          bs=1M count=1 status=none
+        dd if="$target" of="$TMPDIR/backup-gpt.after" \
+          bs=1M skip="$((target_size - 1048576))" count=1 \
+          iflag=skip_bytes status=none
+        cmp "$TMPDIR/primary-gpt.before" "$TMPDIR/primary-gpt.after"
+        cmp "$TMPDIR/backup-gpt.before" "$TMPDIR/backup-gpt.after"
+        sgdisk --verify "$target" > "$TMPDIR/gpt-after.txt"
+
+        jq -e -s \
+          --slurpfile plan "$plan" \
+          '
+            length == 3
+            and ([.[].schema_version]
+              | all(. == "provisioning.kaiba.network/media-staging-result/v1alpha1"))
+          ' \
+          "$TMPDIR/dry-run.json" \
+          "$TMPDIR/stage.json" \
+          "$TMPDIR/readback.json" > /dev/null
+        jq -e -s \
+          --slurpfile plan "$plan" \
+          '
+            [.[].action] == ["dry_run", "stage", "readback"]
+            and [.[].status] == [
+              "validated_no_write",
+              "fsync_complete_readback_required",
+              "reopened_readback_verified"
+            ]
+            and ([.[].plan_digest] | unique | length) == 1
+            and ([.[].plan_digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and ([.[].receipt_digest] | unique | length) == 3
+            and ([.[].receipt_digest]
+              | all(test("^sha256:[0-9a-f]{64}$")))
+            and ([.[].target_path]
+              | all(. == $plan[0].target.path))
+          ' \
+          "$TMPDIR/dry-run.json" \
+          "$TMPDIR/stage.json" \
+          "$TMPDIR/readback.json" > /dev/null
+        jq -e -s \
+          --slurpfile plan "$plan" \
+          '
+            ([.[].target_identity]
+              | all(. == $plan[0].target.expected_identity))
+            and ([.[].target_size_bytes]
+              | all(. == $plan[0].target.expected_size_bytes))
+            and ([.[].images]
+              | all(. == ($plan[0].images | map(del(.path)))))
+            and [.[].reopened_target] == [false, false, true]
+            and ([.[].cold_power_cycle_observed] | all(. == false))
+            and ([.[].one_time_settings_changed] | all(. == false))
+          ' \
+          "$TMPDIR/dry-run.json" \
+          "$TMPDIR/stage.json" \
+          "$TMPDIR/readback.json" > /dev/null
+
+        for index in 0 1 2; do
+          source="$(jq -r ".images[$index].path" "$plan")"
+          offset="$(jq -r ".images[$index].offset_bytes" "$plan")"
+          size="$(jq -r ".images[$index].size_bytes" "$plan")"
+          dd if="$target" of="$TMPDIR/staged-$index.img" \
+            bs=1M skip="$offset" count="$size" \
+            iflag=skip_bytes,count_bytes status=none
+          cmp "$source" "$TMPDIR/staged-$index.img"
+        done
+
+        mdir -b -i "$TMPDIR/staged-0.img" :: \
+          | sed 's#^::/##' \
+          | sort > "$TMPDIR/actual-staged-boot-files"
+        cmp "$TMPDIR/expected-boot-files" "$TMPDIR/actual-staged-boot-files"
+        test "$(mtype -i "$TMPDIR/staged-0.img" ::config.txt | tr -d '\r')" = \
+          'boot_ramdisk=1'
+        root_hash="$(jq -r .verity.root_hash "$layout")"
+        test "$root_hash" = "$(jq -r .root_integrity_digest \
+          ${secureBootFixtureA}/manifest.json)"
+        veritysetup verify \
+          --data-block-size="$(jq -r .verity.data_block_size "$layout")" \
+          --hash-block-size="$(jq -r .verity.hash_block_size "$layout")" \
+          "$TMPDIR/staged-1.img" \
+          "$TMPDIR/staged-2.img" \
+          "''${root_hash#sha256:}"
+
+        cp "$plan" "$TMPDIR/original-fixture-plan.json"
+        sed 's/schema_version/schema_versioN/' "$plan" \
+          > "$TMPDIR/unexpected-fixture-plan.json"
+        install -m 0400 "$TMPDIR/unexpected-fixture-plan.json" "$plan"
+        if ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" verify --workspace "$workspace" \
+          > "$TMPDIR/unexpected-plan.json" \
+          2> "$TMPDIR/unexpected-plan.stderr"
+        then
+          echo 'fixture verifier accepted a plan with an unknown field' >&2
+          exit 1
+        fi
+        grep -Fqx \
+          'kaiba-provision-media-fixture: fixture plan differs from the immutable layout' \
+          "$TMPDIR/unexpected-plan.stderr"
+        install -m 0400 "$TMPDIR/original-fixture-plan.json" "$plan"
+
+        exec {fixture_lock_fd}<>"$target"
+        flock --exclusive --nonblock "$fixture_lock_fd"
+        if ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" verify --workspace "$workspace" \
+          > "$TMPDIR/locked-target.json" \
+          2> "$TMPDIR/locked-target.stderr"
+        then
+          echo 'fixture verifier accepted an exclusively locked target' >&2
+          exit 1
+        fi
+        grep -Fq 'source fixture is busy' "$TMPDIR/locked-target.stderr"
+        flock --unlock "$fixture_lock_fd"
+        exec {fixture_lock_fd}>&-
+
+        ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" verify --workspace "$workspace" \
+          > "$TMPDIR/verification.json"
+        jq -e \
+          --slurpfile layout "$layout" \
+          '
+            keys == [
+              "cold_power_cycle_observed",
+              "dm_verity_verified",
+              "evidence_mode",
+              "extent_digests_verified",
+              "fat_allowlist_verified",
+              "gpt_verified",
+              "hardware_observed",
+              "layout_digest",
+              "mutation_eligible",
+              "one_time_settings_changed",
+              "partition_contents_verified",
+              "pinned_regular_file_snapshot_verified",
+              "security_enforced",
+              "status"
+            ]
+            and .status == "fixture_layout_verified"
+            and .evidence_mode == "regular_file_fixture"
+            and .layout_digest == $layout[0].layout_digest
+            and .gpt_verified == true
+            and .fat_allowlist_verified == true
+            and .extent_digests_verified == true
+            and .dm_verity_verified == true
+            and .partition_contents_verified == true
+            and .pinned_regular_file_snapshot_verified == true
+            and .hardware_observed == false
+            and .security_enforced == false
+            and .mutation_eligible == false
+            and .cold_power_cycle_observed == false
+            and .one_time_settings_changed == false
+          ' "$TMPDIR/verification.json" > /dev/null
+
+        root_hash_padding_offset=$((
+          $(jq -r '.images[] | select(.role == "root-hash") | .offset_bytes' "$layout")
+          + $(jq -r '.images[] | select(.role == "root-hash") | .size_bytes' "$layout")
+        ))
+        root_hash_partition_end=$((
+          $(jq -r '.gpt.partitions[] | select(.role == "root-hash") | .offset_bytes' "$layout")
+          + $(jq -r '.gpt.partitions[] | select(.role == "root-hash") | .partition_size_bytes' "$layout")
+        ))
+        readonly root_hash_padding_offset root_hash_partition_end
+        test "$root_hash_padding_offset" -lt "$root_hash_partition_end"
+        printf '\377' | dd of="$target" bs=1 \
+          seek="$root_hash_padding_offset" count=1 conv=notrunc status=none
+        if ${pkgs.coreutils}/bin/env -i \
+          LC_ALL=C \
+          PATH="$TMPDIR/empty-path" \
+          TMPDIR="$TMPDIR" \
+          "$fixture_tool" verify --workspace "$workspace" \
+          > "$TMPDIR/nonzero-padding.json" \
+          2> "$TMPDIR/nonzero-padding.stderr"
+        then
+          echo 'fixture verifier accepted nonzero root-hash partition padding' >&2
+          exit 1
+        fi
+        grep -Fqx \
+          'kaiba-provision-media-fixture: root-hash partition content differs from the immutable layout' \
+          "$TMPDIR/nonzero-padding.stderr"
+        printf '\000' | dd of="$target" bs=1 \
+          seek="$root_hash_padding_offset" count=1 conv=notrunc status=none
+
+        expect_gpt_rejection() {
+          local label="$1"
+          local region="$2"
+          if ${pkgs.coreutils}/bin/env -i \
+            LC_ALL=C \
+            PATH="$TMPDIR/empty-path" \
+            TMPDIR="$TMPDIR" \
+            "$fixture_tool" verify --workspace "$workspace" \
+            > "$TMPDIR/$label.json" \
+            2> "$TMPDIR/$label.stderr"
+          then
+            echo "fixture verifier accepted invalid GPT: $label" >&2
+            exit 1
+          fi
+          grep -Fqx \
+            "kaiba-provision-media-fixture: $region GPT metadata differs from the immutable layout" \
+            "$TMPDIR/$label.stderr"
+        }
+
+        dd if=/dev/zero of="$target" bs=1 seek=512 count=8 \
+          conv=notrunc status=none
+        expect_gpt_rejection corrupt-primary-gpt primary
+        dd if="$TMPDIR/primary-gpt.after" of="$target" bs=1M count=1 \
+          conv=notrunc status=none
+        sgdisk --verify "$target" > /dev/null
+
+        dd if=/dev/zero of="$target" bs=1 \
+          seek="$((target_size - 512))" count=8 conv=notrunc status=none
+        expect_gpt_rejection corrupt-backup-gpt backup
+        dd if="$TMPDIR/backup-gpt.after" of="$target" bs=1M \
+          seek="$((target_size - 1048576))" count=1 \
+          oflag=seek_bytes conv=notrunc status=none
+        sgdisk --verify "$target" > /dev/null
+
+        sgdisk --attributes=2:set:63 "$target" > /dev/null
+        sgdisk --verify "$target" > /dev/null
+        expect_gpt_rejection unexpected-partition-attribute primary
+        sgdisk --attributes=2:clear:63 "$target" > /dev/null
+        sgdisk --verify "$target" > /dev/null
+
+        sector_size="$(jq -r .sector_size_bytes "$layout")"
+        root_hash_start=$(( $(jq -r '.gpt.partitions[] | select(.number == 3) | .offset_bytes' "$layout") / sector_size ))
+        root_hash_size=$(( $(jq -r '.gpt.partitions[] | select(.number == 3) | .partition_size_bytes' "$layout") / sector_size ))
+        root_hash_end=$((root_hash_start + root_hash_size - 1))
+        readonly sector_size root_hash_start root_hash_size root_hash_end
+        sgdisk \
+          --delete=3 \
+          --new=4:"$root_hash_start":"$root_hash_end" \
+          --typecode=4:"$(jq -r '.gpt.partitions[] | select(.number == 3) | .type_code' "$layout")" \
+          --change-name=4:"$(jq -r '.gpt.partitions[] | select(.number == 3) | .name' "$layout")" \
+          --partition-guid=4:"$(jq -r '.gpt.partitions[] | select(.number == 3) | .unique_guid' "$layout")" \
+          "$target" > /dev/null
+        sgdisk --verify "$target" > /dev/null
+        expect_gpt_rejection wrong-partition-number primary
+
+        mkdir -p "$out"
+        touch "$out/passed"
+      '';
+
   developmentYubiKeySigningContract =
     pkgs.runCommand "kaiba-development-yubikey-signing-contract"
       {
@@ -1785,6 +2369,7 @@ let
         test -f ${secureBootArtifactContract}/passed
         test -f ${signedBootPlanContract}/passed
         test -f ${unfusedCapsuleContract}/passed
+        test -f ${mediaStagingFixtureContract}/passed
         test -f ${developmentYubiKeySigningContract}/passed
         test -f ${moduleEval}/results.txt
 
@@ -1826,6 +2411,7 @@ in
   inherit
     developmentYubiKeySigningContract
     deviceProfileSchema
+    mediaStagingFixtureContract
     moduleEval
     probeBundleIntegrity
     provisioningTestResult
