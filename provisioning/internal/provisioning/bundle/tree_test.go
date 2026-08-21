@@ -409,6 +409,9 @@ func TestSnapshotDirectoryTreeRejectsUnsafeFilesystemObjectsAndPaths(t *testing.
 		path := filepath.Join(root, "file")
 		mustWriteSnapshotFile(t, path, []byte("file"), 0o500)
 		if err := os.Chmod(path, 0o500|os.ModeSetuid); err != nil {
+			if errors.Is(err, syscall.EPERM) {
+				t.Skip("setuid file modes are not permitted in this sandbox")
+			}
 			t.Fatal(err)
 		}
 		if _, err := SnapshotDirectoryTree(root); err == nil {
@@ -420,6 +423,9 @@ func TestSnapshotDirectoryTreeRejectsUnsafeFilesystemObjectsAndPaths(t *testing.
 		path := filepath.Join(root, "directory")
 		mustMakeSnapshotDirectory(t, path, 0o500)
 		if err := os.Chmod(path, 0o500|os.ModeSticky); err != nil {
+			if errors.Is(err, syscall.EPERM) {
+				t.Skip("sticky directory modes are not permitted in this sandbox")
+			}
 			t.Fatal(err)
 		}
 		if _, err := SnapshotDirectoryTree(root); err == nil {
@@ -440,6 +446,27 @@ func TestSnapshotDirectoryTreeRejectsUnsafeFilesystemObjectsAndPaths(t *testing.
 			t.Fatal("SnapshotDirectoryTree() accepted a backslash path")
 		}
 	})
+}
+
+func TestSnapshotDirectoryTreeRejectsSpecialPermissionBitsWithoutFilesystemSupport(t *testing.T) {
+	tests := []struct {
+		name string
+		mode uint32
+	}{
+		{"setuid", syscall.S_IFREG | 0o4755},
+		{"setgid", syscall.S_IFREG | 0o2755},
+		{"sticky", syscall.S_IFDIR | 0o1755},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateTreePermissionBits("fixture", test.mode); err == nil {
+				t.Fatal("special permission bits were accepted")
+			}
+		})
+	}
+	if err := validateTreePermissionBits("fixture", syscall.S_IFREG|0o0755); err != nil {
+		t.Fatalf("ordinary permission bits were rejected: %v", err)
+	}
 }
 
 func goldenDirectoryTree(t *testing.T) DirectoryTree {

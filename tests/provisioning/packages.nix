@@ -938,6 +938,7 @@ let
       }
       ''
         set -euo pipefail
+        export CGO_ENABLED=0
         export GOCACHE="$TMPDIR/go-cache"
         export GOPATH="$TMPDIR/go-path"
 

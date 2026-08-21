@@ -157,8 +157,8 @@ func (snapshot *directoryTreeSnapshot) scanEntry(parent *os.File, name, relative
 	if err != nil {
 		return TreeEntry{}, fmt.Errorf("inspect path %q: %w", relative, err)
 	}
-	if identity.mode&0o7000 != 0 {
-		return TreeEntry{}, fmt.Errorf("path %q has setuid, setgid, or sticky permission bits", relative)
+	if err := validateTreePermissionBits(fmt.Sprintf("path %q", relative), identity.mode); err != nil {
+		return TreeEntry{}, err
 	}
 
 	switch identity.mode & syscall.S_IFMT {
@@ -361,7 +361,11 @@ func validateTreeDirectoryIdentity(label string, identity treeFileIdentity) erro
 	if identity.mode&syscall.S_IFMT != syscall.S_IFDIR {
 		return fmt.Errorf("%s must be a directory", label)
 	}
-	if identity.mode&0o7000 != 0 {
+	return validateTreePermissionBits(label, identity.mode)
+}
+
+func validateTreePermissionBits(label string, mode uint32) error {
+	if mode&0o7000 != 0 {
 		return fmt.Errorf("%s has setuid, setgid, or sticky permission bits", label)
 	}
 	return nil
