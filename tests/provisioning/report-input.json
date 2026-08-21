@@ -47,6 +47,13 @@
         "evidence": []
       },
       {
+        "id": "signed-release-manifest-contract",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Complete signed-release manifest requires the exact 18-role set and canonical RPIBOOT directory-tree bindings while preserving partial signed-boot manifests.",
+        "evidence": []
+      },
+      {
         "id": "provision-package",
         "system": "aarch64-linux",
         "status": "not-observed",
@@ -93,6 +100,13 @@
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Pinned rpiboot host tool emits one bounded metadata object on stdout without creating a side file.",
+        "evidence": []
+      },
+      {
+        "id": "signed-release-manifest-contract",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Complete signed-release manifest requires the exact 18-role set and canonical RPIBOOT directory-tree bindings while preserving partial signed-boot manifests.",
         "evidence": []
       },
       {

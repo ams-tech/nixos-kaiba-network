@@ -68,8 +68,14 @@
         "rpi5.eeprom_bootsys",
         "rpi5.eeprom_config",
         "rpi5.fresh_commit_bundle",
+        "rpi5.fresh_readback_bundle",
+        "rpi5.negative_boot_bundle",
+        "rpi5.owned_readback_bundle",
         "rpi5.owned_recovery_bootcode",
         "rpi5.owned_recovery_bundle",
+        "rpi5.root_data_image",
+        "rpi5.root_hash_tree_image",
+        "rpi5.root_integrity_test_bundle",
         "rpi5.signed_eeprom_image"
       ]
     }

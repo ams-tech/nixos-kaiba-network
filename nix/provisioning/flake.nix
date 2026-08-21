@@ -136,6 +136,7 @@
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           secure-boot-artifacts = provisioning.secureBootArtifactContract;
           media-staging-fixture = provisioning.mediaStagingFixtureContract;
+          signed-release-manifest = provisioning.signedReleaseManifestContract;
           signed-boot-plan = provisioning.signedBootPlanContract;
           unfused-capsule = provisioning.unfusedCapsuleContract;
           station-ui =

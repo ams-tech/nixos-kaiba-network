@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.invalid/schemas/rpi5-rpiboot-directory-tree-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 RPIBOOT directory tree v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "root_mode", "entries"],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpiboot-directory-tree/v1alpha1"
+    },
+    "root_mode": {
+      "$ref": "#/$defs/mode"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/regular_file" },
+          { "$ref": "#/$defs/directory" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "mode": {
+      "type": "string",
+      "pattern": "^0[0-7]{3}$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^/\\\\][^\\\\]*$",
+      "allOf": [
+        { "not": { "pattern": "\\u0000" } },
+        { "not": { "pattern": "(^|/)\\.\\.?(/|$)" } },
+        { "not": { "pattern": "//" } },
+        { "not": { "pattern": "/$" } }
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "type", "mode", "size_bytes", "digest"],
+      "properties": {
+        "path": { "$ref": "#/$defs/path" },
+        "type": {
+          "enum": ["regular_file", "directory"]
+        },
+        "mode": { "$ref": "#/$defs/mode" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "regular_file": {
+      "allOf": [
+        { "$ref": "#/$defs/entry" },
+        {
+          "properties": {
+            "type": { "const": "regular_file" }
+          }
+        }
+      ]
+    },
+    "directory": {
+      "allOf": [
+        { "$ref": "#/$defs/entry" },
+        {
+          "properties": {
+            "type": { "const": "directory" },
+            "size_bytes": { "const": 0 },
+            "digest": {
+              "const": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

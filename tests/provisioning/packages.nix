@@ -469,6 +469,8 @@ let
         check-jsonschema --check-metaschema \
           ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-boot-signing-result-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-rpiboot-directory-tree-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha1.schema.json \
           ${built.goSource}/schemas/secure-boot-bundle-v1alpha1.schema.json \
           ${built.goSource}/schemas/signing-grant-registry-v1alpha1.schema.json \
           ${built.goSource}/schemas/signing-request-v1alpha1.schema.json \
@@ -800,6 +802,10 @@ let
       description = "Pinned rpiboot host tool emits one bounded metadata object on stdout without creating a side file.";
     }
     {
+      id = "signed-release-manifest-contract";
+      description = "Complete signed-release manifest requires the exact 18-role set and canonical RPIBOOT directory-tree bindings while preserving partial signed-boot manifests.";
+    }
+    {
       id = "provision-package";
       description = "kaiba-provision package with pinned probe-tool, profile, schema, manifest, and bundle inputs.";
     }
@@ -918,6 +924,74 @@ let
         mkdir -p "$out"
         jq --sort-keys . ${platformJSON} > "$out/platform.json"
         jq --sort-keys . ${reportInputJSON} > "$out/report-input.json"
+      '';
+
+  signedReleaseManifestContract =
+    pkgs.runCommand "kaiba-rpi5-signed-release-manifest-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.check-jsonschema
+          pkgs.go
+          pkgs.gnugrep
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        export GOCACHE="$TMPDIR/go-cache"
+        export GOPATH="$TMPDIR/go-path"
+
+        cd ${built.goSource}
+        readonly focused_test_pattern='^(Test(New)?SignedRelease|TestDirectoryTree|TestSnapshotDirectoryTree)'
+        go test ./internal/provisioning/bundle \
+          -list "$focused_test_pattern" > "$TMPDIR/focused-tests.txt"
+        grep -Eq "$focused_test_pattern" "$TMPDIR/focused-tests.txt"
+        go test ./internal/provisioning/bundle \
+          -run "$focused_test_pattern" \
+          -count=1
+        check-jsonschema --check-metaschema \
+          ${built.goSource}/schemas/rpi5-rpiboot-directory-tree-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha1.schema.json
+
+        readonly release_schema=${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha1.schema.json
+        readonly golden_manifest=${built.goSource}/internal/provisioning/bundle/testdata/rpi5-signed-release-manifest-v1alpha1.json
+        readonly tree_schema=${built.goSource}/schemas/rpi5-rpiboot-directory-tree-v1alpha1.schema.json
+        readonly multibyte_tree=${built.goSource}/internal/provisioning/bundle/testdata/rpiboot-directory-tree-multibyte-v1alpha1.json
+        check-jsonschema \
+          --schemafile "$tree_schema" \
+          "$multibyte_tree"
+        check-jsonschema \
+          --base-uri file://${built.goSource}/schemas/ \
+          --schemafile "$release_schema" \
+          "$golden_manifest"
+
+        jq 'del(.artifacts[-1])' "$golden_manifest" \
+          > "$TMPDIR/missing-role.json"
+        jq '.artifacts += [.artifacts[-1]]' "$golden_manifest" \
+          > "$TMPDIR/duplicate-extra-role.json"
+        jq '
+          .artifacts[0] as $first
+          | .artifacts[1] as $second
+          | .artifacts[0] = $second
+          | .artifacts[1] = $first
+        ' "$golden_manifest" > "$TMPDIR/swapped-role-order.json"
+        for invalid_manifest in \
+          "$TMPDIR/missing-role.json" \
+          "$TMPDIR/duplicate-extra-role.json" \
+          "$TMPDIR/swapped-role-order.json"
+        do
+          if check-jsonschema \
+            --base-uri file://${built.goSource}/schemas/ \
+            --schemafile "$release_schema" \
+            "$invalid_manifest"
+          then
+            echo "signed-release schema accepted invalid manifest: $invalid_manifest" >&2
+            exit 1
+          fi
+        done
+
+        mkdir -p "$out"
+        touch "$out/passed"
       '';
 
   secureBootArtifactContract =
@@ -2380,6 +2454,7 @@ let
         test -f ${deviceProfileSchema}/passed
         test -f ${probeBundleIntegrity}/passed
         test -f ${rpibootMetadataStdoutCompatibility}/passed
+        test -f ${signedReleaseManifestContract}/passed
         test -f ${secureBootArtifactContract}/passed
         test -f ${signedBootPlanContract}/passed
         test -f ${unfusedCapsuleContract}/passed
@@ -2392,6 +2467,16 @@ let
         jq -e '
           [.automated.checks[]
             | select(.id == "media-staging-fixture")
+            | [.system, .status]
+          ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
+        ' ${canonicalJSON}/report-input.json > /dev/null
+        jq -e \
+          '[.checks[] | select(.id == "signed-release-manifest-contract") | .status]
+            == ["passed"]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "signed-release-manifest-contract")
             | [.system, .status]
           ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
         ' ${canonicalJSON}/report-input.json > /dev/null
@@ -2440,6 +2525,7 @@ in
     provisioningTestResult
     rpibootMetadataStdoutCompatibility
     secureBootArtifactContract
+    signedReleaseManifestContract
     signedBootPlanContract
     unfusedCapsuleContract
     ;

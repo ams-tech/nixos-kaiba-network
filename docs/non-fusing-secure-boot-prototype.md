@@ -126,11 +126,13 @@ but unauthenticated capture still keeps `hardware_observed:false`,
 
 This prototype does not complete SB-03 through SB-07 and does not authorize
 SB-08. Before any one-time setting is changed, the project still needs the
-complete signed release and role vocabulary, canonical RPIBOOT directory-tree
-digests, verified GPT/FAT and dm-verity media layout, a qualified BOOTSEL/power
-lane, authenticated service transport around the compiler, the complete
-crash/failure campaign, live development-token evidence, and an explicit
-go/no-go review for one sacrificial board.
+complete signed release assembled under the repository's exact 18-role
+contract, with every role resolved to reviewed immutable bytes and each actual
+RPIBOOT bundle bound by its canonical directory-tree digest. It also still
+needs the verified GPT/FAT and dm-verity media layout, a qualified
+BOOTSEL/power lane, authenticated service transport around the compiler, the
+complete crash/failure campaign, live development-token evidence, and an
+explicit go/no-go review for one sacrificial board.
 
 The synthetic fixture does not satisfy any physical staging, cold-power,
 hardware-observation, secure-boot-enforcement, EEPROM, or OTP gate.

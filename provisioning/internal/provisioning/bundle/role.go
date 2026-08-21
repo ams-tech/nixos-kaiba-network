@@ -11,25 +11,35 @@ import (
 type ArtifactRole string
 
 const (
-	RoleDeviceProfile         ArtifactRole = "device_profile"
-	RolePlatformAdapter       ArtifactRole = "platform_adapter"
-	RoleBootPublicKey         ArtifactRole = "boot_public_key"
-	RoleEEPROMConfig          ArtifactRole = "rpi5.eeprom_config"
-	RoleEEPROMBootsys         ArtifactRole = "rpi5.eeprom_bootsys"
-	RoleSignedEEPROMImage     ArtifactRole = "rpi5.signed_eeprom_image"
-	RoleBootImage             ArtifactRole = "rpi5.boot_image"
-	RoleBootSignature         ArtifactRole = "rpi5.boot_signature"
-	RoleRootIntegrity         ArtifactRole = "root_integrity"
-	RoleFreshCommitBundle     ArtifactRole = "rpi5.fresh_commit_bundle"
-	RoleOwnedRecoveryBootcode ArtifactRole = "rpi5.owned_recovery_bootcode"
-	RoleOwnedRecoveryBundle   ArtifactRole = "rpi5.owned_recovery_bundle"
+	RoleDeviceProfile     ArtifactRole = "device_profile"
+	RolePlatformAdapter   ArtifactRole = "platform_adapter"
+	RoleBootPublicKey     ArtifactRole = "boot_public_key"
+	RoleEEPROMConfig      ArtifactRole = "rpi5.eeprom_config"
+	RoleEEPROMBootsys     ArtifactRole = "rpi5.eeprom_bootsys"
+	RoleSignedEEPROMImage ArtifactRole = "rpi5.signed_eeprom_image"
+	RoleBootImage         ArtifactRole = "rpi5.boot_image"
+	RoleBootSignature     ArtifactRole = "rpi5.boot_signature"
+	// RoleRootIntegrity is persistent-root integrity metadata. The distinct
+	// RoleRootIntegrityTestBundle contains the RPIBOOT acceptance-test payload.
+	RoleRootIntegrity           ArtifactRole = "root_integrity"
+	RoleFreshCommitBundle       ArtifactRole = "rpi5.fresh_commit_bundle"
+	RoleFreshReadbackBundle     ArtifactRole = "rpi5.fresh_readback_bundle"
+	RoleNegativeBootBundle      ArtifactRole = "rpi5.negative_boot_bundle"
+	RoleOwnedReadbackBundle     ArtifactRole = "rpi5.owned_readback_bundle"
+	RoleOwnedRecoveryBootcode   ArtifactRole = "rpi5.owned_recovery_bootcode"
+	RoleOwnedRecoveryBundle     ArtifactRole = "rpi5.owned_recovery_bundle"
+	RoleRootDataImage           ArtifactRole = "rpi5.root_data_image"
+	RoleRootHashTreeImage       ArtifactRole = "rpi5.root_hash_tree_image"
+	RoleRootIntegrityTestBundle ArtifactRole = "rpi5.root_integrity_test_bundle"
 )
 
 var artifactRoles = map[ArtifactRole]struct{}{
 	RoleDeviceProfile: {}, RolePlatformAdapter: {}, RoleBootPublicKey: {},
 	RoleEEPROMConfig: {}, RoleEEPROMBootsys: {}, RoleSignedEEPROMImage: {},
 	RoleBootImage: {}, RoleBootSignature: {}, RoleRootIntegrity: {},
-	RoleFreshCommitBundle: {}, RoleOwnedRecoveryBootcode: {}, RoleOwnedRecoveryBundle: {},
+	RoleFreshCommitBundle: {}, RoleFreshReadbackBundle: {}, RoleNegativeBootBundle: {},
+	RoleOwnedReadbackBundle: {}, RoleOwnedRecoveryBootcode: {}, RoleOwnedRecoveryBundle: {},
+	RoleRootDataImage: {}, RoleRootHashTreeImage: {}, RoleRootIntegrityTestBundle: {},
 }
 
 var signableRoles = map[ArtifactRole]struct{}{
