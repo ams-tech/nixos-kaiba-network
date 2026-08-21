@@ -319,7 +319,9 @@ signature rather than silently reusing this result.
 Completing this workflow proves that the selected `boot.img` verifies under
 the reviewed public key and that the public records are internally bound. It
 does not prove a live YubiKey ceremony unless the root-managed receipt and
-operator evidence are reviewed. It also does not produce a signed EEPROM,
-recovery/commit bundles, a complete release manifest, target-media cold
-readback, or secure-boot enforcement on hardware. Those remain prerequisites
-before any one-time setting may be changed.
+operator evidence are reviewed. The repository's exact 18-role manifest and
+canonical RPIBOOT directory-tree contracts do not change that boundary: this
+workflow does not produce a signed EEPROM, recovery/commit bundles, an
+assembled complete signed release with every role resolved to immutable bytes,
+target-media cold readback, or secure-boot enforcement on hardware. Those
+remain prerequisites before any one-time setting may be changed.

@@ -134,12 +134,14 @@ that emits the unchanged `boot.img`, `boot.sig`, reviewed `public.pem`, and
 public records. See the
 [signed-boot workflow](raspberry-pi-5-signed-boot-workflow.md).
 
-It does not yet construct the complete signed release. In particular, the
-signed EEPROM image, fresh commit bundle, owned recovery bundle, complete role
-manifest, and resolution of every manifest entry to immutable bytes remain
-unfinished. Those artifacts must be produced and independently checked by a
-reviewed control-host release procedure before their immutable Nix-store paths
-are supplied to `lib.mkRpi5PhysicalLaneGuard`.
+The repository now defines the exact 18-role signed-release manifest and the
+canonical directory-tree contract for RPIBOOT bundles, but it does not yet
+construct a complete signed release. The signed EEPROM image, fresh commit and
+owned recovery bundles, remaining acceptance artifacts, resolution of every
+manifest entry to reviewed immutable bytes, and live signature verification
+remain unfinished. Those artifacts must be produced and independently checked
+by a reviewed control-host release procedure before their immutable Nix-store
+paths are supplied to `lib.mkRpi5PhysicalLaneGuard`.
 
 Likewise, the artifact builder produces the three images but no current
 component writes `boot.img`/`boot.sig`, `root-data.img`, or `root-hash.img` to

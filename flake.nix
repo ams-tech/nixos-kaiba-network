@@ -407,6 +407,7 @@
           rpi5-media-staging-fixture = provisioning.checks.${system}.media-staging-fixture;
           rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
           secure-boot-artifacts = provisioning.checks.${system}.secure-boot-artifacts;
+          rpi5-signed-release-manifest = provisioning.checks.${system}.signed-release-manifest;
           signed-boot-plan = provisioning.checks.${system}.signed-boot-plan;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"

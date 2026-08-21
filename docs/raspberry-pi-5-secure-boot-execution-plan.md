@@ -253,17 +253,26 @@ including:
 
 ### Deliverables
 
-- [ ] Extend release-level validation so a manifest with only an arbitrary
+- [x] Extend release-level validation so a manifest with only an arbitrary
   non-empty subset of known roles cannot be approved as complete.
-- [ ] Extend the closed artifact-role vocabulary and schema to represent every
+- [x] Extend the closed artifact-role vocabulary and schema to represent every
   immutable lane input, including fresh and owned readback, negative-boot, and
   root-integrity bundles, plus the separate root-data and root-hash-tree image
   bytes.
-- [ ] Define one canonical directory-tree representation for each RPIBOOT
+- [x] Define one canonical directory-tree representation for each RPIBOOT
   bundle. It must sort relative paths, record file type, mode, size, and digest,
   reject symlinks and special files, and produce a domain-separated digest over
   the canonical tree. A byte-file `digest` and `size` pair is not sufficient for
   the directories consumed by `rpiboot -d`.
+
+The repository now defines a versioned signed-release contract that requires
+the exact 18-role Raspberry Pi 5 artifact set. Its RPIBOOT directory-tree
+contract sorts canonical relative paths, binds type, mode, size, and content
+digest, and rejects symbolic links and special files. These contracts and
+their synthetic tests do not assemble a real release, resolve the declared
+roles to reviewed immutable production bytes, or verify live release
+signatures. SB-03 therefore remains in progress.
+
 - [ ] Produce the signed EEPROM image with the pinned firmware, configuration,
   signing tools, public key, and customer counter-signature.
 - [ ] Pin an EEPROM release that emits the signed boot-image SHA-256
@@ -789,7 +798,8 @@ Any missing, contradictory, or unverifiable required evidence prevents
 The main code and policy boundaries expected to change while executing this
 plan are:
 
-- the [secure-boot bundle manifest] and [artifact-role vocabulary];
+- the [signed-release manifest contract], [secure-boot bundle manifest], and
+  [artifact-role vocabulary];
 - the [lane-guard plan contract];
 - the [control-plane terminal workflow];
 - the [physical Pi 5 adapter];
@@ -826,6 +836,7 @@ path must continue to reject `enrollment_ready`.
 [live provisioning runbook]: ./raspberry-pi-5-live-provisioning.md
 [Pi 5 provisioning-probe runbook]: ./raspberry-pi-5-provisioning-probe.md
 [qualification record]: ../tests/provisioning/evidence/sacrificial-pi-5.json
+[signed-release manifest contract]: ../provisioning/internal/provisioning/bundle/release.go
 [secure-boot bundle manifest]: ../provisioning/internal/provisioning/bundle/manifest.go
 [artifact-role vocabulary]: ../provisioning/internal/provisioning/bundle/role.go
 [lane-guard plan contract]: ../provisioning/internal/provisioning/laneguard/contracts.go
