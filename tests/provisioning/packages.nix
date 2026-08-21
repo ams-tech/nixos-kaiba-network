@@ -774,6 +774,10 @@ let
       description = "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.";
     }
     {
+      id = "media-staging-fixture";
+      description = "Synthetic capsule-bound regular-file fixture validates FAT/GPT layout, staged extents, reopened readback, complete partition digests, dm-verity, and fail-closed tamper rejection without making hardware or enforcement claims.";
+    }
+    {
       id = "nixos-module-evaluation";
       description = "Provisioning-probe NixOS module evaluation and its narrow USB access boundary.";
     }
@@ -2372,6 +2376,15 @@ let
         test -f ${mediaStagingFixtureContract}/passed
         test -f ${developmentYubiKeySigningContract}/passed
         test -f ${moduleEval}/results.txt
+
+        jq -e '[.checks[] | select(.id == "media-staging-fixture") | .status] == ["passed"]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "media-staging-fixture")
+            | [.system, .status]
+          ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
+        ' ${canonicalJSON}/report-input.json > /dev/null
 
         mkdir -p "$out/evidence/provisioning/hardware-qualification"
         ${lib.optionalString (qualificationEvidence != null) ''

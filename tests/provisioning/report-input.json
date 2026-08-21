@@ -19,6 +19,13 @@
         "evidence": []
       },
       {
+        "id": "media-staging-fixture",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Synthetic capsule-bound regular-file fixture validates FAT/GPT layout, staged extents, reopened readback, complete partition digests, dm-verity, and fail-closed tamper rejection without making hardware or enforcement claims.",
+        "evidence": []
+      },
+      {
         "id": "nixos-module-evaluation",
         "system": "aarch64-linux",
         "status": "not-observed",
@@ -58,6 +65,13 @@
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.",
+        "evidence": []
+      },
+      {
+        "id": "media-staging-fixture",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Synthetic capsule-bound regular-file fixture validates FAT/GPT layout, staged extents, reopened readback, complete partition digests, dm-verity, and fail-closed tamper rejection without making hardware or enforcement claims.",
         "evidence": []
       },
       {

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from contextlib import redirect_stderr
 from pathlib import Path
 
@@ -343,6 +344,53 @@ class ReportRendererTest(unittest.TestCase):
             self.assertIn('name="kaiba-rpi5-provisioning-probe"', junit)
             self.assertIn('skipped="1"', junit)
             self.assertNotIn("Hardware qualification", junit)
+
+    def test_media_staging_fixture_is_visible_in_every_report_format(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provisioning = json.loads(
+                (REPO_ROOT / "tests" / "provisioning" / "report-input.json").read_text(encoding="utf-8")
+            )
+            provisioning["hardware_qualification"] = {
+                "status": "pending",
+                "description": "Hardware qualification is outside this automated-report test.",
+                "evidence": [],
+            }
+            provisioning_path = root / "provisioning.json"
+            provisioning_path.write_text(json.dumps(provisioning), encoding="utf-8")
+
+            output = root / "report"
+            self.render_fixture(output, provisioning_path=provisioning_path)
+
+            rendered = json.loads((output / "provisioning.json").read_text(encoding="utf-8"))
+            media_rows = [
+                (item["system"], item["status"])
+                for item in rendered["automated"]["checks"]
+                if item["id"] == "media-staging-fixture"
+            ]
+            self.assertEqual(
+                [("aarch64-linux", "not-observed"), ("x86_64-linux", "passed")],
+                media_rows,
+            )
+
+            markdown = (output / "index.md").read_text(encoding="utf-8")
+            self.assertIn("| NOT OBSERVED | `aarch64-linux` | `media-staging-fixture` |", markdown)
+            self.assertIn("| PASSED | `x86_64-linux` | `media-staging-fixture` |", markdown)
+
+            page = (output / "index.html").read_text(encoding="utf-8")
+            self.assertEqual(2, page.count("<code>media-staging-fixture</code>"))
+
+            junit = ET.parse(output / "junit.xml")
+            cases = {
+                case.get("classname"): case
+                for case in junit.findall('.//testcase[@name="media-staging-fixture"]')
+            }
+            self.assertEqual(
+                {"provisioning.aarch64-linux", "provisioning.x86_64-linux"},
+                set(cases),
+            )
+            self.assertIsNotNone(cases["provisioning.aarch64-linux"].find("skipped"))
+            self.assertIsNone(cases["provisioning.x86_64-linux"].find("skipped"))
 
     def test_completed_hardware_evidence_is_copied_linked_and_manifested(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
