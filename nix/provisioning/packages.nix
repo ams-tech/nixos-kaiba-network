@@ -502,6 +502,18 @@ let
     pkgs.openssl
     pkgs.xxd
   ];
+  mkEEPROMSigningToolLDFlags = signingGateSocketPath: [
+    "-X=main.signingGateSocketPath=${signingGateSocketPath}"
+    "-X=main.pinnedUpdatePieepromExecutablePath=${eepromToolRuntime}/bin/update-pieeprom.sh"
+    "-X=main.pinnedRpiEEPROMConfigExecutablePath=${eepromToolRuntime}/bin/rpi-eeprom-config"
+    "-X=main.pinnedToolRuntimePath=${eepromToolPATH}"
+    "-X=main.expectedEEPROMReleaseManifestDigest=${rpi5EEPROMRelease.kaibaRpi5EEPROMRelease.releaseManifestDigest}"
+    "-X=main.expectedOriginalEEPROMDigest=${eepromReleaseFactories.policy.firmware.image.sha256}"
+    "-X=main.expectedOriginalRecoveryDigest=${eepromReleaseFactories.policy.firmware.recovery.sha256}"
+    "-X=main.expectedOriginalBootcodeDigest=${eepromReleaseFactories.policy.firmware.bootcode.sha256}"
+    "-X=main.expectedOriginalBootsysDigest=${eepromReleaseFactories.policy.firmware.bootsys.sha256}"
+    "-X=main.expectedEEPROMFirmwareBuildEpoch=${toString eepromReleaseFactories.policy.firmware.buildEpoch}"
+  ];
   eepromSigningTool = pkgs.buildGoModule {
     pname = "kaiba-provision-sign-eeprom";
     inherit version;
@@ -509,18 +521,7 @@ let
     subPackages = [ "cmd/kaiba-provision-sign-eeprom" ];
     vendorHash = null;
     doCheck = false;
-    ldflags = [
-      "-X=main.signingGateSocketPath=/run/kaiba-provision-signing/signing.sock"
-      "-X=main.pinnedUpdatePieepromExecutablePath=${eepromToolRuntime}/bin/update-pieeprom.sh"
-      "-X=main.pinnedRpiEEPROMConfigExecutablePath=${eepromToolRuntime}/bin/rpi-eeprom-config"
-      "-X=main.pinnedToolRuntimePath=${eepromToolPATH}"
-      "-X=main.expectedEEPROMReleaseManifestDigest=${rpi5EEPROMRelease.kaibaRpi5EEPROMRelease.releaseManifestDigest}"
-      "-X=main.expectedOriginalEEPROMDigest=${eepromReleaseFactories.policy.firmware.image.sha256}"
-      "-X=main.expectedOriginalRecoveryDigest=${eepromReleaseFactories.policy.firmware.recovery.sha256}"
-      "-X=main.expectedOriginalBootcodeDigest=${eepromReleaseFactories.policy.firmware.bootcode.sha256}"
-      "-X=main.expectedOriginalBootsysDigest=${eepromReleaseFactories.policy.firmware.bootsys.sha256}"
-      "-X=main.expectedEEPROMFirmwareBuildEpoch=${toString eepromReleaseFactories.policy.firmware.buildEpoch}"
-    ];
+    ldflags = mkEEPROMSigningToolLDFlags "/run/kaiba-provision-signing/signing.sock";
     passthru.kaibaEEPROMSigningTool = {
       inherit eepromToolRuntime;
       approvalGateConfigured = true;
@@ -546,6 +547,83 @@ let
     meta = {
       mainProgram = "kaiba-provision-sign-eeprom";
       description = "Approval-gated Raspberry Pi 5 EEPROM and one-input owned-recovery signing adapter";
+      platforms = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+    };
+  };
+
+  # The complete-release finalizer must replay the pinned EEPROM updater and
+  # extractor, but it must not inherit the live approval-gate endpoint. This
+  # private closure deliberately fixes the unusable character device as its
+  # gate path; only the public `finalize` operation is consumed below.
+  eepromReplayFinalizer = pkgs.buildGoModule {
+    pname = "kaiba-provision-eeprom-replay-finalizer";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-sign-eeprom" ];
+    vendorHash = null;
+    doCheck = false;
+    ldflags = mkEEPROMSigningToolLDFlags "/dev/null";
+    passthru.kaibaEEPROMReplayFinalizer = {
+      inherit eepromToolRuntime;
+      approvalGateConfigured = false;
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      signingAuthorityConfigured = false;
+      toolPATH = eepromToolPATH;
+      verificationMode = "pinned_offline_replay";
+    };
+    meta = {
+      mainProgram = "kaiba-provision-sign-eeprom";
+      description = "No-authority EEPROM finalizer used for deterministic signed-release replay";
+      platforms = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+    };
+  };
+
+  signedReleaseTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-finalize-release";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-finalize-release" ];
+    vendorHash = null;
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      go test ./internal/provisioning/signedrelease \
+        ./cmd/kaiba-provision-finalize-release
+      runHook postCheck
+    '';
+    ldflags = [
+      "-X=main.eepromFinalizerExecutablePath=${eepromReplayFinalizer}/bin/kaiba-provision-sign-eeprom"
+    ];
+    passthru.kaibaSignedReleaseTool = {
+      inherit eepromReplayFinalizer;
+      artifactRoleCount = 18;
+      blockDeviceWriteCapable = false;
+      deterministicEEPROMReplayRequired = true;
+      deterministicOwnedRecoveryReplayRequired = true;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      publicationSchemaVersion = "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1";
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-finalize-release";
+      description = "Offline verifier and content-addressed publisher for complete Raspberry Pi 5 signed releases";
       platforms = [
         "x86_64-linux"
         "aarch64-linux"
@@ -618,6 +696,11 @@ let
       ;
   };
   inherit (rpibootBundleFactories) mkRpi5VerifiedRPIBootBundles;
+
+  signedReleaseFactories = import ./signed-release.nix {
+    inherit lib pkgs signedReleaseTool;
+  };
+  inherit (signedReleaseFactories) mkRpi5VerifiedSignedRelease;
 
   signedBootFactories = import ./signed-boot.nix {
     inherit lib pkgs signedBootTool;
@@ -1071,6 +1154,7 @@ in
     mkRpi5MediaStagingFixture
     mkRpi5OwnedRecoverySigningPlan
     mkRpi5VerifiedRPIBootBundles
+    mkRpi5VerifiedSignedRelease
     mkRpi5ReleaseIntent
     mkRpi5UnfusedVerifier
     mkRpi5VerifiedSignedBoot
@@ -1095,6 +1179,7 @@ in
     signingClientFoundation
     signingGateFoundation
     signedBootTool
+    signedReleaseTool
     suite
     yubiKeyWrapperFoundation
     ;

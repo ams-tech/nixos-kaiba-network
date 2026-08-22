@@ -68,6 +68,13 @@
         "evidence": []
       },
       {
+        "id": "rpi5-signed-release-finalization",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Complete synthetic signed-release assembly verifies all public lineage, pinned fresh-EEPROM and owned-recovery replay, canonical RPIBOOT siblings, exact content-addressed publication, and fail-closed tamper rejection without live signing or hardware claims.",
+        "evidence": []
+      },
+      {
         "id": "signed-release-manifest-contract",
         "system": "aarch64-linux",
         "status": "not-observed",
@@ -142,6 +149,13 @@
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Owned-recovery signing, fresh/owned RPIBOOT trees, and deterministic negative/root-integrity fixtures are canonical, digest-bound, replay-verified, and explicitly carry no hardware-observation claim.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-signed-release-finalization",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Complete synthetic signed-release assembly verifies all public lineage, pinned fresh-EEPROM and owned-recovery replay, canonical RPIBOOT siblings, exact content-addressed publication, and fail-closed tamper rejection without live signing or hardware claims.",
         "evidence": []
       },
       {

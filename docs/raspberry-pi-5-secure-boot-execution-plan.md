@@ -91,12 +91,13 @@ The repository already contains useful foundations:
   outer FAT/GPT regular-file fixture, a signer-anchored capsule verifier, and an
   offline unfused record correlator that makes no hardware claim.
 
-The repository does not yet contain a complete signed-release adapter,
-production-complete GPT/FAT/dm-verity NVMe writer and verifier,
-mutation-capable station backend, authenticated control-to-guard transport, or
-a proven RPIBOOT-to-normal-boot lane transition. In particular, the EEPROM
-foundation is not a production signed EEPROM, owned-recovery signature,
-hardware write, or OTP result.
+The repository now contains a complete offline signed-release assembler and
+Nix factory, but it does not contain a production release assembled from the
+reviewed live-token results. It also does not yet contain a production-complete
+GPT/FAT/dm-verity NVMe writer and verifier, mutation-capable station backend,
+authenticated control-to-guard transport, or a proven RPIBOOT-to-normal-boot
+lane transition. In particular, the EEPROM foundation is not a production
+signed EEPROM, owned-recovery signature, hardware write, or OTP result.
 
 ## Safety invariants
 
@@ -144,7 +145,8 @@ These rules apply to every work item and rehearsal:
 The in-progress statuses above reflect implementation, not milestone exit. The
 repository now has a signed four-role capsule verifier, a fixed-extent media
 stager with a regular-file fixture mode, a `mkRpi5MediaStagingFixture` factory,
-offline unfused record correlation, and a runnable software-only orchestrator.
+offline unfused record correlation, a complete offline signed-release
+assembler, and a runnable software-only orchestrator.
 The media factory constructs an outer FAT containing exactly `config.txt`,
 `boot.img`, and `boot.sig`, plus deterministic GPT fixture metadata and a safe
 initializer/verifier. Its contract runs initialization, the stager's
@@ -161,11 +163,13 @@ rehearsal actor policy, reopens and revalidates persisted state, emits no
 executable lane request, and executes only the non-authoritative simulator.
 
 These pieces are packaged in separate capability closures and are described in
-the [non-fusing prototype runbook](non-fusing-secure-boot-prototype.md). They do
-not resolve the full release role set to reviewed immutable bytes, complete
-production GPT/FAT binding, prove device staging or cold readback, provide
-authenticated service transport, qualify the physical lane, or complete the
-required failure matrix, and they cannot authorize SB-08. The
+the [non-fusing prototype runbook](non-fusing-secure-boot-prototype.md). A
+synthetic contract now resolves the full release role set, replays both EEPROM
+updater finalizers, and verifies and tampers the resulting content-addressed
+publication. It does not resolve those roles from the reviewed production
+live-token outputs, complete production GPT/FAT binding, prove device staging
+or cold readback, provide authenticated service transport, qualify the physical
+lane, or complete the required failure matrix, and it cannot authorize SB-08. The
 synthetic media fixture's plan and receipts bind only the three staged payload
 extents. The public EEPROM fresh-board plan, adapter, and finalizer likewise
 establish only synthetic/offline file, updater, signature, and lineage
@@ -338,14 +342,25 @@ expiry; it does not retroactively broaden the cohort signing grant.
   root-integrity trees are deterministic test inputs and explicitly record
   `hardware_observed=false`; this software foundation is not a live-token
   signature or board observation.
+- [x] Implement the strict offline complete-release assembler,
+  `mkRpi5VerifiedSignedRelease` factory, publication schema, and
+  content-addressed no-replace layout. The focused synthetic contract builds
+  all 18 roles from one release intent and one canonical RPIBOOT bundle-set,
+  requires linker-pinned EEPROM and owned-recovery replay, reopens the result,
+  and rejects signature, publication, object, and unexpected-entry tampering.
 
 The repository now defines a v1alpha2 signed-release contract that requires
 the exact 18-role Raspberry Pi 5 artifact set and its cohort release-intent
 lineage. Its RPIBOOT directory-tree contract sorts canonical relative paths,
 binds type, mode, size, and content digest, and rejects symbolic links and
-special files. These contracts and their synthetic tests do not assemble a
-real release, resolve the declared roles to reviewed immutable production
-bytes, or verify live release signatures. SB-03 therefore remains in progress.
+special files. The offline assembler independently verifies the boot, EEPROM,
+owned-recovery, root-integrity, and canonical RPIBOOT boundaries;
+deterministically replays fresh EEPROM and owned-recovery finalization; and
+publishes immutable objects, trees, lineage records, and the complete manifest
+under digest-derived paths.
+Its synthetic test assembles and tampers a complete fixture, but it does not
+supply reviewed production bytes or verify live-token ceremony evidence. SB-03
+therefore remains in progress.
 
 - [ ] Produce the signed EEPROM image with the pinned firmware, configuration,
   signing tools, public key, and customer counter-signature.
@@ -912,6 +927,7 @@ plan are:
 
 - the [signed-release manifest contract], [secure-boot bundle manifest], and
   [artifact-role vocabulary];
+- the [signed-release assembler] and [signed-release Nix factory];
 - the [release-intent contract], [signed-boot lineage contract], and
   [EEPROM signing foundation];
 - the [lane-guard plan contract];
@@ -958,6 +974,8 @@ path must continue to reject `enrollment_ready`.
 [A/B bootsys signing feature]: https://github.com/raspberrypi/usbboot/commit/08d4060ecfd85d402d2134572fe1e11d8b1b2dc8
 [EEPROM helper compatibility commit]: https://github.com/raspberrypi/rpi-eeprom/commit/25f837ab8009a643ed85b9aad94d911baddaf0c4
 [signed-release manifest contract]: ../provisioning/internal/provisioning/bundle/release.go
+[signed-release assembler]: ../provisioning/internal/provisioning/signedrelease/verify.go
+[signed-release Nix factory]: ../nix/provisioning/signed-release.nix
 [secure-boot bundle manifest]: ../provisioning/internal/provisioning/bundle/manifest.go
 [artifact-role vocabulary]: ../provisioning/internal/provisioning/bundle/role.go
 [release-intent contract]: ../provisioning/internal/provisioning/releaseintent/release_intent.go

@@ -175,6 +175,9 @@ func (s Set) Validate() error {
 		if err := record.Tree.Validate(); err != nil {
 			return fmt.Errorf("bundles[%d].tree: %w", index, err)
 		}
+		if record.Tree.RootMode != "0555" {
+			return fmt.Errorf("bundles[%d].tree.root_mode must be immutable 0555", index)
+		}
 		digest, err := record.Tree.Digest()
 		if err != nil {
 			return fmt.Errorf("bundles[%d].tree digest: %w", index, err)

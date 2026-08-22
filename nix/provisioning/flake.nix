@@ -86,6 +86,10 @@
           { system, ... }@args:
           (packagesFor system).mkRpi5VerifiedRPIBootBundles (builtins.removeAttrs args [ "system" ]);
 
+        mkRpi5VerifiedSignedRelease =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5VerifiedSignedRelease (builtins.removeAttrs args [ "system" ]);
+
         mkRpi5ReleaseIntent =
           { system, ... }@args:
           (packagesFor system).mkRpi5ReleaseIntent (builtins.removeAttrs args [ "system" ]);
@@ -140,6 +144,7 @@
           kaiba-provision-sign-boot = built.signedBootTool;
           kaiba-provision-sign-eeprom = built.eepromSigningTool;
           kaiba-provision-rpiboot-bundles = built.rpibootBundleTool;
+          kaiba-provision-finalize-release = built.signedReleaseTool;
           kaiba-provision-station = built.liveStation;
           kaiba-provision-station-demo = built.stationDemo;
           kaiba-provision-station-pages = built.stationPages;
@@ -171,6 +176,7 @@
           rpi5-eeprom-release = provisioning.eepromReleaseContract;
           rpi5-eeprom-signing = provisioning.eepromSigningContract;
           rpi5-rpiboot-bundles = provisioning.rpibootBundleContract;
+          rpi5-signed-release = provisioning.signedReleaseFinalizationContract;
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           secure-boot-artifacts = provisioning.secureBootArtifactContract;
           media-staging-fixture = provisioning.mediaStagingFixtureContract;

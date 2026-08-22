@@ -152,6 +152,18 @@ func TestParseSetRejectsAmbiguousJSON(t *testing.T) {
 	}
 }
 
+func TestSetRejectsWritableBundleRoot(t *testing.T) {
+	config := fixtureConfig(t)
+	set, err := Build(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set.Bundles[0].Tree.RootMode = "0777"
+	if err := set.Validate(); err == nil || !strings.Contains(err.Error(), "immutable 0555") {
+		t.Fatalf("Set.Validate() error = %v, want immutable-root rejection", err)
+	}
+}
+
 func fixtureConfig(t *testing.T) BuildConfig {
 	t.Helper()
 	root := t.TempDir()

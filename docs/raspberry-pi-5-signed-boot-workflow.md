@@ -114,6 +114,46 @@ metadata, plan/result lineage, and signature before copying
 still the narrow signed-boot slice; it is not the complete 18-role
 `rpi5-signed-release-manifest/v1alpha2`.
 
+### Complete signed-release finalization
+
+`mkRpi5VerifiedSignedRelease` is the separate pure assembly boundary. It
+accepts the unsigned artifact set, pinned EEPROM release, verified boot,
+verified EEPROM, verified owned recovery, one verified canonical RPIBOOT
+bundle-set, device profile, platform adapter, and root-integrity record. Nix
+rejects provenance graphs that mix release intents, EEPROM plans, owned
+recovery parents, RPIBOOT component sets, or EEPROM releases. The packaged
+`kaiba-provision-finalize-release` executable then reopens every public record,
+verifies all signatures and digests, requires the six canonical RPIBOOT sibling
+directories under one bundle-set root, and cross-binds that set's nine inputs
+to the selected components.
+
+Fresh EEPROM and owned-recovery finalization are each replayed once through a
+linker-fixed helper built from the pinned updater and extractor closure with no
+approval-gate endpoint. Each replayed directory must match its selected
+verified directory exactly. The assembler has no signer, hardware,
+block-device, EEPROM-programming, or OTP authority.
+
+The result is an exact no-replace publication with these root entries:
+
+```text
+manifests/
+objects/
+publication-digest
+publication.json
+records/
+tree-records/
+trees/
+```
+
+Regular artifacts, directory trees, tree records, the complete manifest, and
+the nine lineage records are stored at digest-derived paths. Finalization
+verifies the staged publication, makes it read-only, atomically installs it
+without replacing an existing path, syncs it, and reopens it for verification.
+The strict publication index is described by
+`rpi5-signed-release-publication-v1alpha1.schema.json`. Focused tests assemble a
+complete synthetic signature-backed fixture and reject altered signatures,
+objects, publication digests, noncanonical RPIBOOT siblings, and added entries.
+
 ### Release authorization is not device execution authorization
 
 The release intent answers a cohort-level question: may this exact set of five
@@ -435,12 +475,12 @@ Completing this workflow proves that the selected `boot.img` verifies under
 the reviewed public key and that the v1alpha2 public records carry one valid
 release-intent lineage. It does not prove a live YubiKey ceremony unless the
 root-managed receipt and operator evidence are reviewed. The repository's
-v1alpha2 exact 18-role signed-release manifest and canonical RPIBOOT bundle-set
-contracts do not change that boundary: this workflow does not produce
-live-token signed EEPROM/recovery outputs or an
-assembled complete signed release with every role resolved to immutable bytes,
-target-media cold readback, per-device execution authorization, or secure-boot
-enforcement on hardware. Those remain prerequisites before any one-time
-setting may be changed.
+v1alpha2 exact 18-role manifest, canonical RPIBOOT bundle-set, and offline
+complete-release assembler do not change that boundary. The synthetic contract
+does assemble every role into immutable content-addressed bytes, but this
+workflow does not produce or assemble the reviewed live-token EEPROM/recovery
+outputs, prove target-media cold readback, grant per-device execution
+authorization, or demonstrate secure-boot enforcement on hardware. Those
+remain prerequisites before any one-time setting may be changed.
 
 [owned recovery and RPIBOOT bundle workflow]: raspberry-pi-5-rpiboot-bundles.md

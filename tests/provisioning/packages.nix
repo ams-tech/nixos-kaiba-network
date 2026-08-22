@@ -508,6 +508,42 @@ let
     verifiedSignedBoot = verifiedSignedBootEvaluationFixture;
     verifiedSignedEEPROM = verifiedSignedEEPROMEvaluationFixture;
   };
+  signedReleaseBootSigningPlanEvaluationFixture = built.mkRpi5BootSigningPlan {
+    name = "kaiba-rpi5-signed-release-boot-plan-evaluation";
+    bootImage = "${secureBootFixtureA}/unsigned/boot.img";
+    planID = "plan:rpi5-signed-release-evaluation:1";
+    publicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
+    releaseIntent = eepromReleaseIntentFixture;
+    reviewedPublicKeyPEM = developmentYubiKeyPublicKeyPEM;
+    signerPolicyDigest = developmentYubiKeySignerPolicyDigest;
+    sourceDateEpoch = 1786968000;
+  };
+  signedReleaseVerifiedBootEvaluationFixture = built.mkRpi5VerifiedSignedBoot {
+    name = "kaiba-rpi5-signed-release-verified-boot-evaluation";
+    signingPlan = signedReleaseBootSigningPlanEvaluationFixture;
+    signedOutput = emptySignedOutputFixture;
+  };
+  signedReleaseRPIBootBundleEvaluationFixture = built.mkRpi5VerifiedRPIBootBundles {
+    name = "kaiba-rpi5-signed-release-rpiboot-evaluation";
+    unsignedArtifacts = secureBootFixtureA;
+    verifiedOwnedRecovery = verifiedOwnedRecoveryEvaluationFixture;
+    verifiedSignedBoot = signedReleaseVerifiedBootEvaluationFixture;
+    verifiedSignedEEPROM = verifiedSignedEEPROMEvaluationFixture;
+  };
+  signedReleasePlatformAdapterEvaluationFixture = pkgs.writeText "kaiba-rpi5-platform-adapter-evaluation" "immutable adapter fixture\n";
+  signedReleaseRootIntegrityEvaluationFixture = pkgs.writeText "kaiba-rpi5-root-integrity-evaluation.json" "{}\n";
+  signedReleaseEvaluationFixture = built.mkRpi5VerifiedSignedRelease {
+    name = "kaiba-rpi5-verified-signed-release-evaluation";
+    deviceProfile = ../../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
+    eepromRelease = built.rpi5EEPROMRelease;
+    platformAdapter = signedReleasePlatformAdapterEvaluationFixture;
+    rootIntegrity = signedReleaseRootIntegrityEvaluationFixture;
+    unsignedArtifacts = secureBootFixtureA;
+    verifiedOwnedRecovery = verifiedOwnedRecoveryEvaluationFixture;
+    verifiedRPIBootBundles = signedReleaseRPIBootBundleEvaluationFixture;
+    verifiedSignedBoot = signedReleaseVerifiedBootEvaluationFixture;
+    verifiedSignedEEPROM = verifiedSignedEEPROMEvaluationFixture;
+  };
   signedBootFinalizerBootImage = pkgs.writeText "kaiba-signed-boot-finalizer-boot.img" ''
     kaiba signed-boot finalizer fixture
   '';
@@ -1203,6 +1239,10 @@ let
     {
       id = "rpi5-rpiboot-bundle-set";
       description = "Owned-recovery signing, fresh/owned RPIBOOT trees, and deterministic negative/root-integrity fixtures are canonical, digest-bound, replay-verified, and explicitly carry no hardware-observation claim.";
+    }
+    {
+      id = "rpi5-signed-release-finalization";
+      description = "Complete synthetic signed-release assembly verifies all public lineage, pinned fresh-EEPROM and owned-recovery replay, canonical RPIBOOT siblings, exact content-addressed publication, and fail-closed tamper rejection without live signing or hardware claims.";
     }
     {
       id = "signed-release-manifest-contract";
@@ -2185,6 +2225,149 @@ let
           --input "$TMPDIR/tampered" > /dev/null 2>&1
         then
           echo 'RPIBOOT bundle verifier accepted a changed published tree' >&2
+          exit 1
+        fi
+
+        mkdir "$out"
+        touch "$out/passed"
+      '';
+
+  signedReleaseFinalizationContract =
+    assert lib.assertMsg (lib.isDerivation signedReleaseEvaluationFixture)
+      "the signed-release factory rejected a complete verified public input graph";
+    assert lib.assertMsg
+      (
+        let
+          tool = built.signedReleaseTool.kaibaSignedReleaseTool;
+          replay = tool.eepromReplayFinalizer.kaibaEEPROMReplayFinalizer;
+          contract = signedReleaseEvaluationFixture.kaibaVerifiedSignedRelease;
+        in
+        tool.artifactRoleCount == 18
+        && tool.deterministicEEPROMReplayRequired
+        && tool.deterministicOwnedRecoveryReplayRequired
+        && tool.publicationSchemaVersion == "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1"
+        && replay.verificationMode == "pinned_offline_replay"
+        && contract.artifactRoleCount == 18
+        && contract.contentAddressedPublication
+        && contract.deterministicEEPROMReplayRequired
+        && contract.deterministicOwnedRecoveryReplayRequired
+        &&
+          contract.publicationSchemaVersion == "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1"
+        &&
+          contract.signedReleaseManifestSchemaVersion
+          == "kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2"
+        && contract.verificationMode == "pure_offline_replay"
+        && toString contract.verifiedRPIBootBundles == toString signedReleaseRPIBootBundleEvaluationFixture
+        && lib.all (value: value == false) [
+          replay.approvalGateConfigured
+          replay.blockDeviceWriteCapable
+          replay.directHardwareAccess
+          replay.eepromProgrammingCapable
+          replay.mutationCapable
+          replay.oneTimeSettingCapable
+          replay.otpCapable
+          replay.privateKeyAccess
+          replay.signingAuthorityConfigured
+          tool.blockDeviceWriteCapable
+          tool.directHardwareAccess
+          tool.eepromProgrammingCapable
+          tool.mutationCapable
+          tool.oneTimeSettingCapable
+          tool.otpCapable
+          tool.privateKeyAccess
+          tool.signingAuthorityConfigured
+          contract.blockDeviceWriteCapable
+          contract.directHardwareAccess
+          contract.eepromProgrammingCapable
+          contract.fixtureHardwareObserved
+          contract.mutationCapable
+          contract.oneTimeSettingCapable
+          contract.otpCapable
+          contract.privateKeyAccess
+          contract.signingAuthorityConfigured
+        ]
+      )
+      "the signed-release finalization boundary gained signing, device, media, mutation, or observation authority";
+    pkgs.runCommand "kaiba-rpi5-signed-release-finalization-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.binutils
+          pkgs.check-jsonschema
+          pkgs.coreutils
+          pkgs.gnugrep
+          pkgs.go
+        ];
+      }
+      ''
+        set -euo pipefail
+        export CGO_ENABLED=0
+        export GOCACHE="$TMPDIR/go-cache"
+        export GOPATH="$TMPDIR/go-path"
+        export LC_ALL=C
+
+        cd ${built.goSource}
+        readonly focused_test_pattern='^(TestFinalizeVerifiesCompleteCrossBundleLineage|TestResolveRejectsTreesOutsideCanonicalRPIBootBundleSet|TestResolveRequiresOwnedRecoveryUpdaterReplay|TestRetainedPublicationParentDetectsPathReplacement|TestTreePayloadLimitAccommodatesProductionRootImages|TestVerifyPublicationRejectsTamperingAndAdditions)$'
+        go test ./internal/provisioning/signedrelease \
+          -list "$focused_test_pattern" > "$TMPDIR/focused-tests.txt"
+        test "$(grep -Ec "$focused_test_pattern" "$TMPDIR/focused-tests.txt")" -eq 6
+        KAIBA_SIGNED_RELEASE_TEST_PUBLICATION="$TMPDIR/publication.json" \
+          go test ./internal/provisioning/signedrelease \
+            -run "$focused_test_pattern" \
+            -count=1
+        go test ./cmd/kaiba-provision-finalize-release \
+          -run '^(TestRunPassesTheExactFixedInputSet|TestProductionDependenciesFailClosedWithoutLinkerPath)$' \
+          -count=1
+        go test ./internal/provisioning/rpibootbundle \
+          -run '^TestSetRejectsWritableBundleRoot$' \
+          -count=1
+
+        readonly publication_schema=${built.goSource}/schemas/rpi5-signed-release-publication-v1alpha1.schema.json
+        check-jsonschema --check-metaschema "$publication_schema"
+        check-jsonschema \
+          --schemafile "$publication_schema" \
+          "$TMPDIR/publication.json"
+
+        test -x ${built.signedReleaseTool}/bin/kaiba-provision-finalize-release
+        strings ${built.signedReleaseTool}/bin/kaiba-provision-finalize-release \
+          | grep -F '${built.signedReleaseTool.kaibaSignedReleaseTool.eepromReplayFinalizer}/bin/kaiba-provision-sign-eeprom' \
+          > /dev/null
+        if strings ${built.signedReleaseTool}/bin/kaiba-provision-finalize-release \
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/gpioset|/dev/serial|/dev/gpio'; then
+          echo 'signed-release finalizer links a physical provisioning capability' >&2
+          exit 1
+        fi
+
+        set +e
+        ${built.signedReleaseTool}/bin/kaiba-provision-finalize-release finalize \
+          --release-intent /kaiba-contract/missing-release-intent \
+          --unsigned-artifacts-manifest /kaiba-contract/missing-unsigned-manifest \
+          --eeprom-release-manifest /kaiba-contract/missing-eeprom-release \
+          --signed-boot /kaiba-contract/missing-signed-boot \
+          --signed-eeprom /kaiba-contract/missing-signed-eeprom \
+          --eeprom-replay-plan /kaiba-contract/missing-eeprom-plan \
+          --eeprom-replay-signed /kaiba-contract/missing-eeprom-signed \
+          --owned-recovery /kaiba-contract/missing-owned-recovery \
+          --owned-replay-plan /kaiba-contract/missing-owned-plan \
+          --owned-replay-signed /kaiba-contract/missing-owned-signed \
+          --device-profile /kaiba-contract/missing-device-profile \
+          --platform-adapter /kaiba-contract/missing-platform-adapter \
+          --root-integrity /kaiba-contract/missing-root-integrity \
+          --fresh-commit-bundle /kaiba-contract/bundles/fresh-commit \
+          --fresh-readback-bundle /kaiba-contract/bundles/fresh-readback \
+          --negative-boot-bundle /kaiba-contract/bundles/negative-boot \
+          --owned-readback-bundle /kaiba-contract/bundles/owned-readback \
+          --owned-recovery-bundle /kaiba-contract/bundles/owned-recovery \
+          --root-integrity-test-bundle /kaiba-contract/bundles/root-integrity-test \
+          --root-data-image /kaiba-contract/missing-root-data \
+          --root-hash-tree-image /kaiba-contract/missing-root-hash \
+          --output "$TMPDIR/missing-output" \
+          > "$TMPDIR/packaged.stdout" 2> "$TMPDIR/packaged.stderr"
+        readonly packaged_status="$?"
+        set -e
+        test "$packaged_status" -eq 1
+        grep -F 'release intent:' "$TMPDIR/packaged.stderr" > /dev/null
+        if grep -F 'signed-release finalizer configuration:' "$TMPDIR/packaged.stderr"; then
+          echo 'signed-release finalizer is missing its linker-fixed EEPROM replay executable' >&2
           exit 1
         fi
 
@@ -3741,6 +3924,7 @@ let
         test -f ${eepromReleaseContract}/passed
         test -f ${eepromSigningContract}/passed
         test -f ${rpibootBundleContract}/passed
+        test -f ${signedReleaseFinalizationContract}/passed
         test -f ${signedReleaseManifestContract}/passed
         test -f ${secureBootArtifactContract}/passed
         test -f ${signedBootPlanContract}/passed
@@ -3784,6 +3968,16 @@ let
         jq -e '
           [.automated.checks[]
             | select(.id == "rpi5-rpiboot-bundle-set")
+            | [.system, .status]
+          ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
+        ' ${canonicalJSON}/report-input.json > /dev/null
+        jq -e \
+          '[.checks[] | select(.id == "rpi5-signed-release-finalization") | .status]
+            == ["passed"]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "rpi5-signed-release-finalization")
             | [.system, .status]
           ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
         ' ${canonicalJSON}/report-input.json > /dev/null
@@ -3845,6 +4039,7 @@ in
     rpibootBundleContract
     rpibootMetadataStdoutCompatibility
     secureBootArtifactContract
+    signedReleaseFinalizationContract
     signedReleaseManifestContract
     signedBootPlanContract
     unfusedCapsuleContract
