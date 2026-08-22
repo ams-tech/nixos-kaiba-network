@@ -2,6 +2,7 @@
   pkgs,
   lib,
   kaibaAuditPackage,
+  kaibaAuthorityBridgePackage,
   kaibaControlPackage,
   kaibaLaneGuardPackage,
   kaibaProvisionPackage,
@@ -117,6 +118,81 @@ let
     };
   };
 
+  provisioningAuthorityBridge = {
+    services.kaiba-provisioning-authority-bridge = {
+      enable = true;
+      package = kaibaAuthorityBridgePackage;
+      controlAddress = "192.0.2.10";
+      auditAddress = "192.0.2.11";
+      tlsCertificateFile = "/run/keys/kaiba-lane-station.crt";
+      tlsPrivateKeyFile = "/run/keys/kaiba-lane-station.key";
+      controlServerCAFile = "/run/keys/kaiba-control-server-ca.crt";
+      auditServerCAFile = "/run/keys/kaiba-audit-server-ca.crt";
+    };
+  };
+
+  provisioningAuthorityBridgeHostname = lib.recursiveUpdate provisioningAuthorityBridge {
+    services.kaiba-provisioning-authority-bridge.controlAddress = "control.example.test";
+  };
+
+  provisioningAuthorityBridgeIncomplete = lib.recursiveUpdate provisioningAuthorityBridge {
+    services.kaiba-provisioning-authority-bridge.auditServerCAFile = null;
+  };
+
+  provisioningAuthorityBridgeStoreKey = lib.recursiveUpdate provisioningAuthorityBridge {
+    services.kaiba-provisioning-authority-bridge.tlsPrivateKeyFile = "${kaibaAuthorityBridgePackage}/client.key";
+  };
+
+  provisioningAuthorityBridgeUncleanCredential = lib.recursiveUpdate provisioningAuthorityBridge {
+    services.kaiba-provisioning-authority-bridge.tlsPrivateKeyFile = "/run/../nix/store/attacker/client.key";
+  };
+
+  provisioningAuthorityBridgeSharedCA = lib.recursiveUpdate provisioningAuthorityBridge {
+    services.kaiba-provisioning-authority-bridge.auditServerCAFile =
+      provisioningAuthorityBridge.services.kaiba-provisioning-authority-bridge.controlServerCAFile;
+  };
+
+  provisioningAuthorityBridgeIPv6 = lib.recursiveUpdate provisioningAuthorityBridge {
+    services.kaiba-provisioning-authority-bridge.controlAddress = "2001:db8::10";
+  };
+
+  provisioningAuthorityBridgeInvalidAddresses =
+    map
+      (
+        address:
+        lib.recursiveUpdate provisioningAuthorityBridge {
+          services.kaiba-provisioning-authority-bridge.controlAddress = address;
+        }
+      )
+      [
+        "dead:beef"
+        "1:::2"
+        "::::"
+        "abc:def:"
+        "::"
+        "0:0:0:0:0:0:0:0"
+        "::ffff:c000:201"
+        "2001:db8::10/64"
+      ];
+
+  provisioningAuthorityBridgeLongSocket = lib.recursiveUpdate provisioningAuthorityBridge {
+    services.kaiba-provisioning-authority-bridge.socketName = "${
+      builtins.concatStringsSep "" (builtins.genList (_: "a") 64)
+    }.sock";
+  };
+
+  provisioningAuthorityBridgeZeroPort = lib.recursiveUpdate provisioningAuthorityBridge {
+    services.kaiba-provisioning-authority-bridge.controlPort = 0;
+  };
+
+  provisioningAuthorityBridgeEquivalentOrigins = lib.recursiveUpdate provisioningAuthorityBridge {
+    services.kaiba-provisioning-authority-bridge = {
+      controlAddress = "::1";
+      auditAddress = "0:0:0:0:0:0:0:1";
+      auditPort = 8091;
+    };
+  };
+
   provisioningProbeDefaultPackage = {
     services.kaiba-provisioning-probe.enable = true;
   };
@@ -202,6 +278,22 @@ let
     chmod 0555 "$out/bin/kaiba-provision-lane-guard"
   '';
 
+  staleLineageLaneGuardPackage =
+    pkgs.runCommand "kaiba-stale-lineage-lane-guard-fixture"
+      {
+        passthru.kaibaPhysicalLaneGuard = {
+          verifiedSignedRelease = kaibaLaneGuardPackage.kaibaPhysicalLaneGuard.verifiedSignedRelease;
+          releaseBindingIdentity = "runtime-verified-content-derived-v1alpha1";
+          releaseLineageIdentity = "independently-selected-artifacts-v1alpha1";
+        };
+        meta.mainProgram = "kaiba-provision-lane-guard";
+      }
+      ''
+        mkdir -p "$out/bin"
+        touch "$out/bin/kaiba-provision-lane-guard"
+        chmod 0555 "$out/bin/kaiba-provision-lane-guard"
+      '';
+
   provisioningLaneGuardUnlinked = {
     services.kaiba-provisioning-lane-guard = {
       enable = true;
@@ -209,8 +301,30 @@ let
     };
   };
 
-  provisioningLaneGuardMutating = lib.recursiveUpdate provisioningLaneGuard {
+  provisioningLaneGuardStaleLineage = {
+    services.kaiba-provisioning-lane-guard = {
+      enable = true;
+      package = staleLineageLaneGuardPackage;
+    };
+  };
+
+  provisioningLaneGuardMutationWithoutBridge = lib.recursiveUpdate provisioningLaneGuard {
     services.kaiba-provisioning-lane-guard.enableMutations = true;
+  };
+
+  provisioningLaneGuardMutating = lib.recursiveUpdate (lib.recursiveUpdate provisioningLaneGuard {
+    services.kaiba-provisioning-lane-guard.enableMutations = true;
+  }) provisioningAuthorityBridge;
+
+  provisioningLaneGuardMutatingCustomSocket = lib.recursiveUpdate provisioningLaneGuardMutating {
+    services.kaiba-provisioning-authority-bridge = {
+      socketName = "lane-authority.sock";
+      leaseSafetyMarginSeconds = 47;
+    };
+  };
+
+  provisioningLaneGuardReconcile = lib.recursiveUpdate provisioningLaneGuardMutating {
+    services.kaiba-provisioning-lane-guard.mode = "reconcile";
   };
 
   provisioningLaneGuardStoreJournal = lib.recursiveUpdate provisioningLaneGuard {
@@ -246,6 +360,7 @@ let
   controlTLSConfig = evaluateConfig provisioningControlTLS;
   auditConfig = evaluateConfig provisioningAudit;
   auditTLSConfig = evaluateConfig provisioningAuditTLS;
+  authorityBridgeConfig = evaluateConfig provisioningAuthorityBridge;
   defaultProbeConfig = evaluateConfig provisioningProbeDefaultPackage;
   disabledProbeConfig = evaluateConfig { };
   stationDemoConfig = evaluateConfig provisioningStationDemo;
@@ -254,6 +369,11 @@ let
   secureBootTargetConfig = evaluateConfig secureBootTarget;
   laneGuardConfig = evaluateConfig provisioningLaneGuard;
   laneGuardMutatingConfig = evaluateConfig provisioningLaneGuardMutating;
+  laneGuardMutatingCustomSocketConfig = evaluateConfig provisioningLaneGuardMutatingCustomSocket;
+  laneGuardNamedModuleConfig = evaluateModules [
+    kaibaModules."provisioning-lane-guard"
+    provisioningLaneGuardMutating
+  ];
   signingGateConfig = evaluateConfig provisioningSigningGate;
   stationDemoService =
     stationDemoConfig.systemd.services.kaiba-provisioning-station-demo.serviceConfig;
@@ -263,9 +383,15 @@ let
   controlTLSService = controlTLSConfig.systemd.services.kaiba-provisioning-control.serviceConfig;
   auditService = auditConfig.systemd.services.kaiba-provisioning-audit.serviceConfig;
   auditTLSService = auditTLSConfig.systemd.services.kaiba-provisioning-audit.serviceConfig;
+  authorityBridgeService =
+    authorityBridgeConfig.systemd.services.kaiba-provisioning-authority-bridge.serviceConfig;
   laneGuardService = laneGuardConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
   laneGuardMutatingService =
     laneGuardMutatingConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
+  laneGuardMutatingCustomSocketService =
+    laneGuardMutatingCustomSocketConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
+  authorityBridgeCustomSocketService =
+    laneGuardMutatingCustomSocketConfig.systemd.services.kaiba-provisioning-authority-bridge.serviceConfig;
   signingGateService = signingGateConfig.systemd.services.kaiba-provision-signing-gate.serviceConfig;
   signingGatePolkit = signingGateConfig.security.polkit.extraConfig;
 
@@ -320,6 +446,41 @@ let
     && !(controlTLSService ? IPAddressDeny)
     && !(auditTLSService ? IPAddressAllow)
     && !(auditTLSService ? IPAddressDeny);
+
+  authorityBridgeBoundary =
+    authorityBridgeConfig.services.kaiba-provisioning-authority-bridge.package
+    == kaibaAuthorityBridgePackage
+    && builtins.elem kaibaAuthorityBridgePackage authorityBridgeConfig.environment.systemPackages
+    && lib.hasInfix ''"--socket" "/run/kaiba-provision-authority-bridge/bridge.sock"'' authorityBridgeService.ExecStart
+    && lib.hasInfix ''"--control-url" "https://192.0.2.10:8091"'' authorityBridgeService.ExecStart
+    && lib.hasInfix ''"--audit-url" "https://192.0.2.11:8092"'' authorityBridgeService.ExecStart
+    && lib.hasInfix ''"--tls-cert" "%d/client-cert"'' authorityBridgeService.ExecStart
+    && lib.hasInfix ''"--tls-key" "%d/client-key"'' authorityBridgeService.ExecStart
+    && lib.hasInfix ''"--control-server-ca" "%d/control-server-ca"'' authorityBridgeService.ExecStart
+    && lib.hasInfix ''"--audit-server-ca" "%d/audit-server-ca"'' authorityBridgeService.ExecStart
+    && authorityBridgeService.DynamicUser
+    && authorityBridgeService.Group == "kaiba-provision-bridge"
+    && authorityBridgeService.RuntimeDirectory == "kaiba-provision-authority-bridge"
+    && authorityBridgeService.RuntimeDirectoryMode == "0750"
+    && authorityBridgeService ? ExecStartPost
+    && lib.hasInfix "kaiba-provision-authority-bridge-ready" (
+      toString authorityBridgeService.ExecStartPost
+    )
+    && authorityBridgeConfig.users.groups ? kaiba-provision-bridge
+    && builtins.elem "client-cert:/run/keys/kaiba-lane-station.crt" authorityBridgeService.LoadCredential
+    && builtins.elem "client-key:/run/keys/kaiba-lane-station.key" authorityBridgeService.LoadCredential
+    && builtins.elem "control-server-ca:/run/keys/kaiba-control-server-ca.crt" authorityBridgeService.LoadCredential
+    && builtins.elem "audit-server-ca:/run/keys/kaiba-audit-server-ca.crt" authorityBridgeService.LoadCredential
+    && authorityBridgeService.DevicePolicy == "closed"
+    &&
+      authorityBridgeService.IPAddressAllow == [
+        "192.0.2.10"
+        "192.0.2.11"
+      ]
+    && authorityBridgeService.IPAddressDeny == "any"
+    && authorityBridgeService.NoNewPrivileges
+    && authorityBridgeService.PrivateDevices
+    && authorityBridgeService.ProtectSystem == "strict";
 
   stationDemoBoundary =
     stationDemoConfig.services.kaiba-provisioning-station-demo.listenAddress == "127.0.0.1"
@@ -394,8 +555,21 @@ let
 
   physicalServiceBoundary =
     lib.hasInfix ''"--rpiboot-sysfs" "/sys/bus/usb/devices/1-1"'' laneGuardService.ExecStart
+    && lib.hasInfix ''"--draft" "/var/lib/kaiba-provision-lane-guard/draft.json"'' laneGuardService.ExecStart
+    && lib.hasInfix ''"--bridge-socket" "/run/kaiba-provision-authority-bridge/bridge.sock"'' laneGuardService.ExecStart
+    && !(lib.hasInfix ''"--plan"'' laneGuardService.ExecStart)
+    && !(lib.hasInfix ''"--request"'' laneGuardService.ExecStart)
     && !(lib.hasInfix "--enable-mutations" laneGuardService.ExecStart)
+    && laneGuardService.SupplementaryGroups == [ ]
     && lib.hasInfix "--enable-mutations" laneGuardMutatingService.ExecStart
+    && laneGuardMutatingService.SupplementaryGroups == [ "kaiba-provision-bridge" ]
+    && lib.hasInfix ''"--socket" "/run/kaiba-provision-authority-bridge/lane-authority.sock"'' authorityBridgeCustomSocketService.ExecStart
+    && lib.hasInfix ''"--bridge-socket" "/run/kaiba-provision-authority-bridge/lane-authority.sock"'' laneGuardMutatingCustomSocketService.ExecStart
+    && lib.hasInfix ''"--lease-safety-margin" "47s"'' authorityBridgeCustomSocketService.ExecStart
+    && lib.hasInfix ''"--lease-safety-margin" "47s"'' laneGuardMutatingCustomSocketService.ExecStart
+    &&
+      laneGuardMutatingConfig.systemd.services.kaiba-provisioning-lane-guard.requires
+      == [ "kaiba-provisioning-authority-bridge.service" ]
     && laneGuardService.User == "root"
     && laneGuardService.StateDirectory == "kaiba-provision-lane-guard"
     && laneGuardService.StateDirectoryMode == "0700"
@@ -403,6 +577,7 @@ let
     && builtins.elem "/dev/gpiochip0 rw" laneGuardService.DeviceAllow
     && builtins.elem "/dev/serial/by-id/kaiba-target-uart r" laneGuardService.DeviceAllow
     && builtins.elem "char-usb_device rw" laneGuardService.DeviceAllow
+    && laneGuardService.IPAddressDeny == "any"
     && laneGuardService.ProtectSystem == "strict"
     && laneGuardConfig.systemd.services.kaiba-provisioning-lane-guard.wantedBy == [ ];
 
@@ -448,6 +623,39 @@ assert lib.assertMsg (assertionsPass provisioningControlTLS) (
 assert lib.assertMsg (assertionsPass provisioningAuditTLS) (
   builtins.toJSON (failedMessages provisioningAuditTLS)
 );
+assert lib.assertMsg (assertionsPass provisioningAuthorityBridge) (
+  builtins.toJSON (failedMessages provisioningAuthorityBridge)
+);
+assert lib.assertMsg (assertionsPass provisioningAuthorityBridgeIPv6) (
+  builtins.toJSON (failedMessages provisioningAuthorityBridgeIPv6)
+);
+assert lib.assertMsg (builtins.all (module: !assertionsPass module)
+  provisioningAuthorityBridgeInvalidAddresses
+) "an invalid or wildcard authority-bridge IP literal was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningAuthorityBridgeLongSocket
+) "an authority-bridge Unix socket path exceeding the Go limit was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningAuthorityBridgeZeroPort
+) "an authority-bridge endpoint using TCP port zero was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningAuthorityBridgeEquivalentOrigins
+) "equivalent IPv6 spellings of one authority origin were accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningAuthorityBridgeHostname
+) "an authority bridge with an ambient-DNS endpoint was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningAuthorityBridgeIncomplete
+) "an authority bridge with incomplete TLS authority was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningAuthorityBridgeStoreKey
+) "an authority bridge with a Nix-store client key was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningAuthorityBridgeUncleanCredential
+) "an authority bridge with an unclean credential path was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningAuthorityBridgeSharedCA
+) "an authority bridge with one shared control/audit CA path was accepted";
 assert lib.assertMsg (
   !assertionsPass provisioningControlNonLoopback
 ) "a non-loopback provisioning control listener was accepted";
@@ -487,9 +695,24 @@ assert lib.assertMsg (assertionsPass provisioningLaneGuard) (
 assert lib.assertMsg (assertionsPass provisioningLaneGuardMutating) (
   builtins.toJSON (failedMessages provisioningLaneGuardMutating)
 );
+assert lib.assertMsg (assertionsPass provisioningLaneGuardMutatingCustomSocket) (
+  builtins.toJSON (failedMessages provisioningLaneGuardMutatingCustomSocket)
+);
+assert lib.assertMsg (
+  !assertionsPass provisioningLaneGuardMutationWithoutBridge
+) "a mutation-enabled lane guard without the authenticated bridge was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningLaneGuardReconcile
+) "a lane guard using unsupported authenticated reconciliation was accepted";
 assert lib.assertMsg (
   !assertionsPass provisioningLaneGuardUnlinked
 ) "a generic lane-guard package without immutable physical configuration was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningLaneGuardStaleLineage
+) "a stale marker-bearing lane-guard package without single-release lineage was accepted";
+assert lib.assertMsg (builtins.all (assertion: assertion.assertion)
+  laneGuardNamedModuleConfig.assertions
+) "the named lane-guard module did not import and couple its authority-bridge dependency";
 assert lib.assertMsg (
   !assertionsPass provisioningLaneGuardStoreJournal
 ) "a Nix-store lane-guard journal was accepted";
@@ -517,6 +740,8 @@ assert lib.assertMsg referenceServiceBoundary
   "provisioning control or audit persistence, loopback, or sandbox boundary is not enforced";
 assert lib.assertMsg referenceServiceTLSBoundary
   "provisioning control or audit mutual-TLS credential boundary is not enforced";
+assert lib.assertMsg authorityBridgeBoundary
+  "authenticated authority-bridge network, credential, socket, or sandbox boundary is not enforced";
 assert lib.assertMsg stationDemoBoundary
   "provisioning-station demo loopback, sandbox, or no-USB boundary is not enforced";
 assert lib.assertMsg secureBootTargetBoundary
@@ -533,6 +758,7 @@ pkgs.runCommand "kaiba-provisioning-module-evaluation" { } ''
     'provisioning-control-loopback-persistence: pass' \
     'provisioning-audit-loopback-persistence: pass' \
     'provisioning-control-audit-mutual-tls: pass' \
+    'provisioning-authority-bridge-authenticated-ipc: pass' \
     'provisioning-station-demo-module: pass' \
     'provisioning-station-demo-loopback-only: pass' \
     'provisioning-station-demo-sandbox-and-no-usb: pass' \

@@ -66,6 +66,7 @@ jobs:
             ./nix/provisioning#checks.x86_64-linux.secure-boot-artifacts \
             ./nix/provisioning#checks.x86_64-linux.station-ui \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-audit \
+            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-authority-bridge \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-control \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-lane-guard \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision \
@@ -108,6 +109,7 @@ jobs:
             ./nix/provisioning#checks.aarch64-linux.rpiboot-metadata-stdout \
             ./nix/provisioning#checks.aarch64-linux.secure-boot-artifacts \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-audit \
+            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-authority-bridge \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-control \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-lane-guard \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision \

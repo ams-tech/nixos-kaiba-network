@@ -18,12 +18,15 @@ let
     ;
 
   cfg = config.services.kaiba-provisioning-lane-guard;
+  bridgeCfg = config.services.kaiba-provisioning-authority-bridge;
+  bridgeClientGroup = "kaiba-provision-bridge";
+  bridgeRuntimeDirectory = "kaiba-provision-authority-bridge";
+  bridgeSocketPath = "/run/${bridgeRuntimeDirectory}/${bridgeCfg.socketName}";
   stateDirectory = "kaiba-provision-lane-guard";
   stateRoot = "/var/lib/${stateDirectory}";
-  mutablePaths = [
+  statePaths = [
     cfg.journalPath
-    cfg.planPath
-    cfg.requestPath
+    cfg.draftPath
   ];
 
   isCleanStatePath =
@@ -32,6 +35,15 @@ let
       components = lib.drop 1 (lib.splitString "/" path);
     in
     builtins.match "${stateRoot}/[A-Za-z0-9][A-Za-z0-9._/-]*" path != null
+    && builtins.all (component: component != "" && component != "." && component != "..") components
+    && !hasPrefix "${builtins.storeDir}/" path;
+
+  isCleanRuntimeSocket =
+    path:
+    let
+      components = lib.drop 1 (lib.splitString "/" path);
+    in
+    builtins.match "/run/[A-Za-z0-9][A-Za-z0-9._/-]*\.sock" path != null
     && builtins.all (component: component != "" && component != "." && component != "..") components
     && !hasPrefix "${builtins.storeDir}/" path;
 
@@ -53,12 +65,14 @@ let
         cfg.gpioChip
         "--gpio-offset"
         (toString cfg.gpioOffset)
+        "--lease-safety-margin"
+        "${toString bridgeCfg.leaseSafetyMarginSeconds}s"
         "--journal"
         cfg.journalPath
-        "--plan"
-        cfg.planPath
-        "--request"
-        cfg.requestPath
+        "--draft"
+        cfg.draftPath
+        "--bridge-socket"
+        bridgeSocketPath
         "--mode"
         cfg.mode
       ]
@@ -66,6 +80,8 @@ let
       ++ optional cfg.enableMutations "--enable-mutations";
 in
 {
+  imports = [ ./provisioning-authority-bridge.nix ];
+
   options.services.kaiba-provisioning-lane-guard = {
     enable = mkEnableOption "the one-shot physical Kaiba Raspberry Pi 5 lane guard";
 
@@ -75,15 +91,16 @@ in
       example = lib.literalExpression ''
         inputs.kaiba-provisioning.lib.mkRpi5PhysicalLaneGuard {
           system = pkgs.system;
-          # Supply the six immutable RPIBOOT bundles, release/build bindings,
-          # and three expected target digests.
+          verifiedSignedRelease = inputs.release.packages.''${pkgs.system}.verified;
         }
       '';
       description = ''
         Explicit immutable package containing bin/kaiba-provision-lane-guard.
-        Its linker-fixed rpiboot, gpioset, bundle, signed-release, build, and
-        expected-target digest inputs must describe this station. There is
-        deliberately no inferred or source-tree default.
+        Its single typed verified signed-release input supplies the six
+        content-addressed bundles and every expected release digest. The
+        executable and compiled-artifact identities are derived by reopening
+        those immutable store paths; there is deliberately no independently
+        caller-declared bundle or digest input.
       '';
     };
 
@@ -147,21 +164,14 @@ in
       '';
     };
 
-    planPath = mkOption {
+    draftPath = mkOption {
       type = types.str;
-      default = "${stateRoot}/plan.json";
+      default = "${stateRoot}/draft.json";
       description = ''
-        Root-installed approved-plan JSON. It must be a clean, regular,
-        non-symlink, non-store path below ${stateRoot}.
-      '';
-    };
-
-    requestPath = mkOption {
-      type = types.str;
-      default = "${stateRoot}/request.json";
-      description = ''
-        Root-installed one-shot request JSON. It must be a clean, regular,
-        non-symlink, non-store path below ${stateRoot}.
+        Root-installed authority-free plan draft reviewed before approval. It
+        must be a clean, regular, non-symlink, non-store path below
+        ${stateRoot}. It cannot authorize execution: the bridge independently
+        binds its digest to current control and audit authority.
       '';
     };
 
@@ -194,20 +204,61 @@ in
           message = ''
             services.kaiba-provisioning-lane-guard.package must be produced by
             lib.mkRpi5PhysicalLaneGuard; the generic unlinked lane-guard binary
-            has no immutable rpiboot, gpioset, bundle, or digest configuration.
+            has no immutable rpiboot, gpioset, or verified-release lineage.
           '';
         }
         {
-          assertion = builtins.all isCleanStatePath mutablePaths;
+          assertion =
+            cfg.package == null
+            || (
+              let
+                contract = cfg.package.kaibaPhysicalLaneGuard or { };
+                release = contract.verifiedSignedRelease or null;
+              in
+              (contract.releaseBindingIdentity or "") == "runtime-verified-content-derived-v1alpha1"
+              && (contract.releaseLineageIdentity or "") == "single-verified-signed-release-v1alpha2"
+              && release != null
+              && builtins.isAttrs release
+              && hasPrefix "${builtins.storeDir}/" (toString release)
+              && release ? kaibaVerifiedSignedRelease
+            );
           message = ''
-            services.kaiba-provisioning-lane-guard journalPath, planPath, and
-            requestPath must be clean absolute non-store paths strictly below
-            ${stateRoot} with no empty, dot, or parent components.
+            services.kaiba-provisioning-lane-guard.package must expose the
+            content-derived binding and single verified-signed-release lineage
+            contract produced by the current mkRpi5PhysicalLaneGuard factory.
           '';
         }
         {
-          assertion = builtins.length (lib.unique mutablePaths) == builtins.length mutablePaths;
-          message = "lane-guard journal, plan, and request paths must be distinct";
+          assertion = builtins.all isCleanStatePath statePaths;
+          message = ''
+            services.kaiba-provisioning-lane-guard journalPath and draftPath
+            must be clean absolute non-store paths strictly below ${stateRoot}
+            with no empty, dot, or parent components.
+          '';
+        }
+        {
+          assertion = builtins.length (lib.unique statePaths) == builtins.length statePaths;
+          message = "lane-guard journal and draft paths must be distinct";
+        }
+        {
+          assertion = isCleanRuntimeSocket bridgeSocketPath;
+          message = "the module-derived authority-bridge socket must be a clean absolute non-store .sock path below /run";
+        }
+        {
+          assertion = !cfg.enableMutations || config.services.kaiba-provisioning-authority-bridge.enable;
+          message = ''
+            mutation-enabled lane guard requires
+            services.kaiba-provisioning-authority-bridge.enable so executable
+            authority cannot fall back to root-installed JSON.
+          '';
+        }
+        {
+          assertion = cfg.mode == "execute";
+          message = ''
+            services.kaiba-provisioning-lane-guard.mode must remain "execute";
+            the authenticated bridge deliberately rejects reconciliation until
+            a separate reconciliation authority contract is implemented.
+          '';
         }
       ];
     }
@@ -215,10 +266,13 @@ in
     (mkIf (cfg.package != null) {
       systemd.services.kaiba-provisioning-lane-guard = {
         description = "One-shot Kaiba physical Raspberry Pi 5 provisioning lane guard";
+        after = optional cfg.enableMutations "kaiba-provisioning-authority-bridge.service";
+        requires = optional cfg.enableMutations "kaiba-provisioning-authority-bridge.service";
         serviceConfig = {
           Type = "oneshot";
           User = "root";
           Group = "root";
+          SupplementaryGroups = optional cfg.enableMutations bridgeClientGroup;
           ExecStart = utils.escapeSystemdExecArgs args;
           StateDirectory = stateDirectory;
           StateDirectoryMode = "0700";
@@ -239,15 +293,13 @@ in
           ];
           PrivateDevices = false;
 
-          ReadOnlyPaths = [
-            cfg.planPath
-            cfg.requestPath
-          ];
+          ReadOnlyPaths = [ cfg.draftPath ];
           ReadWritePaths = [ stateRoot ];
 
           AmbientCapabilities = "";
           CapabilityBoundingSet = "";
           KeyringMode = "private";
+          IPAddressDeny = "any";
           LockPersonality = true;
           MemoryDenyWriteExecute = true;
           NoNewPrivileges = true;

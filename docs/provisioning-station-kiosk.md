@@ -222,9 +222,10 @@ and should never accept arbitrary commands, executable paths, payload paths,
 profiles, or device selectors from browser content.
 
 The read-only Pi 5 hardware-qualification milestone now has reviewed evidence,
-but it deliberately grants no mutation authority. Until the authenticated
-control-to-guard bridge, complete signed release, remaining board-specific
-baseline checks, and physical lane campaign exist, use the kiosk only to review
-the modeled ceremony and use `kaiba-provision probe` separately for controlled,
-non-persistent requalification. OTP and EEPROM mutation, owned-device
-reconciliation, and identity enrollment remain disabled in the kiosk.
+but it deliberately grants no mutation authority. The authenticated
+control-to-guard bridge and complete signed release now exist outside the kiosk;
+until the remaining board-specific baseline checks and physical lane campaign
+are complete, use the kiosk only to review the modeled ceremony and use
+`kaiba-provision probe` separately for controlled, non-persistent
+requalification. OTP and EEPROM mutation, owned-device reconciliation, and
+identity enrollment remain disabled in the kiosk.

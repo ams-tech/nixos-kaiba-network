@@ -38,6 +38,11 @@ func TestMutualTLSHandlerBindsAcquireClaimStationAndLane(t *testing.T) {
 			wantStatus:   http.StatusForbidden,
 		},
 		{
+			name:         "approver identity",
+			identityURIs: []string{"spiffe://kaiba.network/approver/approver-1"},
+			wantStatus:   http.StatusUnauthorized,
+		},
+		{
 			name: "ambiguous URI SANs",
 			identityURIs: []string{
 				"spiffe://kaiba.network/station/station-1/lane/lane-1",
@@ -71,6 +76,59 @@ func TestMutualTLSHandlerBindsAcquireClaimStationAndLane(t *testing.T) {
 			}
 			if (stored.ActiveClaim != nil) != test.wantClaim {
 				t.Fatalf("active claim = %#v, want present=%t", stored.ActiveClaim, test.wantClaim)
+			}
+		})
+	}
+}
+
+func TestMutualTLSHandlerRequiresIndependentApproverForRecordApproval(t *testing.T) {
+	tests := []struct {
+		name         string
+		identityURIs []string
+		wantStatus   int
+		wantApproval bool
+	}{
+		{
+			name:         "matching approver",
+			identityURIs: []string{"spiffe://kaiba.network/approver/approver-1"},
+			wantStatus:   http.StatusOK,
+			wantApproval: true,
+		},
+		{
+			name:         "station claimant cannot approve",
+			identityURIs: []string{"spiffe://kaiba.network/station/station-1/lane/lane-1"},
+			wantStatus:   http.StatusUnauthorized,
+		},
+		{
+			name:         "different approver cannot approve",
+			identityURIs: []string{"spiffe://kaiba.network/approver/approver-2"},
+			wantStatus:   http.StatusForbidden,
+		},
+		{
+			name:       "missing approver URI SAN",
+			wantStatus: http.StatusUnauthorized,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			operations := developmentCampaignNames()
+			transaction := fixture.createClaimBind(operations)
+			request := controlCommandRequest(t, "record_approval", fixture.approvalRequest(transaction, operations, "approval-1"))
+			request.TLS = controlVerifiedTLSState(t, "ignored", test.identityURIs...)
+			response := httptest.NewRecorder()
+
+			Handler(fixture.service, mtls.MutualTLSIdentityPolicy()).ServeHTTP(response, request)
+
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+			stored, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (stored.Approval != nil) != test.wantApproval {
+				t.Fatalf("stored approval = %#v, want present=%t", stored.Approval, test.wantApproval)
 			}
 		})
 	}

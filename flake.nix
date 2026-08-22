@@ -292,6 +292,7 @@
           ;
         inherit (provisioning.nixosModules)
           provisioning-audit
+          provisioning-authority-bridge
           provisioning-control
           provisioning-lane-guard
           provisioning-probe
@@ -324,6 +325,7 @@
             ;
           inherit (provisioning.packages.${system})
             kaiba-provision-audit
+            kaiba-provision-authority-bridge
             kaiba-provision-control
             kaiba-provision-integrated-rehearsal
             kaiba-provision-lane-guard
@@ -374,27 +376,12 @@
         let
           pkgs = import nixpkgs { inherit system; };
           developmentSigning = developmentSigningFor system;
-          laneGuardFixtureBundle = "${provisioning.packages.${system}.rpi5-probe-bundle}/bundle";
-          laneGuardFixture = provisioning.lib.mkRpi5PhysicalLaneGuard {
-            inherit system;
-            name = "kaiba-rpi5-physical-lane-guard-module-fixture";
-            compiledArtifactSetDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-            expectedBootImageDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-            expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-            expectedEEPROMHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-            freshCommitBundle = laneGuardFixtureBundle;
-            freshReadbackBundle = laneGuardFixtureBundle;
-            negativeBootBundle = laneGuardFixtureBundle;
-            ownedReadbackBundle = laneGuardFixtureBundle;
-            ownedRecoveryBundle = laneGuardFixtureBundle;
-            rootIntegrityBundle = laneGuardFixtureBundle;
-            laneGuardPackageDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-            signedReleaseManifestDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-          };
+          laneGuardFixture = provisioning.packages.${system}.rpi5-physical-lane-guard-fixture;
           moduleEval = import ./tests/module-eval.nix {
             inherit pkgs lib;
             kaibaPackage = dns.packages.${system}.dns-suite;
             kaibaAuditPackage = provisioning.packages.${system}.kaiba-provision-audit;
+            kaibaAuthorityBridgePackage = provisioning.packages.${system}.kaiba-provision-authority-bridge;
             kaibaControlPackage = provisioning.packages.${system}.kaiba-provision-control;
             kaibaLaneGuardPackage = laneGuardFixture;
             kaibaProvisionPackage = provisioning.packages.${system}.kaiba-provision;

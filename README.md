@@ -236,6 +236,7 @@ The provisioning leaf provides:
 
 - `kaiba-provision`
 - `kaiba-provision-audit`
+- `kaiba-provision-authority-bridge`
 - `kaiba-provision-control`
 - `kaiba-provision-lane-guard`
 - `kaiba-provision-integrated-rehearsal`

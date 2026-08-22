@@ -128,6 +128,7 @@ let
 
     subPackages = [
       "cmd/kaiba-provision-audit"
+      "cmd/kaiba-provision-authority-bridge"
       "cmd/kaiba-provision-control"
       "cmd/kaiba-provision-lane-guard"
       "cmd/kaiba-provision-signer"
@@ -457,6 +458,11 @@ let
     description = "Kaiba append-only provisioning audit reference service";
   };
 
+  authorityBridge = servicePackage {
+    binary = "kaiba-provision-authority-bridge";
+    description = "Authenticated Kaiba control/audit to physical-lane authority bridge";
+  };
+
   control = servicePackage {
     binary = "kaiba-provision-control";
     description = "Kaiba provisioning transaction and inventory reference service";
@@ -784,40 +790,46 @@ let
   # approved plan.
   mkRpi5PhysicalLaneGuard =
     {
-      compiledArtifactSetDigest,
-      expectedBootImageDigest,
-      expectedCustomerKeyHash,
-      expectedEEPROMHash,
-      freshCommitBundle,
-      freshReadbackBundle,
-      negativeBootBundle,
-      ownedReadbackBundle,
-      ownedRecoveryBundle,
-      rootIntegrityBundle,
-      signedReleaseManifestDigest,
-      laneGuardPackageDigest,
+      verifiedSignedRelease,
       name ? "kaiba-rpi5-physical-lane-guard",
     }:
-    assert lib.assertMsg (canonicalDigest signedReleaseManifestDigest)
-      "signedReleaseManifestDigest must use canonical sha256:<64 lowercase hex> form";
-    assert lib.assertMsg (canonicalDigest laneGuardPackageDigest)
-      "laneGuardPackageDigest must use canonical sha256:<64 lowercase hex> form";
-    assert lib.assertMsg (canonicalDigest compiledArtifactSetDigest)
-      "compiledArtifactSetDigest must use canonical sha256:<64 lowercase hex> form";
-    assert lib.assertMsg (canonicalDigest expectedBootImageDigest)
-      "expectedBootImageDigest must use canonical sha256:<64 lowercase hex> form";
-    assert lib.assertMsg (canonicalRawDigest expectedCustomerKeyHash)
-      "expectedCustomerKeyHash must contain 64 lowercase hexadecimal characters";
-    assert lib.assertMsg (canonicalRawDigest expectedEEPROMHash)
-      "expectedEEPROMHash must contain 64 lowercase hexadecimal characters";
-    assert lib.assertMsg (lib.all storeBacked [
-      freshCommitBundle
-      freshReadbackBundle
-      negativeBootBundle
-      ownedReadbackBundle
-      ownedRecoveryBundle
-      rootIntegrityBundle
-    ]) "every physical lane bundle must be a fixed Nix-store path";
+    assert lib.assertMsg (storeBacked verifiedSignedRelease)
+      "verifiedSignedRelease must be one fixed Nix-store path";
+    assert lib.assertMsg (
+      builtins.isAttrs verifiedSignedRelease && verifiedSignedRelease ? kaibaVerifiedSignedRelease
+    ) "verifiedSignedRelease must be produced by mkRpi5VerifiedSignedRelease";
+    let
+      releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
+      verifiedRPIBootBundles = releaseContract.verifiedRPIBootBundles or null;
+      verifiedReleaseContract =
+        (releaseContract.artifactRoleCount or null) == 18
+        && (releaseContract.contentAddressedPublication or false)
+        && (releaseContract.deterministicEEPROMReplayRequired or false)
+        && (releaseContract.deterministicOwnedRecoveryReplayRequired or false)
+        &&
+          (releaseContract.publicationSchemaVersion or "")
+          == "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1"
+        &&
+          (releaseContract.signedReleaseManifestSchemaVersion or "")
+          == "kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2"
+        && (releaseContract.verificationMode or "") == "pure_offline_replay"
+        && verifiedRPIBootBundles != null
+        && storeBacked verifiedRPIBootBundles
+        && builtins.isAttrs verifiedRPIBootBundles
+        && verifiedRPIBootBundles ? kaibaVerifiedRPIBootBundles
+        && lib.all (value: value == false) [
+          (releaseContract.blockDeviceWriteCapable or null)
+          (releaseContract.directHardwareAccess or null)
+          (releaseContract.eepromProgrammingCapable or null)
+          (releaseContract.fixtureHardwareObserved or null)
+          (releaseContract.mutationCapable or null)
+          (releaseContract.oneTimeSettingCapable or null)
+          (releaseContract.otpCapable or null)
+          (releaseContract.privateKeyAccess or null)
+        ];
+    in
+    assert lib.assertMsg verifiedReleaseContract
+      "verifiedSignedRelease does not expose the complete pure verified release contract";
     pkgs.buildGoModule {
       pname = name;
       inherit version;
@@ -825,31 +837,99 @@ let
       subPackages = [ "cmd/kaiba-provision-lane-guard" ];
       vendorHash = null;
       doCheck = false;
+      nativeBuildInputs = [ pkgs.jq ];
       ldflags = [
-        "-X=main.rpibootBinary=${rpiboot}/bin/rpiboot"
-        "-X=main.gpioSetBinary=${pkgs.libgpiod}/bin/gpioset"
-        "-X=main.freshReadbackBundle=${toString freshReadbackBundle}"
-        "-X=main.freshCommitBundle=${toString freshCommitBundle}"
-        "-X=main.ownedReadbackBundle=${toString ownedReadbackBundle}"
-        "-X=main.ownedRecoveryBundle=${toString ownedRecoveryBundle}"
-        "-X=main.negativeBootBundle=${toString negativeBootBundle}"
-        "-X=main.rootIntegrityBundle=${toString rootIntegrityBundle}"
-        "-X=main.signedReleaseManifestDigest=${signedReleaseManifestDigest}"
-        "-X=main.laneGuardPackageDigest=${laneGuardPackageDigest}"
-        "-X=main.compiledArtifactSetDigest=${compiledArtifactSetDigest}"
-        "-X=main.expectedCustomerKeyHash=${expectedCustomerKeyHash}"
-        "-X=main.expectedEEPROMHash=${expectedEEPROMHash}"
-        "-X=main.expectedBootImageDigest=${expectedBootImageDigest}"
+        "-s"
+        "-w"
       ];
+      preBuild = ''
+        set -eo pipefail
+
+        verified_release=${lib.escapeShellArg (toString verifiedSignedRelease)}
+        publication="$verified_release/publication.json"
+        test -f "$publication"
+        test ! -L "$publication"
+        test "$(${pkgs.jq}/bin/jq -er .schema_version "$publication")" = \
+          kaiba.provisioning.rpi5-signed-release-publication/v1alpha1
+
+        manifest_digest="$(${pkgs.jq}/bin/jq -er '
+          .signed_release_manifest_digest
+          | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$publication")"
+        manifest_hex="$(printf '%s' "$manifest_digest" | cut -c 8-)"
+        manifest_relative="$(${pkgs.jq}/bin/jq -er --arg expected \
+          "manifests/sha256/$manifest_hex.json" \
+          '.manifest_path | select(. == $expected)' "$publication")"
+        manifest="$verified_release/$manifest_relative"
+        test -f "$manifest"
+        test ! -L "$manifest"
+        test "$(tail -c 1 "$manifest" | od -An -tu1 | tr -d ' ')" = 10
+        calculated_manifest_digest="sha256:$({
+          printf '%s\0' kaiba.provisioning.rpi5-signed-release-manifest.v1alpha2
+          head -c -1 "$manifest"
+        } | sha256sum | cut -d ' ' -f 1)"
+        test "$calculated_manifest_digest" = "$manifest_digest"
+        test "$(${pkgs.jq}/bin/jq -er .schema_version "$manifest")" = \
+          kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2
+
+        manifest_role_digest() {
+          ${pkgs.jq}/bin/jq -er --arg role "$1" --arg kind "$2" '
+            [.artifacts[]
+              | select(.role == $role and .kind == $kind)
+              | .digest
+              | select(test("^sha256:[0-9a-f]{64}$"))]
+            | if length == 1 then .[0] else error("missing or duplicate manifest role") end
+          ' "$manifest"
+        }
+
+        fresh_commit_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/fresh-commit"}
+        fresh_readback_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/fresh-readback"}
+        negative_boot_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/negative-boot"}
+        owned_readback_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/owned-readback"}
+        owned_recovery_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/owned-recovery"}
+        root_integrity_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/root-integrity-test"}
+        for bundle_path in \
+          "$fresh_commit_bundle" \
+          "$fresh_readback_bundle" \
+          "$negative_boot_bundle" \
+          "$owned_readback_bundle" \
+          "$owned_recovery_bundle" \
+          "$root_integrity_bundle"; do
+          test -d "$bundle_path"
+          test ! -L "$bundle_path"
+        done
+        expected_customer_key_hash="$(${pkgs.jq}/bin/jq -er '
+          .expected_customer_key_hash | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$manifest")"
+        expected_eeprom_hash="$(manifest_role_digest rpi5.signed_eeprom_image regular_file)"
+        expected_boot_image_digest="$(manifest_role_digest rpi5.boot_image regular_file)"
+
+        go_string() {
+          ${pkgs.jq}/bin/jq -Rn --arg value "$1" '$value'
+        }
+        {
+          printf 'package main\n\n'
+          printf 'func init() {\n'
+          printf '\trpibootBinary = %s\n' "$(go_string ${lib.escapeShellArg "${rpiboot}/bin/rpiboot"})"
+          printf '\tgpioSetBinary = %s\n' "$(go_string ${lib.escapeShellArg "${pkgs.libgpiod}/bin/gpioset"})"
+          printf '\tfreshCommitBundle = %s\n' "$(go_string "$fresh_commit_bundle")"
+          printf '\tfreshReadbackBundle = %s\n' "$(go_string "$fresh_readback_bundle")"
+          printf '\tnegativeBootBundle = %s\n' "$(go_string "$negative_boot_bundle")"
+          printf '\townedReadbackBundle = %s\n' "$(go_string "$owned_readback_bundle")"
+          printf '\townedRecoveryBundle = %s\n' "$(go_string "$owned_recovery_bundle")"
+          printf '\trootIntegrityBundle = %s\n' "$(go_string "$root_integrity_bundle")"
+          printf '\tsignedReleaseManifestDigest = %s\n' "$(go_string "$manifest_digest")"
+          printf '\texpectedCustomerKeyHash = %s\n' "$(go_string "$expected_customer_key_hash")"
+          printf '\texpectedEEPROMHash = %s\n' "$(go_string "$expected_eeprom_hash")"
+          printf '\texpectedBootImageDigest = %s\n' "$(go_string "$expected_boot_image_digest")"
+          printf '}\n'
+        } > cmd/kaiba-provision-lane-guard/release_lineage_generated.go
+      '';
       passthru.kaibaPhysicalLaneGuard = {
-        inherit
-          compiledArtifactSetDigest
-          expectedBootImageDigest
-          expectedCustomerKeyHash
-          expectedEEPROMHash
-          laneGuardPackageDigest
-          signedReleaseManifestDigest
-          ;
+        inherit verifiedSignedRelease;
+        releaseBindingIdentity = "runtime-verified-content-derived-v1alpha1";
+        releaseBindingInspection = "bin/kaiba-provision-lane-guard --print-release-binding-material";
+        releaseLineageIdentity = "single-verified-signed-release-v1alpha2";
         gpioSet = pkgs.libgpiod;
         inherit rpiboot;
       };
@@ -1214,6 +1294,7 @@ in
 {
   inherit
     audit
+    authorityBridge
     control
     goSource
     integratedRehearsal

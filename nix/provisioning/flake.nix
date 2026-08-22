@@ -27,6 +27,7 @@
       modules = {
         default = import ./modules;
         provisioning-audit = import ./modules/provisioning-audit.nix;
+        provisioning-authority-bridge = import ./modules/provisioning-authority-bridge.nix;
         provisioning-control = import ./modules/provisioning-control.nix;
         provisioning-lane-guard = import ./modules/provisioning-lane-guard.nix;
         provisioning-probe = import ./modules/provisioning-probe.nix;
@@ -136,6 +137,7 @@
         {
           default = built.provision;
           kaiba-provision-audit = built.audit;
+          kaiba-provision-authority-bridge = built.authorityBridge;
           kaiba-provision-control = built.control;
           kaiba-provision-integrated-rehearsal = built.integratedRehearsal;
           kaiba-provision-lane-guard = built.laneGuard;
@@ -158,6 +160,7 @@
           provisioning-suite = built.suite;
           provisioning-services = built.serviceSuite;
           provisioning-test-result = provisioning.provisioningTestResult;
+          rpi5-physical-lane-guard-fixture = provisioning.physicalLaneGuardFixture;
           rpi5-probe-bundle = built.rpi5ProbeBundle;
           rpi5-eeprom-release = built.rpi5EEPROMRelease;
           kaiba-provision-yubikey-wrapper-foundation = built.yubiKeyWrapperFoundation;

@@ -11,25 +11,35 @@ import (
 	"strings"
 )
 
-const stationLaneURIPrefix = "spiffe://kaiba.network/station/"
+const (
+	stationLaneURIPrefix = "spiffe://kaiba.network/station/"
+	approverURIPrefix    = "spiffe://kaiba.network/approver/"
+)
 
 var (
 	identityComponentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 	// ErrClientIdentity classifies a missing, unverified, ambiguous, or
-	// non-canonical station/lane identity as an authentication failure.
-	ErrClientIdentity = errors.New("verified client certificate station/lane identity is required")
+	// non-canonical provisioning identity as an authentication failure.
+	ErrClientIdentity = errors.New("verified client certificate provisioning identity is required")
 	// ErrClientIdentityMismatch classifies a valid identity that does not own
-	// the station and lane named by a request as an authorization failure.
-	ErrClientIdentityMismatch = errors.New("client certificate identity does not authorize the station and lane")
+	// the provisioning authority named by a request as an authorization failure.
+	ErrClientIdentityMismatch = errors.New("client certificate identity does not authorize the requested provisioning authority")
 )
 
-// StationLaneIdentity is the only client identity understood by the
-// provisioning reference services. It is encoded as exactly one canonical URI
-// SAN: spiffe://kaiba.network/station/<station-id>/lane/<lane-id>.
+// StationLaneIdentity is the station capability understood by the provisioning
+// reference services. It is encoded as exactly one canonical URI SAN:
+// spiffe://kaiba.network/station/<station-id>/lane/<lane-id>.
 type StationLaneIdentity struct {
 	StationID string
 	LaneID    string
+}
+
+// ApproverIdentity is an independent plan-approval principal. It is encoded as
+// exactly one canonical URI SAN:
+// spiffe://kaiba.network/approver/<approver-id>.
+type ApproverIdentity struct {
+	ApproverID string
 }
 
 type identityPolicyMode uint8
@@ -91,34 +101,83 @@ func (policy IdentityPolicy) Authorize(request *http.Request, stationID, laneID 
 	return nil
 }
 
+// AuthenticateApprover returns the verified independent approver identity. A
+// station/lane URI SAN is not an approver identity and fails authentication.
+func (policy IdentityPolicy) AuthenticateApprover(request *http.Request) (ApproverIdentity, error) {
+	switch policy.mode {
+	case identityPolicyLoopbackPlaintext:
+		return ApproverIdentity{}, nil
+	case identityPolicyMutualTLS:
+		return verifiedApproverIdentity(request)
+	default:
+		return ApproverIdentity{}, fmt.Errorf("%w: identity policy is not configured", ErrClientIdentity)
+	}
+}
+
+// AuthorizeApprover requires the verified approver URI SAN to name the exact
+// approver recorded by an approval request or approval audit event.
+func (policy IdentityPolicy) AuthorizeApprover(request *http.Request, approverID string) error {
+	if policy.mode == identityPolicyLoopbackPlaintext {
+		return nil
+	}
+	identity, err := policy.AuthenticateApprover(request)
+	if err != nil {
+		return err
+	}
+	if identity.ApproverID != approverID {
+		return ErrClientIdentityMismatch
+	}
+	return nil
+}
+
 func verifiedStationLaneIdentity(request *http.Request) (StationLaneIdentity, error) {
+	identityURI, err := verifiedIdentityURI(request)
+	if err != nil {
+		return StationLaneIdentity{}, err
+	}
+	identity, err := parseStationLaneURI(identityURI)
+	if err != nil {
+		return StationLaneIdentity{}, fmt.Errorf("%w: %v", ErrClientIdentity, err)
+	}
+	return identity, nil
+}
+
+func verifiedApproverIdentity(request *http.Request) (ApproverIdentity, error) {
+	identityURI, err := verifiedIdentityURI(request)
+	if err != nil {
+		return ApproverIdentity{}, err
+	}
+	identity, err := parseApproverURI(identityURI)
+	if err != nil {
+		return ApproverIdentity{}, fmt.Errorf("%w: %v", ErrClientIdentity, err)
+	}
+	return identity, nil
+}
+
+func verifiedIdentityURI(request *http.Request) (*url.URL, error) {
 	if request == nil || request.TLS == nil || len(request.TLS.VerifiedChains) == 0 {
-		return StationLaneIdentity{}, fmt.Errorf("%w: no verified client certificate", ErrClientIdentity)
+		return nil, fmt.Errorf("%w: no verified client certificate", ErrClientIdentity)
 	}
 	var leaf *x509.Certificate
 	for _, chain := range request.TLS.VerifiedChains {
 		if len(chain) == 0 || chain[0] == nil {
-			return StationLaneIdentity{}, fmt.Errorf("%w: verified client chain has no leaf certificate", ErrClientIdentity)
+			return nil, fmt.Errorf("%w: verified client chain has no leaf certificate", ErrClientIdentity)
 		}
 		if leaf == nil {
 			leaf = chain[0]
 			continue
 		}
 		if !bytes.Equal(leaf.Raw, chain[0].Raw) {
-			return StationLaneIdentity{}, fmt.Errorf("%w: verified chains contain different leaf certificates", ErrClientIdentity)
+			return nil, fmt.Errorf("%w: verified chains contain different leaf certificates", ErrClientIdentity)
 		}
 	}
 	if len(leaf.URIs) == 0 {
-		return StationLaneIdentity{}, fmt.Errorf("%w: client certificate has no URI SAN", ErrClientIdentity)
+		return nil, fmt.Errorf("%w: client certificate has no URI SAN", ErrClientIdentity)
 	}
 	if len(leaf.URIs) != 1 {
-		return StationLaneIdentity{}, fmt.Errorf("%w: client certificate must contain exactly one URI SAN", ErrClientIdentity)
+		return nil, fmt.Errorf("%w: client certificate must contain exactly one URI SAN", ErrClientIdentity)
 	}
-	identity, err := parseStationLaneURI(leaf.URIs[0])
-	if err != nil {
-		return StationLaneIdentity{}, fmt.Errorf("%w: %v", ErrClientIdentity, err)
-	}
-	return identity, nil
+	return leaf.URIs[0], nil
 }
 
 func parseStationLaneURI(identityURI *url.URL) (StationLaneIdentity, error) {
@@ -134,6 +193,23 @@ func parseStationLaneURI(identityURI *url.URL) (StationLaneIdentity, error) {
 	expected := stationLaneURIPrefix + identity.StationID + "/lane/" + identity.LaneID
 	if identityURI.String() != expected {
 		return StationLaneIdentity{}, errors.New("URI SAN is not canonical")
+	}
+	return identity, nil
+}
+
+func parseApproverURI(identityURI *url.URL) (ApproverIdentity, error) {
+	if identityURI == nil {
+		return ApproverIdentity{}, errors.New("URI SAN is empty")
+	}
+	parts := strings.Split(identityURI.Path, "/")
+	if len(parts) != 3 || parts[0] != "" || parts[1] != "approver" ||
+		!identityComponentPattern.MatchString(parts[2]) {
+		return ApproverIdentity{}, errors.New("URI SAN must use spiffe://kaiba.network/approver/<approver-id>")
+	}
+	identity := ApproverIdentity{ApproverID: parts[2]}
+	expected := approverURIPrefix + identity.ApproverID
+	if identityURI.String() != expected {
+		return ApproverIdentity{}, errors.New("URI SAN is not canonical")
 	}
 	return identity, nil
 }

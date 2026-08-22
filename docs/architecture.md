@@ -156,10 +156,10 @@ monitoring.
 
 The Raspberry Pi 5 development lane is no longer wholly deferred. The
 repository contains reviewed read-only hardware-qualification evidence,
-deterministic unsigned boot and dm-verity artifacts, an evaluated immutable
-target, and development signing, control, audit, and lane-guard foundations.
-It still lacks the complete signed release, authenticated control-to-guard
-transport, production GPT/FAT/dm-verity media verification, live-token
-evidence, and physical failure campaign required before an irreversible
-ownership ceremony. An isolated fixed-extent media stager and a durable
-software-only plan rehearsal are available as non-ceremony prototypes.
+deterministic unsigned boot and dm-verity artifacts, a complete verified signed
+release, an evaluated immutable target, authenticated control-to-guard
+transport, production GPT/FAT/dm-verity media verification, and development
+signing, control, audit, and lane-guard foundations. It still lacks live-token
+evidence and the physical failure campaign required before an irreversible
+ownership ceremony. The fixed-extent media stager and durable software-only
+plan rehearsal remain non-ceremony foundations.

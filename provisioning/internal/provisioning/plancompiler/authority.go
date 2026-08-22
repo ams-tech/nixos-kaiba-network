@@ -211,6 +211,17 @@ func (bound BoundPlan) ExecuteRequest() (laneguard.ExecuteRequest, error) {
 	}, nil
 }
 
+// Execution returns a defensive plan/request pair for the authenticated
+// bridge transport. Keeping this as one operation prevents callers from
+// accidentally pairing a plan with a request from different authority.
+func (bound BoundPlan) Execution() (laneguard.Plan, laneguard.ExecuteRequest, error) {
+	request, err := bound.ExecuteRequest()
+	if err != nil {
+		return laneguard.Plan{}, laneguard.ExecuteRequest{}, err
+	}
+	return clonePlan(bound.plan), request, nil
+}
+
 func validateControlOperations(plan laneguard.Plan, records []controlplane.OperationRecord, now time.Time) (int, controlplane.OperationRecord, error) {
 	if len(records) == 0 || len(records) > len(plan.Operations) {
 		return 0, controlplane.OperationRecord{}, fmt.Errorf("%w: expected one pending operation after a successful plan prefix", ErrAuthorityMismatch)

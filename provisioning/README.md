@@ -15,6 +15,9 @@ module and uses only the Go standard library.
 - `kaiba-provision-control` owns transactions, claims, fence epochs,
   approvals, quarantine, and the terminal `security_applied` record.
 - `kaiba-provision-audit` persists an independent, secret-free hash chain.
+- `kaiba-provision-authority-bridge` authenticates stable control/audit state
+  and emits only the current closed lane plan/request over a private Unix
+  socket.
 - `kaiba-provision-lane-guard` is the root-only, one-shot physical adapter.
 - `kaiba-provision-signer`, `kaiba-provision-signing-client`, and
   `kaiba-provision-signing-gate` enforce the immutable approval boundary.
@@ -45,9 +48,11 @@ module and uses only the Go standard library.
 - `kaiba-provision-station` serves the separate live, loopback-only operator
   interface. It never falls back to the browser simulation.
 
-The generic lane and signer binaries are deliberately unconfigured and fail
+The generic bridge, lane, and signer binaries are deliberately unconfigured and fail
 closed. A deployment must instantiate `lib.mkRpi5PhysicalLaneGuard` and
 `lib.mkDevelopmentYubiKeySigning`, then use the corresponding NixOS modules.
+The authority bridge additionally requires runtime station mTLS credentials
+and independent control/audit server trust roots.
 The YubiKey PIN is a runtime systemd credential; it is never a Nix value.
 Normal-boot signing additionally uses `lib.mkRpi5BootSigningPlan` and
 `lib.mkRpi5VerifiedSignedBoot`. The shared cohort authorization is built with

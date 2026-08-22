@@ -543,12 +543,13 @@ strings and that no shortened campaign can produce `security_applied`.
   Every mutation must change the corresponding digest or fail canonical
   decoding. Golden material also pins JSON escaping for control characters,
   HTML-sensitive characters, backslashes, quotes, and non-ASCII text.
-- [ ] Authenticate the excluded `{plan_digest, approval_id, intent_receipt,
+- [x] Authenticate the excluded `{plan_digest, approval_id, intent_receipt,
   intent_sequence}` execution envelope against its independent authorities.
-  The compiler can load its opaque bound plan into a guard and emits only the
-  request for the current durable intent. The lane rejects a request-only
-  change, but coordinated root reconstruction of both plan and request remains
-  possible until the authenticated bridge exists.
+  The authenticated bridge double-reads the control transaction around the
+  independent audit record, rejects a changed snapshot, and passes only the
+  reconstructed current plan/request pair through its private Unix socket. The
+  compiler and lane both validate that pair; a root-edited draft cannot replace
+  the independently approved digest or durable intent receipt.
 
 The release-bound `v1alpha3` digest contract serializes fixed-order JSON
 structs without whitespace. It deliberately supersedes the earlier pre-release
@@ -593,12 +594,14 @@ not be replayed through the new guard.
   approval, require its manifest and key hashes to match the transaction, and
   require an exact match with the linker-fixed physical guard before
   hardware-adapter construction.
-- [ ] Define and independently derive the compiled artifact-set and guard
+- [x] Define and independently derive the compiled artifact-set and guard
   package digests from canonical, reviewed path-and-content-digest material.
-  The current factory embeds, reports, and enforces declared digest values, but
-  does not prove that they describe its actual closure or bundle bytes. The
-  complete signed-release adapter must derive those values rather than accept
-  an opaque declaration; SB-05 remains incomplete until it does.
+  The compiled identity covers exactly patched `rpiboot`, `gpioset`, and the
+  six closed bundle roles. The acyclic guard-package identity covers the actual
+  guard executable, that compiled identity, and the four release expectations.
+  Production validation reopens every canonical Nix-store path, rejects
+  symlinks and special files, and hashes file bytes or canonical directory-tree
+  material; neither digest is accepted from a caller.
 - [x] Require the development operation sequence to contain, in order:
   1. `program_customer_key_and_eeprom`;
   2. `cold_power_cycle`, including complete power removal and signed cold boot;
@@ -613,20 +616,37 @@ not be replayed through the new guard.
 - [x] Change the `security_applied` transition so it requires successful,
   authoritative evidence for the policy-defined complete sequence, not merely
   every operation in an arbitrary approved subset.
-- [ ] Implement a dedicated authenticated IPC or capability bridge that
+- [x] Implement a dedicated authenticated IPC or capability bridge that
   converts current control and audit records into the lane guard's closed
   `Plan` and `ExecuteRequest` contracts.
-- [ ] Keep the HTTP station unprivileged. The bridge must not expose executable
+- [x] Keep the HTTP station unprivileged. The bridge must not expose executable
   paths, bundle selection, device selectors, GPIO selectors, or a generic
   mutation primitive.
-- [ ] Verify the control identity, active claim, fence epoch, approval,
+- [x] Verify the control identity, active claim, fence epoch, approval,
   remaining lease, durable audit receipt, target fingerprint, operation order,
   and idempotency key immediately before every guarded operation.
 - [ ] Add combined tests that exercise control, audit, bridge, lane guard,
   physical-adapter state, restart, and reconciliation together rather than
   substituting fake hardware at every boundary.
 
-The new `plancompiler` closes the in-process conversion boundary: it derives
+The `kaiba-provision-authority-bridge` now closes the execute-side conversion
+boundary. It uses a station/lane client certificate and separate exclusive
+server trust roots to read the control transaction twice around one audit read,
+rejects any changed snapshot, reconstructs the two durable audit receipts, and
+passes the result through `plancompiler`. A group-restricted mode-0660 Unix
+socket in a mode-0750 bridge-owned directory emits only the paired current
+`Plan` and `ExecuteRequest`; both its client and the lane guard revalidate that pair. Requests cannot carry executable paths,
+bundle or device selectors, GPIO/UART values, or an operation selector. The
+one-shot guard must obtain fresh authority again after every successful
+operation.
+
+Approval provenance is independent of that station identity. Under mutual TLS,
+`record_approval` and `plan_approval` require exactly one canonical
+`spiffe://kaiba.network/approver/<approver-id>` certificate identity matching
+the recorded approver. Station/lane credentials are rejected at those approval
+endpoints, and approver credentials are rejected at station endpoints.
+
+The `plancompiler` derives
 the exact operation classes, state chain, operation digests, and plan digest;
 requires the all-zero fresh prestate and release-bound owned powered-off
 poststate; and validates the persisted transaction, active claim, target,
@@ -635,8 +655,8 @@ record before emitting exactly the one request backed by that pending intent.
 A successful operation must be recorded and a fresh per-operation intent bound
 before the next request can be emitted. The integrated software rehearsal uses
 a separate verifier that covers durable restart but cannot return a lane plan
-or request. The compiler is not yet the authenticated IPC transport in the
-unchecked items above and is not wired to physical execution.
+or request. The bridge is wired to physical execution, but the combined
+real-adapter restart/reconciliation test remains deliberately unchecked.
 
 Cold restart after a mutation claim expires or transfers is also still a
 deliberate blocker. Claim reconstruction advances the fence and clears the old
@@ -648,15 +668,13 @@ mutation can rely on post-restart reconciliation.
 
 ### Manual boundary limitation
 
-Root-installed plan and request JSON may be used for non-mutating development
-and failure rehearsal, but it cannot satisfy SB-05 or authorize SB-08. A root
-operator can construct a different self-consistent plan, recompute its content
-digests, and invent approval-envelope identifiers. The lane guard now detects
-stale or forged digest claims, but a digest proves consistency rather than
-authorization. The authenticated bridge and an independently approved digest
-are therefore required before a real ownership commit. Any separate experiment
-that accepts root as the approval authority is outside this plan and must not
-claim its milestones or terminal state.
+The mutation-capable lane guard no longer accepts root-installed executable
+plan or request JSON. Root installs only the authority-free draft reviewed for
+approval; changing it changes the plan digest, and the bridge rejects it unless
+the current independently authenticated approval and durable audit intent bind
+that exact digest. Root-authored executable envelopes remain valid only in
+separate non-mutating test harnesses and cannot satisfy SB-05 or authorize
+SB-08.
 
 ### Exit criteria
 

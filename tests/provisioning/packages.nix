@@ -1721,23 +1721,13 @@ let
 
   physicalLaneGuardFixture = built.mkRpi5PhysicalLaneGuard {
     name = "kaiba-rpi5-physical-lane-guard-module-fixture";
-    compiledArtifactSetDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    expectedBootImageDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    expectedEEPROMHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-    freshCommitBundle = "${built.rpi5ProbeBundle}/bundle";
-    freshReadbackBundle = "${built.rpi5ProbeBundle}/bundle";
-    negativeBootBundle = "${built.rpi5ProbeBundle}/bundle";
-    ownedReadbackBundle = "${built.rpi5ProbeBundle}/bundle";
-    ownedRecoveryBundle = "${built.rpi5ProbeBundle}/bundle";
-    rootIntegrityBundle = "${built.rpi5ProbeBundle}/bundle";
-    laneGuardPackageDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-    signedReleaseManifestDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    verifiedSignedRelease = productionMediaSignedReleaseFixture;
   };
 
   moduleEval = import ./module-eval.nix {
     inherit pkgs lib kaibaModules;
     kaibaAuditPackage = built.audit;
+    kaibaAuthorityBridgePackage = built.authorityBridge;
     kaibaControlPackage = built.control;
     kaibaLaneGuardPackage = physicalLaneGuardFixture;
     kaibaProvisionPackage = built.provision;
@@ -1752,6 +1742,10 @@ let
     {
       id = "go-tests";
       description = "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.";
+    }
+    {
+      id = "authenticated-authority-bridge";
+      description = "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, and lane-guard contract revalidation fail closed without exposing physical selectors or a generic mutation primitive.";
     }
     {
       id = "media-staging-fixture";
@@ -4539,6 +4533,7 @@ let
       ''
         test -x ${built.suite}/bin/kaiba-provision
         test -x ${built.serviceSuite}/bin/kaiba-provision-audit
+        test -x ${built.serviceSuite}/bin/kaiba-provision-authority-bridge
         test -x ${built.serviceSuite}/bin/kaiba-provision-control
         test -x ${built.serviceSuite}/bin/kaiba-provision-lane-guard
         test -x ${built.serviceSuite}/bin/kaiba-provision-signer
@@ -4600,6 +4595,11 @@ let
           echo 'integrated rehearsal links a live physical provisioning capability' >&2
           exit 1
         fi
+        if strings ${built.serviceSuite}/bin/kaiba-provision-authority-bridge \
+          | grep -E 'internal/provisioning/physicalrpi5([./]|$)|/rpiboot|/gpioset'; then
+          echo 'authority bridge links a live physical provisioning capability' >&2
+          exit 1
+        fi
         test -x ${built.unfusedCompat}/bin/kaiba-provision-unfused-compat
         test '${built.unfusedCompat.kaibaUnfusedCompatibility.evidenceMode}' = \
           'offline_fixture'
@@ -4654,22 +4654,45 @@ let
         test -x ${physicalLaneGuardFixture}/bin/kaiba-provision-lane-guard
         ${physicalLaneGuardFixture}/bin/kaiba-provision-lane-guard \
           --print-release-binding > "$TMPDIR/physical-lane-release-binding.json"
-        jq -e '
-          . == {
-            "signed_release_manifest_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-            "lane_guard_package_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-            "compiled_artifact_set_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-            "expected_customer_key_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "expected_eeprom_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-            "expected_boot_image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
+        release_publication=${productionMediaSignedReleaseFixture}/publication.json
+        release_manifest=${productionMediaSignedReleaseFixture}/$(jq -er .manifest_path "$release_publication")
+        jq -e --slurpfile publication "$release_publication" --slurpfile manifest "$release_manifest" '
+          def role_digest($role):
+            [$manifest[0].artifacts[] | select(.role == $role)]
+            | if length == 1 then .[0].digest else null end;
+          .signed_release_manifest_digest == $publication[0].signed_release_manifest_digest
+          and .expected_customer_key_hash == $manifest[0].expected_customer_key_hash
+          and .expected_eeprom_digest == role_digest("rpi5.signed_eeprom_image")
+          and .expected_boot_image_digest == role_digest("rpi5.boot_image")
+          and (.lane_guard_package_digest | test("^sha256:[0-9a-f]{64}$"))
+          and (.compiled_artifact_set_digest | test("^sha256:[0-9a-f]{64}$"))
         ' "$TMPDIR/physical-lane-release-binding.json"
-        test '${physicalLaneGuardFixture.kaibaPhysicalLaneGuard.signedReleaseManifestDigest}' = \
-          'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-        test '${physicalLaneGuardFixture.kaibaPhysicalLaneGuard.laneGuardPackageDigest}' = \
-          'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
-        test '${physicalLaneGuardFixture.kaibaPhysicalLaneGuard.compiledArtifactSetDigest}' = \
-          'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+        ${physicalLaneGuardFixture}/bin/kaiba-provision-lane-guard \
+          --print-release-binding-material > "$TMPDIR/physical-lane-release-material.json"
+        jq -e --slurpfile binding "$TMPDIR/physical-lane-release-binding.json" '
+          .schema_version == "kaiba.provisioning.rpi5-lane-release-material/v1alpha1"
+          and .binding == $binding[0]
+          and (.compiled_artifact_set.artifacts | length) == 8
+          and [.compiled_artifact_set.artifacts[].role] == [
+            "rpi5.patched_rpiboot_binary",
+            "rpi5.gpio_set_binary",
+            "rpi5.fresh_commit_bundle",
+            "rpi5.fresh_readback_bundle",
+            "rpi5.negative_boot_bundle",
+            "rpi5.owned_readback_bundle",
+            "rpi5.owned_recovery_bundle",
+            "rpi5.root_integrity_test_bundle"
+          ]
+          and .lane_guard_package.executable.role == "rpi5.lane_guard_executable"
+          and .lane_guard_package.compiled_artifact_set_digest
+            == .binding.compiled_artifact_set_digest
+        ' "$TMPDIR/physical-lane-release-material.json"
+        test '${physicalLaneGuardFixture.kaibaPhysicalLaneGuard.verifiedSignedRelease}' = \
+          '${productionMediaSignedReleaseFixture}'
+        test '${physicalLaneGuardFixture.kaibaPhysicalLaneGuard.releaseLineageIdentity}' = \
+          'single-verified-signed-release-v1alpha2'
+        test '${physicalLaneGuardFixture.kaibaPhysicalLaneGuard.releaseBindingIdentity}' = \
+          'runtime-verified-content-derived-v1alpha1'
         test -r ${built.provision}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json
         test -r ${built.provision}/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json
         test -f ${deviceProfileSchema}/passed
@@ -4687,6 +4710,17 @@ let
         test -f ${productionMediaStagingContract}/passed
         test -f ${developmentYubiKeySigningContract}/passed
         test -f ${moduleEval}/results.txt
+
+        jq -e \
+          '[.checks[] | select(.id == "authenticated-authority-bridge") | .status]
+            == ["passed"]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "authenticated-authority-bridge")
+            | [.system, .status]
+          ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
+        ' ${canonicalJSON}/report-input.json > /dev/null
 
         jq -e '[.checks[] | select(.id == "media-staging-fixture") | .status] == ["passed"]' \
           ${canonicalJSON}/platform.json > /dev/null
@@ -4798,6 +4832,7 @@ in
     eepromReleaseContract
     eepromSigningContract
     mediaStagingFixtureContract
+    physicalLaneGuardFixture
     productionMediaStagingContract
     moduleEval
     probeBundleIntegrity

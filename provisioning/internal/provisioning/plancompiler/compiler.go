@@ -134,6 +134,62 @@ func BuildDraft(input DraftInput) (Draft, error) {
 	return Draft{plan: derived}, nil
 }
 
+// DraftFromSnapshot restores an authority-free draft that was previously
+// produced for approval review. The snapshot is treated as untrusted: every
+// policy-derived field and digest is reconstructed through BuildDraft and must
+// match exactly. Approval and per-operation intent authority are deliberately
+// forbidden here and can only be supplied later by Bind.
+func DraftFromSnapshot(snapshot laneguard.Plan) (Draft, error) {
+	if snapshot.ApprovalID != "" || snapshot.IntentReceipt != "" || snapshot.IntentSequence != 0 {
+		return Draft{}, fmt.Errorf("%w: snapshot contains execution authority", ErrInvalidDraft)
+	}
+	if len(snapshot.Operations) != len(operations) {
+		return Draft{}, fmt.Errorf("%w: snapshot has the wrong operation count", ErrInvalidDraft)
+	}
+	var authorizationIDs [len(operations)]string
+	var maximumDurations [len(operations)]time.Duration
+	for index, operation := range snapshot.Operations {
+		authorizationIDs[index] = operation.AuthorizationID
+		maximumDurations[index] = operation.MaximumDuration
+	}
+	restored, err := BuildDraft(DraftInput{
+		StationID:         snapshot.StationID,
+		LaneID:            snapshot.LaneID,
+		TransactionID:     snapshot.TransactionID,
+		Release:           snapshot.Release,
+		TargetFingerprint: snapshot.TargetFingerprint,
+		FenceEpoch:        snapshot.FenceEpoch,
+		ApprovalExpiresAt: snapshot.ApprovalExpiresAt,
+		InitialState:      snapshot.Operations[0].ExpectedPrestate,
+		AuthorizationIDs:  authorizationIDs,
+		MaximumDurations:  maximumDurations,
+	})
+	if err != nil {
+		return Draft{}, err
+	}
+	if !sameDraftSnapshot(snapshot, restored.plan) {
+		return Draft{}, fmt.Errorf("%w: snapshot differs from the reconstructed policy plan", ErrInvalidDraft)
+	}
+	return restored, nil
+}
+
+func sameDraftSnapshot(left, right laneguard.Plan) bool {
+	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID ||
+		left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release ||
+		left.TargetFingerprint != right.TargetFingerprint || left.FenceEpoch != right.FenceEpoch ||
+		left.ApprovalExpiresAt != right.ApprovalExpiresAt || left.ApprovalID != right.ApprovalID ||
+		left.IntentReceipt != right.IntentReceipt || left.IntentSequence != right.IntentSequence ||
+		len(left.Operations) != len(right.Operations) {
+		return false
+	}
+	for index := range left.Operations {
+		if left.Operations[index] != right.Operations[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func validateState(state laneguard.DirectState) error {
 	if !validDigest(state.CustomerKeyHash) || !validDigest(state.EEPROMHash) {
 		return fmt.Errorf("%w: direct-state key and EEPROM hashes must be canonical digests", ErrInvalidDraft)
