@@ -267,6 +267,48 @@ func TestBuildDraftRejectsMalformedInputs(t *testing.T) {
 	}
 }
 
+func TestDraftFromSnapshotReconstructsOnlyAuthorityFreePolicyPlan(t *testing.T) {
+	draft, err := BuildDraft(testDraftInput(testNow()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := draft.Snapshot()
+	restored, err := DraftFromSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(restored.Snapshot(), snapshot) {
+		t.Fatal("restored snapshot differs from reviewed snapshot")
+	}
+
+	tests := map[string]func(*laneguard.Plan){
+		"approval":        func(value *laneguard.Plan) { value.ApprovalID = "approval-forbidden" },
+		"intent receipt":  func(value *laneguard.Plan) { value.IntentReceipt = digest("f") },
+		"intent sequence": func(value *laneguard.Plan) { value.IntentSequence = 1 },
+		"operation":       func(value *laneguard.Plan) { value.Operations[2].Operation = laneguard.OperationColdPowerCycle },
+		"classification":  func(value *laneguard.Plan) { value.Operations[0].Classification = laneguard.ClassReadOnly },
+		"sequence":        func(value *laneguard.Plan) { value.Operations[4].Sequence = 2 },
+		"poststate": func(value *laneguard.Plan) {
+			value.Operations[1].ExpectedPoststate.PowerState = "powered_on"
+		},
+		"operation digest": func(value *laneguard.Plan) { value.Operations[3].OperationDigest = digest("f") },
+		"plan digest":      func(value *laneguard.Plan) { value.PlanDigest = digest("e") },
+		"extra operation": func(value *laneguard.Plan) {
+			value.Operations = append(value.Operations, value.Operations[len(value.Operations)-1])
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			changed := snapshot
+			changed.Operations = append([]laneguard.OperationSpec(nil), snapshot.Operations...)
+			mutate(&changed)
+			if _, err := DraftFromSnapshot(changed); !errors.Is(err, ErrInvalidDraft) {
+				t.Fatalf("DraftFromSnapshot() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestBindRejectsMutatedControlAuthorityFields(t *testing.T) {
 	fixture := newFixture(t)
 	tests := map[string]func(*Authority){

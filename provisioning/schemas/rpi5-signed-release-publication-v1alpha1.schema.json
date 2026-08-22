@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.invalid/schemas/rpi5-signed-release-publication-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 signed-release publication v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "signed_release_manifest_digest",
+    "manifest_path",
+    "release_intent_digest",
+    "source_revision",
+    "artifacts",
+    "records"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1"
+    },
+    "signed_release_manifest_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "manifest_path": {
+      "type": "string",
+      "pattern": "^manifests/sha256/[0-9a-f]{64}\\.json$"
+    },
+    "release_intent_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "source_revision": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "prefixItems": [
+        { "$ref": "#/$defs/file_boot_public_key" },
+        { "$ref": "#/$defs/file_device_profile" },
+        { "$ref": "#/$defs/file_platform_adapter" },
+        { "$ref": "#/$defs/file_root_integrity" },
+        { "$ref": "#/$defs/file_rpi5_boot_image" },
+        { "$ref": "#/$defs/file_rpi5_boot_signature" },
+        { "$ref": "#/$defs/file_rpi5_eeprom_bootsys" },
+        { "$ref": "#/$defs/file_rpi5_eeprom_config" },
+        { "$ref": "#/$defs/tree_rpi5_fresh_commit_bundle" },
+        { "$ref": "#/$defs/tree_rpi5_fresh_readback_bundle" },
+        { "$ref": "#/$defs/tree_rpi5_negative_boot_bundle" },
+        { "$ref": "#/$defs/tree_rpi5_owned_readback_bundle" },
+        { "$ref": "#/$defs/file_rpi5_owned_recovery_bootcode" },
+        { "$ref": "#/$defs/tree_rpi5_owned_recovery_bundle" },
+        { "$ref": "#/$defs/file_rpi5_root_data_image" },
+        { "$ref": "#/$defs/file_rpi5_root_hash_tree_image" },
+        { "$ref": "#/$defs/tree_rpi5_root_integrity_test_bundle" },
+        { "$ref": "#/$defs/file_rpi5_signed_eeprom_image" }
+      ],
+      "items": false
+    },
+    "records": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "prefixItems": [
+        { "$ref": "#/$defs/record_boot_signing_plan" },
+        { "$ref": "#/$defs/record_boot_signing_result" },
+        { "$ref": "#/$defs/record_eeprom_release_manifest" },
+        { "$ref": "#/$defs/record_eeprom_signing_plan" },
+        { "$ref": "#/$defs/record_eeprom_signing_result" },
+        { "$ref": "#/$defs/record_owned_recovery_plan" },
+        { "$ref": "#/$defs/record_owned_recovery_result" },
+        { "$ref": "#/$defs/record_release_intent" },
+        { "$ref": "#/$defs/record_unsigned_artifact_set" }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "regular_file_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "kind", "digest", "size_bytes", "path"],
+      "properties": {
+        "role": { "type": "string" },
+        "kind": { "const": "regular_file" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^objects/sha256/[0-9a-f]{64}$"
+        }
+      }
+    },
+    "directory_tree_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "kind", "digest", "size_bytes", "path", "tree_record_path"],
+      "properties": {
+        "role": { "type": "string" },
+        "kind": { "const": "directory_tree" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^trees/sha256/[0-9a-f]{64}$"
+        },
+        "tree_record_path": {
+          "type": "string",
+          "pattern": "^tree-records/sha256/[0-9a-f]{64}\\.json$"
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest", "size_bytes", "path"],
+      "properties": {
+        "id": { "type": "string" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^records/sha256/[0-9a-f]{64}$"
+        }
+      }
+    },
+    "file_boot_public_key": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "boot_public_key" } } }
+      ]
+    },
+    "file_device_profile": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "device_profile" } } }
+      ]
+    },
+    "file_platform_adapter": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "platform_adapter" } } }
+      ]
+    },
+    "file_root_integrity": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "root_integrity" } } }
+      ]
+    },
+    "file_rpi5_boot_image": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "rpi5.boot_image" } } }
+      ]
+    },
+    "file_rpi5_boot_signature": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "rpi5.boot_signature" } } }
+      ]
+    },
+    "file_rpi5_eeprom_bootsys": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "rpi5.eeprom_bootsys" } } }
+      ]
+    },
+    "file_rpi5_eeprom_config": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "rpi5.eeprom_config" } } }
+      ]
+    },
+    "tree_rpi5_fresh_commit_bundle": {
+      "allOf": [
+        { "$ref": "#/$defs/directory_tree_artifact" },
+        { "properties": { "role": { "const": "rpi5.fresh_commit_bundle" } } }
+      ]
+    },
+    "tree_rpi5_fresh_readback_bundle": {
+      "allOf": [
+        { "$ref": "#/$defs/directory_tree_artifact" },
+        { "properties": { "role": { "const": "rpi5.fresh_readback_bundle" } } }
+      ]
+    },
+    "tree_rpi5_negative_boot_bundle": {
+      "allOf": [
+        { "$ref": "#/$defs/directory_tree_artifact" },
+        { "properties": { "role": { "const": "rpi5.negative_boot_bundle" } } }
+      ]
+    },
+    "tree_rpi5_owned_readback_bundle": {
+      "allOf": [
+        { "$ref": "#/$defs/directory_tree_artifact" },
+        { "properties": { "role": { "const": "rpi5.owned_readback_bundle" } } }
+      ]
+    },
+    "file_rpi5_owned_recovery_bootcode": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "rpi5.owned_recovery_bootcode" } } }
+      ]
+    },
+    "tree_rpi5_owned_recovery_bundle": {
+      "allOf": [
+        { "$ref": "#/$defs/directory_tree_artifact" },
+        { "properties": { "role": { "const": "rpi5.owned_recovery_bundle" } } }
+      ]
+    },
+    "file_rpi5_root_data_image": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "rpi5.root_data_image" } } }
+      ]
+    },
+    "file_rpi5_root_hash_tree_image": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "rpi5.root_hash_tree_image" } } }
+      ]
+    },
+    "tree_rpi5_root_integrity_test_bundle": {
+      "allOf": [
+        { "$ref": "#/$defs/directory_tree_artifact" },
+        { "properties": { "role": { "const": "rpi5.root_integrity_test_bundle" } } }
+      ]
+    },
+    "file_rpi5_signed_eeprom_image": {
+      "allOf": [
+        { "$ref": "#/$defs/regular_file_artifact" },
+        { "properties": { "role": { "const": "rpi5.signed_eeprom_image" } } }
+      ]
+    },
+    "record_boot_signing_plan": {
+      "allOf": [
+        { "$ref": "#/$defs/record" },
+        { "properties": { "id": { "const": "boot_signing_plan" } } }
+      ]
+    },
+    "record_boot_signing_result": {
+      "allOf": [
+        { "$ref": "#/$defs/record" },
+        { "properties": { "id": { "const": "boot_signing_result" } } }
+      ]
+    },
+    "record_eeprom_release_manifest": {
+      "allOf": [
+        { "$ref": "#/$defs/record" },
+        { "properties": { "id": { "const": "eeprom_release_manifest" } } }
+      ]
+    },
+    "record_eeprom_signing_plan": {
+      "allOf": [
+        { "$ref": "#/$defs/record" },
+        { "properties": { "id": { "const": "eeprom_signing_plan" } } }
+      ]
+    },
+    "record_eeprom_signing_result": {
+      "allOf": [
+        { "$ref": "#/$defs/record" },
+        { "properties": { "id": { "const": "eeprom_signing_result" } } }
+      ]
+    },
+    "record_owned_recovery_plan": {
+      "allOf": [
+        { "$ref": "#/$defs/record" },
+        { "properties": { "id": { "const": "owned_recovery_plan" } } }
+      ]
+    },
+    "record_owned_recovery_result": {
+      "allOf": [
+        { "$ref": "#/$defs/record" },
+        { "properties": { "id": { "const": "owned_recovery_result" } } }
+      ]
+    },
+    "record_release_intent": {
+      "allOf": [
+        { "$ref": "#/$defs/record" },
+        { "properties": { "id": { "const": "release_intent" } } }
+      ]
+    },
+    "record_unsigned_artifact_set": {
+      "allOf": [
+        { "$ref": "#/$defs/record" },
+        { "properties": { "id": { "const": "unsigned_artifact_set" } } }
+      ]
+    }
+  }
+}

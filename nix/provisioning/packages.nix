@@ -128,6 +128,7 @@ let
 
     subPackages = [
       "cmd/kaiba-provision-audit"
+      "cmd/kaiba-provision-authority-bridge"
       "cmd/kaiba-provision-control"
       "cmd/kaiba-provision-lane-guard"
       "cmd/kaiba-provision-signer"
@@ -248,10 +249,53 @@ let
     };
   };
 
-  # The media stager is intentionally not part of serviceSuite or any station
-  # image.  It can overwrite an explicitly approved block device, so operators
-  # must opt into this dedicated closure and its narrow CLI.  It carries no Pi
-  # OTP, EEPROM, RPIBOOT, GPIO, or lane-guard implementation.
+  # Secret-free serializers and validators remain generic. Production writers
+  # and verifiers are emitted only by mkRpi5ProductionMedia, which linker-pins
+  # one immutable plan, source set, signed release, and verifier toolchain.
+  mediaContractTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-media-contract";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-media-contract" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaMediaContractTool = {
+      blockDeviceAccess = false;
+      mutationCapable = false;
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-media-contract";
+      description = "Canonical Raspberry Pi 5 media-plan and receipt validator";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  unfusedRuntimeRecordTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-unfused-runtime-record";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-unfused-runtime-record" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaUnfusedRuntimeRecordTool = {
+      authority = "serialization_fixture_only";
+      blockDeviceAccess = false;
+      hardwareObservationClaim = false;
+      mutationCapable = false;
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-unfused-runtime-record";
+      description = "Plan-correlated serializer for unfused runtime UART records";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  # Legacy mixed fixture/device prototype retained only for the old synthetic
+  # fixture contract. It is deliberately not exported by the provisioning
+  # flake; production callers must use mkRpi5ProductionMedia's device-only,
+  # plan-specialized stager.
   mediaStager = pkgs.buildGoModule {
     pname = "kaiba-provision-media-stager";
     inherit version;
@@ -260,6 +304,7 @@ let
     vendorHash = null;
     doCheck = false;
     passthru.kaibaMediaStager = {
+      authority = "legacy_fixture_prototype";
       blockDeviceWriteCapable = true;
       oneTimeSettingCapable = false;
       otpCapable = false;
@@ -413,6 +458,11 @@ let
     description = "Kaiba append-only provisioning audit reference service";
   };
 
+  authorityBridge = servicePackage {
+    binary = "kaiba-provision-authority-bridge";
+    description = "Authenticated Kaiba control/audit to physical-lane authority bridge";
+  };
+
   control = servicePackage {
     binary = "kaiba-provision-control";
     description = "Kaiba provisioning transaction and inventory reference service";
@@ -456,6 +506,263 @@ let
   storeBacked =
     value: cleanAbsolute (toString value) && lib.hasPrefix "${builtins.storeDir}/" (toString value);
 
+  eepromReleaseFactories = import ./eeprom-release.nix {
+    inherit lib pkgs;
+    eepromPackageVersion = pkgs.raspberrypi-eeprom.version;
+    eepromSource = pkgs.raspberrypi-eeprom.src;
+    eepromSourceHash = pkgs.raspberrypi-eeprom.src.outputHash;
+    eepromSourceRevision = pkgs.raspberrypi-eeprom.src.rev;
+  };
+  inherit (eepromReleaseFactories) mkRpi5EEPROMRelease;
+  rpi5EEPROMRelease = mkRpi5EEPROMRelease { };
+  rpi5EEPROMReleaseVerifier = eepromReleaseFactories.verifier;
+
+  eepromPython = pkgs.python3.withPackages (pythonPackages: [ pythonPackages.pycryptodomex ]);
+  eepromToolRuntime =
+    pkgs.runCommand "kaiba-rpi5-eeprom-signing-toolchain"
+      {
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+      }
+      ''
+        mkdir -p "$out/bin"
+        makeWrapper ${eepromPython}/bin/python3 "$out/bin/rpi-eeprom-config" \
+          --add-flags ${lib.escapeShellArg "${rpi5EEPROMRelease}/toolchain/rpi-eeprom-config"}
+        makeWrapper ${eepromPython}/bin/python3 "$out/bin/rpi-sign-bootcode" \
+          --add-flags ${lib.escapeShellArg "${rpi5EEPROMRelease}/toolchain/rpi-sign-bootcode"}
+        makeWrapper ${eepromPython}/bin/python3 "$out/bin/rpi-bootloader-key-convert" \
+          --add-flags ${lib.escapeShellArg "${rpi5EEPROMRelease}/toolchain/rpi-bootloader-key-convert"}
+        ${pkgs.gnused}/bin/sed \
+          '1c #!${pkgs.dash}/bin/dash' \
+          ${rpi5EEPROMRelease}/toolchain/rpi-eeprom-digest \
+          > "$out/bin/rpi-eeprom-digest"
+        ${pkgs.gnused}/bin/sed \
+          '1c #!${pkgs.dash}/bin/dash' \
+          ${rpi5EEPROMRelease}/toolchain/update-pieeprom.sh \
+          > "$out/bin/update-pieeprom.sh"
+        chmod 0555 "$out/bin/rpi-eeprom-digest" "$out/bin/update-pieeprom.sh"
+      '';
+  eepromToolPATH = lib.makeBinPath [
+    eepromToolRuntime
+    pkgs.binutils
+    pkgs.coreutils
+    pkgs.findutils
+    pkgs.gawk
+    pkgs.gnugrep
+    pkgs.gnused
+    pkgs.openssl
+    pkgs.xxd
+  ];
+  mkEEPROMSigningToolLDFlags = signingGateSocketPath: [
+    "-X=main.signingGateSocketPath=${signingGateSocketPath}"
+    "-X=main.pinnedUpdatePieepromExecutablePath=${eepromToolRuntime}/bin/update-pieeprom.sh"
+    "-X=main.pinnedRpiEEPROMConfigExecutablePath=${eepromToolRuntime}/bin/rpi-eeprom-config"
+    "-X=main.pinnedToolRuntimePath=${eepromToolPATH}"
+    "-X=main.expectedEEPROMReleaseManifestDigest=${rpi5EEPROMRelease.kaibaRpi5EEPROMRelease.releaseManifestDigest}"
+    "-X=main.expectedOriginalEEPROMDigest=${eepromReleaseFactories.policy.firmware.image.sha256}"
+    "-X=main.expectedOriginalRecoveryDigest=${eepromReleaseFactories.policy.firmware.recovery.sha256}"
+    "-X=main.expectedOriginalBootcodeDigest=${eepromReleaseFactories.policy.firmware.bootcode.sha256}"
+    "-X=main.expectedOriginalBootsysDigest=${eepromReleaseFactories.policy.firmware.bootsys.sha256}"
+    "-X=main.expectedEEPROMFirmwareBuildEpoch=${toString eepromReleaseFactories.policy.firmware.buildEpoch}"
+  ];
+  eepromSigningTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-sign-eeprom";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-sign-eeprom" ];
+    vendorHash = null;
+    doCheck = false;
+    ldflags = mkEEPROMSigningToolLDFlags "/run/kaiba-provision-signing/signing.sock";
+    passthru.kaibaEEPROMSigningTool = {
+      inherit eepromToolRuntime;
+      approvalGateConfigured = true;
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      recoverySigningCapable = true;
+      ownedRecoveryGateRequestCount = 1;
+      ownedRecoveryReusedSignatureCount = 3;
+      ownedRecoveryUpdaterFlags = [
+        "-f"
+        "-r"
+      ];
+      signingAuthorityConfigured = true;
+      toolPATH = eepromToolPATH;
+      updaterFlags = [ "-f" ];
+      updaterMode = "fresh-board";
+    };
+    meta = {
+      mainProgram = "kaiba-provision-sign-eeprom";
+      description = "Approval-gated Raspberry Pi 5 EEPROM and one-input owned-recovery signing adapter";
+      platforms = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+    };
+  };
+
+  # The complete-release finalizer must replay the pinned EEPROM updater and
+  # extractor, but it must not inherit the live approval-gate endpoint. This
+  # private closure deliberately fixes the unusable character device as its
+  # gate path; only the public `finalize` operation is consumed below.
+  eepromReplayFinalizer = pkgs.buildGoModule {
+    pname = "kaiba-provision-eeprom-replay-finalizer";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-sign-eeprom" ];
+    vendorHash = null;
+    doCheck = false;
+    ldflags = mkEEPROMSigningToolLDFlags "/dev/null";
+    passthru.kaibaEEPROMReplayFinalizer = {
+      inherit eepromToolRuntime;
+      approvalGateConfigured = false;
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      signingAuthorityConfigured = false;
+      toolPATH = eepromToolPATH;
+      verificationMode = "pinned_offline_replay";
+    };
+    meta = {
+      mainProgram = "kaiba-provision-sign-eeprom";
+      description = "No-authority EEPROM finalizer used for deterministic signed-release replay";
+      platforms = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+    };
+  };
+
+  signedReleaseTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-finalize-release";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-finalize-release" ];
+    vendorHash = null;
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      go test ./internal/provisioning/signedrelease \
+        ./cmd/kaiba-provision-finalize-release
+      runHook postCheck
+    '';
+    ldflags = [
+      "-X=main.eepromFinalizerExecutablePath=${eepromReplayFinalizer}/bin/kaiba-provision-sign-eeprom"
+    ];
+    passthru.kaibaSignedReleaseTool = {
+      inherit eepromReplayFinalizer;
+      artifactRoleCount = 18;
+      blockDeviceWriteCapable = false;
+      deterministicEEPROMReplayRequired = true;
+      deterministicOwnedRecoveryReplayRequired = true;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      publicationSchemaVersion = "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1";
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-finalize-release";
+      description = "Offline verifier and content-addressed publisher for complete Raspberry Pi 5 signed releases";
+      platforms = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+    };
+  };
+
+  # Pure public bundle construction is isolated from the physical lane guard:
+  # this closure can only copy, mutate the two deterministic negative-test
+  # fixtures, snapshot directory trees, and verify public signatures/digests.
+  rpibootBundleTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-rpiboot-bundles";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-rpiboot-bundles" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaRPIBootBundleTool = {
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      fixtureHardwareObserved = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-rpiboot-bundles";
+      description = "Offline constructor and verifier for immutable Raspberry Pi 5 RPIBOOT bundle sets";
+      platforms = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+    };
+  };
+
+  releaseIntentFactories = import ./release-intent.nix {
+    inherit lib pkgs;
+  };
+  inherit (releaseIntentFactories) mkRpi5EEPROMReleaseSigningInputs mkRpi5ReleaseIntent;
+
+  eepromSigningFactories = import ./eeprom-signing.nix {
+    eepromRelease = rpi5EEPROMRelease;
+    inherit
+      eepromSigningTool
+      eepromToolRuntime
+      lib
+      pkgs
+      ;
+  };
+  inherit (eepromSigningFactories) mkRpi5EEPROMSigningPlan mkRpi5VerifiedSignedEEPROM;
+
+  ownedRecoverySigningFactories = import ./owned-recovery-signing.nix {
+    inherit eepromSigningTool lib pkgs;
+  };
+  inherit (ownedRecoverySigningFactories)
+    mkRpi5OwnedRecoverySigningPlan
+    mkRpi5VerifiedOwnedRecovery
+    ;
+
+  rpibootBundleFactories = import ./rpiboot-bundles.nix {
+    inherit
+      eepromSigningTool
+      lib
+      pkgs
+      rpibootBundleTool
+      signedBootTool
+      ;
+  };
+  inherit (rpibootBundleFactories) mkRpi5VerifiedRPIBootBundles;
+
+  signedReleaseFactories = import ./signed-release.nix {
+    inherit lib pkgs signedReleaseTool;
+  };
+  inherit (signedReleaseFactories) mkRpi5VerifiedSignedRelease;
+
+  productionMediaFactories = import ./media-staging.nix {
+    inherit
+      lib
+      mediaContractTool
+      moduleRoot
+      pkgs
+      version
+      ;
+  };
+  inherit (productionMediaFactories) mkRpi5ProductionMedia;
+
   signedBootFactories = import ./signed-boot.nix {
     inherit lib pkgs signedBootTool;
   };
@@ -483,40 +790,46 @@ let
   # approved plan.
   mkRpi5PhysicalLaneGuard =
     {
-      compiledArtifactSetDigest,
-      expectedBootImageDigest,
-      expectedCustomerKeyHash,
-      expectedEEPROMHash,
-      freshCommitBundle,
-      freshReadbackBundle,
-      negativeBootBundle,
-      ownedReadbackBundle,
-      ownedRecoveryBundle,
-      rootIntegrityBundle,
-      signedReleaseManifestDigest,
-      laneGuardPackageDigest,
+      verifiedSignedRelease,
       name ? "kaiba-rpi5-physical-lane-guard",
     }:
-    assert lib.assertMsg (canonicalDigest signedReleaseManifestDigest)
-      "signedReleaseManifestDigest must use canonical sha256:<64 lowercase hex> form";
-    assert lib.assertMsg (canonicalDigest laneGuardPackageDigest)
-      "laneGuardPackageDigest must use canonical sha256:<64 lowercase hex> form";
-    assert lib.assertMsg (canonicalDigest compiledArtifactSetDigest)
-      "compiledArtifactSetDigest must use canonical sha256:<64 lowercase hex> form";
-    assert lib.assertMsg (canonicalDigest expectedBootImageDigest)
-      "expectedBootImageDigest must use canonical sha256:<64 lowercase hex> form";
-    assert lib.assertMsg (canonicalRawDigest expectedCustomerKeyHash)
-      "expectedCustomerKeyHash must contain 64 lowercase hexadecimal characters";
-    assert lib.assertMsg (canonicalRawDigest expectedEEPROMHash)
-      "expectedEEPROMHash must contain 64 lowercase hexadecimal characters";
-    assert lib.assertMsg (lib.all storeBacked [
-      freshCommitBundle
-      freshReadbackBundle
-      negativeBootBundle
-      ownedReadbackBundle
-      ownedRecoveryBundle
-      rootIntegrityBundle
-    ]) "every physical lane bundle must be a fixed Nix-store path";
+    assert lib.assertMsg (storeBacked verifiedSignedRelease)
+      "verifiedSignedRelease must be one fixed Nix-store path";
+    assert lib.assertMsg (
+      builtins.isAttrs verifiedSignedRelease && verifiedSignedRelease ? kaibaVerifiedSignedRelease
+    ) "verifiedSignedRelease must be produced by mkRpi5VerifiedSignedRelease";
+    let
+      releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
+      verifiedRPIBootBundles = releaseContract.verifiedRPIBootBundles or null;
+      verifiedReleaseContract =
+        (releaseContract.artifactRoleCount or null) == 18
+        && (releaseContract.contentAddressedPublication or false)
+        && (releaseContract.deterministicEEPROMReplayRequired or false)
+        && (releaseContract.deterministicOwnedRecoveryReplayRequired or false)
+        &&
+          (releaseContract.publicationSchemaVersion or "")
+          == "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1"
+        &&
+          (releaseContract.signedReleaseManifestSchemaVersion or "")
+          == "kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2"
+        && (releaseContract.verificationMode or "") == "pure_offline_replay"
+        && verifiedRPIBootBundles != null
+        && storeBacked verifiedRPIBootBundles
+        && builtins.isAttrs verifiedRPIBootBundles
+        && verifiedRPIBootBundles ? kaibaVerifiedRPIBootBundles
+        && lib.all (value: value == false) [
+          (releaseContract.blockDeviceWriteCapable or null)
+          (releaseContract.directHardwareAccess or null)
+          (releaseContract.eepromProgrammingCapable or null)
+          (releaseContract.fixtureHardwareObserved or null)
+          (releaseContract.mutationCapable or null)
+          (releaseContract.oneTimeSettingCapable or null)
+          (releaseContract.otpCapable or null)
+          (releaseContract.privateKeyAccess or null)
+        ];
+    in
+    assert lib.assertMsg verifiedReleaseContract
+      "verifiedSignedRelease does not expose the complete pure verified release contract";
     pkgs.buildGoModule {
       pname = name;
       inherit version;
@@ -524,31 +837,99 @@ let
       subPackages = [ "cmd/kaiba-provision-lane-guard" ];
       vendorHash = null;
       doCheck = false;
+      nativeBuildInputs = [ pkgs.jq ];
       ldflags = [
-        "-X=main.rpibootBinary=${rpiboot}/bin/rpiboot"
-        "-X=main.gpioSetBinary=${pkgs.libgpiod}/bin/gpioset"
-        "-X=main.freshReadbackBundle=${toString freshReadbackBundle}"
-        "-X=main.freshCommitBundle=${toString freshCommitBundle}"
-        "-X=main.ownedReadbackBundle=${toString ownedReadbackBundle}"
-        "-X=main.ownedRecoveryBundle=${toString ownedRecoveryBundle}"
-        "-X=main.negativeBootBundle=${toString negativeBootBundle}"
-        "-X=main.rootIntegrityBundle=${toString rootIntegrityBundle}"
-        "-X=main.signedReleaseManifestDigest=${signedReleaseManifestDigest}"
-        "-X=main.laneGuardPackageDigest=${laneGuardPackageDigest}"
-        "-X=main.compiledArtifactSetDigest=${compiledArtifactSetDigest}"
-        "-X=main.expectedCustomerKeyHash=${expectedCustomerKeyHash}"
-        "-X=main.expectedEEPROMHash=${expectedEEPROMHash}"
-        "-X=main.expectedBootImageDigest=${expectedBootImageDigest}"
+        "-s"
+        "-w"
       ];
+      preBuild = ''
+        set -eo pipefail
+
+        verified_release=${lib.escapeShellArg (toString verifiedSignedRelease)}
+        publication="$verified_release/publication.json"
+        test -f "$publication"
+        test ! -L "$publication"
+        test "$(${pkgs.jq}/bin/jq -er .schema_version "$publication")" = \
+          kaiba.provisioning.rpi5-signed-release-publication/v1alpha1
+
+        manifest_digest="$(${pkgs.jq}/bin/jq -er '
+          .signed_release_manifest_digest
+          | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$publication")"
+        manifest_hex="$(printf '%s' "$manifest_digest" | cut -c 8-)"
+        manifest_relative="$(${pkgs.jq}/bin/jq -er --arg expected \
+          "manifests/sha256/$manifest_hex.json" \
+          '.manifest_path | select(. == $expected)' "$publication")"
+        manifest="$verified_release/$manifest_relative"
+        test -f "$manifest"
+        test ! -L "$manifest"
+        test "$(tail -c 1 "$manifest" | od -An -tu1 | tr -d ' ')" = 10
+        calculated_manifest_digest="sha256:$({
+          printf '%s\0' kaiba.provisioning.rpi5-signed-release-manifest.v1alpha2
+          head -c -1 "$manifest"
+        } | sha256sum | cut -d ' ' -f 1)"
+        test "$calculated_manifest_digest" = "$manifest_digest"
+        test "$(${pkgs.jq}/bin/jq -er .schema_version "$manifest")" = \
+          kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2
+
+        manifest_role_digest() {
+          ${pkgs.jq}/bin/jq -er --arg role "$1" --arg kind "$2" '
+            [.artifacts[]
+              | select(.role == $role and .kind == $kind)
+              | .digest
+              | select(test("^sha256:[0-9a-f]{64}$"))]
+            | if length == 1 then .[0] else error("missing or duplicate manifest role") end
+          ' "$manifest"
+        }
+
+        fresh_commit_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/fresh-commit"}
+        fresh_readback_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/fresh-readback"}
+        negative_boot_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/negative-boot"}
+        owned_readback_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/owned-readback"}
+        owned_recovery_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/owned-recovery"}
+        root_integrity_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/root-integrity-test"}
+        for bundle_path in \
+          "$fresh_commit_bundle" \
+          "$fresh_readback_bundle" \
+          "$negative_boot_bundle" \
+          "$owned_readback_bundle" \
+          "$owned_recovery_bundle" \
+          "$root_integrity_bundle"; do
+          test -d "$bundle_path"
+          test ! -L "$bundle_path"
+        done
+        expected_customer_key_hash="$(${pkgs.jq}/bin/jq -er '
+          .expected_customer_key_hash | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$manifest")"
+        expected_eeprom_hash="$(manifest_role_digest rpi5.signed_eeprom_image regular_file)"
+        expected_boot_image_digest="$(manifest_role_digest rpi5.boot_image regular_file)"
+
+        go_string() {
+          ${pkgs.jq}/bin/jq -Rn --arg value "$1" '$value'
+        }
+        {
+          printf 'package main\n\n'
+          printf 'func init() {\n'
+          printf '\trpibootBinary = %s\n' "$(go_string ${lib.escapeShellArg "${rpiboot}/bin/rpiboot"})"
+          printf '\tgpioSetBinary = %s\n' "$(go_string ${lib.escapeShellArg "${pkgs.libgpiod}/bin/gpioset"})"
+          printf '\tfreshCommitBundle = %s\n' "$(go_string "$fresh_commit_bundle")"
+          printf '\tfreshReadbackBundle = %s\n' "$(go_string "$fresh_readback_bundle")"
+          printf '\tnegativeBootBundle = %s\n' "$(go_string "$negative_boot_bundle")"
+          printf '\townedReadbackBundle = %s\n' "$(go_string "$owned_readback_bundle")"
+          printf '\townedRecoveryBundle = %s\n' "$(go_string "$owned_recovery_bundle")"
+          printf '\trootIntegrityBundle = %s\n' "$(go_string "$root_integrity_bundle")"
+          printf '\tsignedReleaseManifestDigest = %s\n' "$(go_string "$manifest_digest")"
+          printf '\texpectedCustomerKeyHash = %s\n' "$(go_string "$expected_customer_key_hash")"
+          printf '\texpectedEEPROMHash = %s\n' "$(go_string "$expected_eeprom_hash")"
+          printf '\texpectedBootImageDigest = %s\n' "$(go_string "$expected_boot_image_digest")"
+          printf '}\n'
+        } > cmd/kaiba-provision-lane-guard/release_lineage_generated.go
+      '';
       passthru.kaibaPhysicalLaneGuard = {
-        inherit
-          compiledArtifactSetDigest
-          expectedBootImageDigest
-          expectedCustomerKeyHash
-          expectedEEPROMHash
-          laneGuardPackageDigest
-          signedReleaseManifestDigest
-          ;
+        inherit verifiedSignedRelease;
+        releaseBindingIdentity = "runtime-verified-content-derived-v1alpha1";
+        releaseBindingInspection = "bin/kaiba-provision-lane-guard --print-release-binding-material";
+        releaseLineageIdentity = "single-verified-signed-release-v1alpha2";
         gpioSet = pkgs.libgpiod;
         inherit rpiboot;
       };
@@ -869,6 +1250,28 @@ let
           "$out/share/kaiba/schemas/device-profile-v1alpha1.schema.json"
         ln -s ${goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-device-media-layout-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-device-media-layout-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-binding-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-binding-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-cold-power-observation-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-cold-power-observation-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-device-preflight-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-device-preflight-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-fixture-result-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-fixture-result-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-stage-receipt-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-stage-receipt-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-staging-plan-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-staging-plan-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-staging-receipt-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-staging-receipt-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-verification-receipt-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-verification-receipt-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-verification-report-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-verification-report-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-unfused-runtime-facts-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-unfused-runtime-facts-v1alpha1.schema.json"
         ln -s ${rpi5ProbeBundle}/bundle "$out/share/kaiba/rpi5-probe-bundle"
         ln -s ${rpi5ProbeBundle}/manifest.json "$out/share/kaiba/rpi5-probe-bundle-manifest.json"
       '';
@@ -891,34 +1294,53 @@ in
 {
   inherit
     audit
+    authorityBridge
     control
     goSource
     integratedRehearsal
     laneGuard
     liveStation
+    mediaContractTool
     mediaStager
+    eepromSigningTool
+    eepromToolRuntime
     mkDevelopmentYubiKeySigning
     mkRpi5BootSigningPlan
+    mkRpi5EEPROMRelease
+    mkRpi5EEPROMReleaseSigningInputs
+    mkRpi5EEPROMSigningPlan
     mkRpi5PhysicalLaneGuard
+    mkRpi5ProductionMedia
     mkRpi5MediaStagingFixture
+    mkRpi5OwnedRecoverySigningPlan
+    mkRpi5VerifiedRPIBootBundles
+    mkRpi5VerifiedSignedRelease
+    mkRpi5ReleaseIntent
     mkRpi5UnfusedVerifier
     mkRpi5VerifiedSignedBoot
+    mkRpi5VerifiedSignedEEPROM
+    mkRpi5VerifiedOwnedRecovery
     mkRpi5VerifiedUnfusedCapsule
     provision
     rehearsal
     rpiboot
+    rpibootBundleTool
     rpibootSource
+    rpi5EEPROMRelease
+    rpi5EEPROMReleaseVerifier
     rpi5ProbeBundle
     stationDemo
     stationGraphGenerator
     stationPages
     unfusedCompat
     unfusedEvidence
+    unfusedRuntimeRecordTool
     serviceSuite
     signerFoundation
     signingClientFoundation
     signingGateFoundation
     signedBootTool
+    signedReleaseTool
     suite
     yubiKeyWrapperFoundation
     ;

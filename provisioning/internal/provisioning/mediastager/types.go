@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mediainventory"
 )
 
 const (
@@ -22,11 +24,11 @@ const (
 	ImageOffsetAlignment = uint64(4096)
 )
 
-type Mode string
+type Mode = mediainventory.Mode
 
 const (
-	ModeDevice  Mode = "device"
-	ModeFixture Mode = "regular_file_fixture"
+	ModeDevice  = mediainventory.ModeDevice
+	ModeFixture = mediainventory.ModeFixture
 )
 
 type Action string
@@ -47,7 +49,7 @@ const (
 
 var (
 	ErrInvalidPlan      = errors.New("invalid media staging plan")
-	ErrUnsafeTarget     = errors.New("target is unsafe for media staging")
+	ErrUnsafeTarget     = mediainventory.ErrUnsafeTarget
 	ErrTargetMismatch   = errors.New("target does not match the approved plan")
 	ErrTargetBusy       = errors.New("target is exclusively locked")
 	ErrImageMismatch    = errors.New("source image does not match the approved plan")

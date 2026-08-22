@@ -26,8 +26,9 @@ func TestRunImplementsExactHSMWrapperProtocol(t *testing.T) {
 			t.Fatalf("artifact = %q", artifact)
 		}
 		return signinggate.Result{
-			SignatureHex:  strings.Repeat("01", signing.RSASignatureBytes),
-			ReceiptDigest: bundle.Sum([]byte("receipt")),
+			SignatureHex:        strings.Repeat("01", signing.RSASignatureBytes),
+			ReceiptDigest:       bundle.Sum([]byte("receipt")),
+			ReleaseIntentDigest: bundle.Sum([]byte("release intent")),
 		}, nil
 	}
 	var stdout, stderr bytes.Buffer

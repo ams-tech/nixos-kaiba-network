@@ -3,6 +3,7 @@
 {
   imports = [
     ./provisioning-audit.nix
+    ./provisioning-authority-bridge.nix
     ./provisioning-control.nix
     ./provisioning-lane-guard.nix
     ./provisioning-probe.nix

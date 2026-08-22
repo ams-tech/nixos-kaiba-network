@@ -132,7 +132,7 @@ func dispatchCommand(httpRequest *http.Request, service *Service, identityPolicy
 		if err := DecodeStrict(command.Request, &request); err != nil {
 			return Transaction{}, err
 		}
-		if err := authorizeCurrentClaim(httpRequest, service, identityPolicy, request.TransactionID); err != nil {
+		if err := identityPolicy.AuthorizeApprover(httpRequest, request.ApproverID); err != nil {
 			return Transaction{}, err
 		}
 		return service.RecordApproval(ctx, request)

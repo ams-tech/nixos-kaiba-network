@@ -22,8 +22,8 @@ and the public transition graph is never a fallback for the live station.
 ```text
 development control host                    dedicated Pi 5 station
 +--------------------------------+          +-------------------------------+
-| reference control + inventory  |  mTLS    | loopback operator UI          |
-| independent audit service      |<-------->| state machine (no IPC bridge) |
+| reference control + inventory  |  mTLS    | loopback UI + state machine   |
+| independent audit service      |<-------->| authority bridge + private IPC|
 | content-addressed artifacts    |          | root one-shot guard + journal |
 | approval-gated signer          |          | RPIBOOT + UART + power relay  |
 | development YubiKey, PIV 9c    |          +---------------+---------------+
@@ -134,20 +134,22 @@ that emits the unchanged `boot.img`, `boot.sig`, reviewed `public.pem`, and
 public records. See the
 [signed-boot workflow](raspberry-pi-5-signed-boot-workflow.md).
 
-The repository now defines the exact 18-role signed-release manifest and the
-canonical directory-tree contract for RPIBOOT bundles, but it does not yet
-construct a complete signed release. The signed EEPROM image, fresh commit and
-owned recovery bundles, remaining acceptance artifacts, resolution of every
-manifest entry to reviewed immutable bytes, and live signature verification
-remain unfinished. Those artifacts must be produced and independently checked
-by a reviewed control-host release procedure before their immutable Nix-store
-paths are supplied to `lib.mkRpi5PhysicalLaneGuard`.
+The repository now constructs a complete, content-addressed signed-release
+publication with the exact 18-role manifest and canonical RPIBOOT directory
+trees. The offline finalizer resolves every role to immutable bytes, verifies
+the complete public signature and release-intent lineage, and reopens the
+published result. The physical lane factory accepts only that typed verified
+publication, takes its six bundle paths from the retained verified bundle-set
+provenance, and derives the four release expectations from the publication and
+manifest. Its checked fixture is synthetic: reviewed production bytes and
+live-token ceremony evidence must still be completed before an ownership
+commit.
 
-Likewise, the artifact builder produces the three images but no current
-component writes `boot.img`/`boot.sig`, `root-data.img`, or `root-hash.img` to
-the target NVMe. Staging and cold readback of those exact digests is a separate
-reviewed hardware step for this milestone. Do not infer that the lane guard or
-loopback UI performs it.
+The production-media factory derives a plan-specialized device stager and an
+independent verifier from that verified release and one exact target. They can
+write and cold-read the manifest-bound boot, root-data, and root-hash bytes, but
+the repository has not recorded that physical campaign. The lane guard and
+loopback UI still do not stage media themselves.
 
 ## Nix entry points
 
@@ -169,12 +171,16 @@ The public construction boundaries are:
 - provisioning-leaf `lib.mkRpi5VerifiedSignedBoot`, which consumes a public
   runtime signing result, verifies every binding and the Raspberry Pi
   signature, and emits a self-contained public bundle without key access;
-- provisioning-leaf `lib.mkRpi5PhysicalLaneGuard`, which requires immutable
-  store paths for every recovery/test bundle plus linker-fixed signed-release,
-  guard-package, compiled-artifact-set, customer-key, EEPROM, and boot-image
-  digests; and
+- provisioning-leaf `lib.mkRpi5PhysicalLaneGuard`, which accepts one typed
+  `mkRpi5VerifiedSignedRelease` publication, takes the six recovery/test bundle
+  paths from its verified bundle-set provenance, and derives signed-release,
+  customer-key, EEPROM, and boot-image expectations from its publication and
+  manifest during the build. It derives the guard-package and
+  compiled-artifact-set identities from the actual executable, paths, file
+  bytes, modes, sizes, and canonical directory trees; and
 - the `provisioning-signing-gate`, `provisioning-control`,
-  `provisioning-audit`, and `provisioning-lane-guard` NixOS modules.
+  `provisioning-audit`, `provisioning-authority-bridge`, and
+  `provisioning-lane-guard` NixOS modules.
 
 The repository contains one checked-in, public-only deployment instance for
 the explicitly sacrificial development prototype. It records the development
@@ -219,6 +225,16 @@ claim-scoped command. The audit service compares each append with the event's
 station and lane and limits reads to records for the authenticated pair. A
 valid but mismatched identity is forbidden before state can change.
 
+Plan approval uses a separate certificate identity:
+
+```text
+spiffe://kaiba.network/approver/<approver-id>
+```
+
+The control `record_approval` command and audit `plan_approval` append require
+that exact approver identity to match the recorded actor. Station credentials
+cannot approve, and approver credentials cannot invoke station/lane endpoints.
+
 Plain HTTP remains available only on an explicit IPv4 or IPv6 loopback address
 for local development, where there is deliberately no certificate identity to
 bind. It is not a deployment mode: the CLI rejects plaintext on a non-loopback
@@ -227,28 +243,35 @@ when the TLS listener itself is on loopback.
 
 ### Current live-station boundary
 
-`kaiba-provision-station` is currently a loopback UI and state-machine
+`kaiba-provision-station` remains an unprivileged loopback UI and state-machine
 foundation, not a mutation-capable orchestrator. It deliberately rejects
 `--enable-mutations`. The privileged lane guard is a separate, manually
-started one-shot service whose approved plan and request must be installed by
-root below `/var/lib/kaiba-provision-lane-guard` before each invocation. It
+started one-shot service. Root installs only an authority-free reviewed draft
+below `/var/lib/kaiba-provision-lane-guard`; the guard obtains the current
+executable plan/request pair from `kaiba-provision-authority-bridge` over its
+private Unix socket. The bridge authenticates the control and audit services
+with TLS 1.3, a fixed station/lane client certificate, and separate exclusive
+server trust roots. It double-reads control around the audit read and rejects a
+changed snapshot before binding the current operation. The lane guard then
 recomputes the domain-separated digest of every operation and of the ordered
-plan, and requires the plan's signed-release, guard-package,
-compiled-artifact-set, key, EEPROM, and boot-image digests to match the
-linker-fixed physical build before constructing the hardware adapter. The
-physical package can report those public linker values for a build-time wiring
-check. A value mismatch therefore fails closed, but the pending release adapter
-must still derive the guard-package and artifact-set values from actual
-path-and-content material. Those
-consistency checks do not make a root-authored plan authoritative: root can
-also construct a different plan and binary with matching digests.
+plan, reopens and hashes the actual guard executable and eight immutable
+artifact paths, and requires the plan's six-field release binding to match the
+derived result before constructing the hardware adapter. The physical package
+can print both the public binding and the complete canonical review material.
+A byte, path, mode, size, directory-tree, or release-expectation mismatch
+therefore fails closed; package and artifact-set digests are never accepted as
+opaque factory arguments.
 
 Do not run the HTTP station process as root or give it direct access to the
-lane-guard state directory or device nodes. Completing that bridge requires a
-dedicated authenticated IPC service that translates already-approved control
-and audit records into the guard's closed plan/request contract; the current
-live backend interface does not carry enough of those bindings to do so
-without weakening the privilege boundary.
+lane-guard state directory, bridge socket, or device nodes. The bridge exposes
+no browser endpoint, executable path, payload selector, hardware selector, or
+generic mutation request.
+
+The execute bridge intentionally rejects reconciliation mode. After an unknown
+result, claim reconstruction advances the fence and clears approval, while the
+original approval identity is not retained in the operation record. A separate
+authenticated reconciliation authority contract and the combined restart test
+remain required before an uncertain live mutation may resume.
 
 The live station uses the following order for every irreversible operation:
 
@@ -294,10 +317,10 @@ guard must observe target disappearance and the configured cold interval.
    alternate paths.
 5. Resolve and verify the complete signed bundle. Perform offline signature
    checks and an unfused `boot_ramdisk=1` compatibility boot.
-6. Through the separate reviewed NVMe procedure, write the exact approved
-   boot, root-data, and root-hash artifacts to their fixed partitions; cold
-   read them back and compare their digests. The current repository does not
-   implement this writer.
+6. Through the separate reviewed, plan-specialized NVMe stager, write the exact
+   approved boot, root-data, and root-hash artifacts to their fixed partitions;
+   cold-read them through the independent verifier and compare their complete
+   manifest-bound layout and digests.
 7. Approve the exact target, current fence epoch, plan, expected key hash, and
    ordered operation set. The development exception permits one person to use
    separate named operator and approver sessions; this is forbidden for a

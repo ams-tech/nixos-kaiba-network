@@ -19,10 +19,24 @@
         "evidence": []
       },
       {
+        "id": "authenticated-authority-bridge",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, and lane-guard contract revalidation fail closed without exposing physical selectors or a generic mutation primitive.",
+        "evidence": []
+      },
+      {
         "id": "media-staging-fixture",
         "system": "aarch64-linux",
         "status": "not-observed",
         "description": "Synthetic capsule-bound regular-file fixture validates FAT/GPT layout, staged extents, reopened readback, complete partition digests, dm-verity, and fail-closed tamper rejection without making hardware or enforcement claims.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-production-media-contract",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Complete software-only production-media contract binds the signed release, exact GPT/FAT/root/verity layout, plan-specialized writer, independent verifier, and canonical receipts without making hardware, cold-power, or security-enforcement claims.",
         "evidence": []
       },
       {
@@ -44,6 +58,34 @@
         "system": "aarch64-linux",
         "status": "not-observed",
         "description": "Pinned rpiboot host tool emits one bounded metadata object on stdout without creating a side file.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-eeprom-release-contract",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Pinned Raspberry Pi 5 EEPROM firmware and A/B-aware signing-tool sources match exact public provenance, digest, and mandatory boot_img_sha256 capability contracts without signing or hardware authority.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-eeprom-signing-contract",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Canonical release intent binds the exact boot, EEPROM, and owned-recovery signing inputs and the deterministic fresh-board EEPROM signing plan, result, and finalizer without device-mutation authority.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-rpiboot-bundle-set",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Owned-recovery signing, fresh/owned RPIBOOT trees, and deterministic negative/root-integrity fixtures are canonical, digest-bound, replay-verified, and explicitly carry no hardware-observation claim.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-signed-release-finalization",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Complete synthetic signed-release assembly verifies all public lineage, pinned fresh-EEPROM and owned-recovery replay, canonical RPIBOOT siblings, exact content-addressed publication, and fail-closed tamper rejection without live signing or hardware claims.",
         "evidence": []
       },
       {
@@ -75,10 +117,24 @@
         "evidence": []
       },
       {
+        "id": "authenticated-authority-bridge",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, and lane-guard contract revalidation fail closed without exposing physical selectors or a generic mutation primitive.",
+        "evidence": []
+      },
+      {
         "id": "media-staging-fixture",
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Synthetic capsule-bound regular-file fixture validates FAT/GPT layout, staged extents, reopened readback, complete partition digests, dm-verity, and fail-closed tamper rejection without making hardware or enforcement claims.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-production-media-contract",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Complete software-only production-media contract binds the signed release, exact GPT/FAT/root/verity layout, plan-specialized writer, independent verifier, and canonical receipts without making hardware, cold-power, or security-enforcement claims.",
         "evidence": []
       },
       {
@@ -100,6 +156,34 @@
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Pinned rpiboot host tool emits one bounded metadata object on stdout without creating a side file.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-eeprom-release-contract",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Pinned Raspberry Pi 5 EEPROM firmware and A/B-aware signing-tool sources match exact public provenance, digest, and mandatory boot_img_sha256 capability contracts without signing or hardware authority.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-eeprom-signing-contract",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Canonical release intent binds the exact boot, EEPROM, and owned-recovery signing inputs and the deterministic fresh-board EEPROM signing plan, result, and finalizer without device-mutation authority.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-rpiboot-bundle-set",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Owned-recovery signing, fresh/owned RPIBOOT trees, and deterministic negative/root-integrity fixtures are canonical, digest-bound, replay-verified, and explicitly carry no hardware-observation claim.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-signed-release-finalization",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Complete synthetic signed-release assembly verifies all public lineage, pinned fresh-EEPROM and owned-recovery replay, canonical RPIBOOT siblings, exact content-addressed publication, and fail-closed tamper rejection without live signing or hardware claims.",
         "evidence": []
       },
       {

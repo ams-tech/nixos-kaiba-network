@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	SignedReleaseManifestSchemaV1Alpha1 = "kaiba.provisioning.rpi5-signed-release-manifest/v1alpha1"
+	SignedReleaseManifestSchemaV1Alpha2 = "kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2"
 	SignedReleaseDeviceClassV1Alpha1    = "raspberry-pi-5-model-b-v1alpha1"
 )
 
@@ -42,12 +42,15 @@ type ReleaseArtifact struct {
 }
 
 // SignedReleaseManifest is the strict, complete, secret-free release contract
-// for the frozen Raspberry Pi 5 Model B development device class.
+// for the frozen Raspberry Pi 5 Model B development device class. Its release
+// intent digest binds the signed outputs to the authorization that requested
+// them.
 type SignedReleaseManifest struct {
 	SchemaVersion           string            `json:"schema_version"`
 	ReleaseID               string            `json:"release_id"`
 	DeviceClass             string            `json:"device_class"`
 	SourceRevision          string            `json:"source_revision"`
+	ReleaseIntentDigest     Digest            `json:"release_intent_digest"`
 	SigningPolicyDigest     Digest            `json:"signing_policy_digest"`
 	ExpectedCustomerKeyHash Digest            `json:"expected_customer_key_hash"`
 	Artifacts               []ReleaseArtifact `json:"artifacts"`
@@ -93,6 +96,7 @@ func SignedReleaseRoles() []ArtifactRole {
 func NewSignedReleaseManifest(
 	releaseID string,
 	sourceRevision string,
+	releaseIntentDigest Digest,
 	signingPolicyDigest Digest,
 	expectedCustomerKeyHash Digest,
 	artifacts []ReleaseArtifact,
@@ -102,10 +106,11 @@ func NewSignedReleaseManifest(
 		return canonicalArtifacts[i].Role < canonicalArtifacts[j].Role
 	})
 	manifest := SignedReleaseManifest{
-		SchemaVersion:           SignedReleaseManifestSchemaV1Alpha1,
+		SchemaVersion:           SignedReleaseManifestSchemaV1Alpha2,
 		ReleaseID:               releaseID,
 		DeviceClass:             SignedReleaseDeviceClassV1Alpha1,
 		SourceRevision:          sourceRevision,
+		ReleaseIntentDigest:     releaseIntentDigest,
 		SigningPolicyDigest:     signingPolicyDigest,
 		ExpectedCustomerKeyHash: expectedCustomerKeyHash,
 		Artifacts:               canonicalArtifacts,
@@ -142,7 +147,7 @@ func ParseSignedReleaseManifest(data []byte) (SignedReleaseManifest, error) {
 // Validate enforces the exact role set, canonical order, artifact kinds, and
 // every embedded directory-tree digest and size binding.
 func (m SignedReleaseManifest) Validate() error {
-	if m.SchemaVersion != SignedReleaseManifestSchemaV1Alpha1 {
+	if m.SchemaVersion != SignedReleaseManifestSchemaV1Alpha2 {
 		return fmt.Errorf("unsupported signed-release manifest schema_version %q", m.SchemaVersion)
 	}
 	if !identifierPattern.MatchString(m.ReleaseID) {
@@ -153,6 +158,9 @@ func (m SignedReleaseManifest) Validate() error {
 	}
 	if !sourceRevisionPattern.MatchString(m.SourceRevision) {
 		return errors.New("source_revision must contain exactly 40 or 64 lower-case hexadecimal characters")
+	}
+	if err := m.ReleaseIntentDigest.Validate(); err != nil {
+		return fmt.Errorf("release_intent_digest: %w", err)
 	}
 	if err := m.SigningPolicyDigest.Validate(); err != nil {
 		return fmt.Errorf("signing_policy_digest: %w", err)
@@ -249,7 +257,7 @@ func (m SignedReleaseManifest) Digest() (Digest, error) {
 		return "", err
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte("kaiba.provisioning.rpi5-signed-release-manifest.v1alpha1\x00"))
+	_, _ = hash.Write([]byte("kaiba.provisioning.rpi5-signed-release-manifest.v1alpha2\x00"))
 	_, _ = hash.Write(canonical)
 	return Digest("sha256:" + hex.EncodeToString(hash.Sum(nil))), nil
 }

@@ -29,7 +29,7 @@ func TestSignedReleaseManifestCanonicalDigestIsStable(t *testing.T) {
 	if firstDigest != secondDigest {
 		t.Fatalf("signed-release digests differ: %s != %s", firstDigest, secondDigest)
 	}
-	const want Digest = "sha256:9fa5c25434b916a3283216ab3b221bb41eb4d6aa5b813adccb917b1a783d39b8"
+	const want Digest = "sha256:ee712323f508f3961a6268045bd0aa793b6233e63b94b4adea9b385378528cad"
 	if firstDigest != want {
 		t.Fatalf("signed-release digest = %s, want golden %s", firstDigest, want)
 	}
@@ -38,7 +38,7 @@ func TestSignedReleaseManifestCanonicalDigestIsStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture, err := os.ReadFile("testdata/rpi5-signed-release-manifest-v1alpha1.json")
+	fixture, err := os.ReadFile("testdata/rpi5-signed-release-manifest-v1alpha2.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +61,22 @@ func TestSignedReleaseManifestCanonicalDigestIsStable(t *testing.T) {
 		if parsed.Artifacts[index].Role != role {
 			t.Fatalf("artifacts[%d].role = %q, want %q", index, parsed.Artifacts[index].Role, role)
 		}
+	}
+}
+
+func TestSignedReleaseManifestDigestBindsReleaseIntent(t *testing.T) {
+	manifest := newTestSignedReleaseManifest(t, testReleaseArtifacts(t))
+	first, err := manifest.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.ReleaseIntentDigest = Sum([]byte("different release intent"))
+	second, err := manifest.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("signed-release digest did not bind release_intent_digest: %s", first)
 	}
 }
 
@@ -255,6 +271,7 @@ func TestSignedReleaseManifestRejectsInvalidIdentityBindings(t *testing.T) {
 		{"device class", "device_class", func(value *SignedReleaseManifest) { value.DeviceClass = "raspberry-pi-5" }},
 		{"short revision", "source_revision", func(value *SignedReleaseManifest) { value.SourceRevision = strings.Repeat("a", 39) }},
 		{"uppercase revision", "source_revision", func(value *SignedReleaseManifest) { value.SourceRevision = strings.Repeat("A", 40) }},
+		{"release intent digest", "release_intent_digest", func(value *SignedReleaseManifest) { value.ReleaseIntentDigest = "sha256:no" }},
 		{"policy digest", "signing_policy_digest", func(value *SignedReleaseManifest) { value.SigningPolicyDigest = "sha256:no" }},
 		{"customer key hash", "expected_customer_key_hash", func(value *SignedReleaseManifest) { value.ExpectedCustomerKeyHash = "sha256:no" }},
 	}
@@ -282,6 +299,10 @@ func TestSignedReleaseManifestStrictJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := string(canonical)
+	v1alpha1, err := os.ReadFile("testdata/rpi5-signed-release-manifest-v1alpha1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name  string
 		input string
@@ -301,6 +322,21 @@ func TestSignedReleaseManifestStrictJSON(t *testing.T) {
 			"null field",
 			strings.Replace(valid, `"release_id":"release:rpi5:1"`, `"release_id":null`, 1),
 			"null",
+		},
+		{
+			"missing release-intent lineage",
+			strings.Replace(valid, `"release_intent_digest":"`+string(manifest.ReleaseIntentDigest)+`",`, "", 1),
+			"release_intent_digest",
+		},
+		{
+			"v1alpha1 schema with release-intent lineage",
+			strings.Replace(valid, SignedReleaseManifestSchemaV1Alpha2, "kaiba.provisioning.rpi5-signed-release-manifest/v1alpha1", 1),
+			"unsupported",
+		},
+		{
+			"v1alpha1 manifest without release-intent lineage",
+			string(v1alpha1),
+			"unsupported",
 		},
 		{
 			"unknown tree field",
@@ -383,10 +419,13 @@ func TestSignedReleaseArtifactRolesAreClosedAndNonSignable(t *testing.T) {
 			t.Fatalf("new release output role %q unexpectedly signable", role)
 		}
 	}
-	for _, role := range []ArtifactRole{RoleBootImage, RoleEEPROMConfig, RoleEEPROMBootsys, RoleOwnedRecoveryBootcode} {
+	for _, role := range []ArtifactRole{RoleBootImage, RoleEEPROMBootcode, RoleEEPROMConfig, RoleEEPROMBootsys, RoleOwnedRecoveryBootcode} {
 		if !role.Signable() {
 			t.Fatalf("existing signing-input role %q is no longer signable", role)
 		}
+	}
+	if slices.Contains(SignedReleaseRoles(), RoleEEPROMBootcode) {
+		t.Fatal("EEPROM bootcode signing input unexpectedly became a final signed-release role")
 	}
 }
 
@@ -430,6 +469,7 @@ func newTestSignedReleaseManifest(t *testing.T, artifacts []ReleaseArtifact) Sig
 	manifest, err := NewSignedReleaseManifest(
 		"release:rpi5:1",
 		testSourceRevision,
+		Sum([]byte("release intent")),
 		Sum([]byte("signing policy")),
 		Sum([]byte("customer key")),
 		artifacts,

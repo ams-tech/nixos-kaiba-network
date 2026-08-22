@@ -391,7 +391,16 @@ func TestSnapshotDirectoryTreeRejectsUnsafeFilesystemObjectsAndPaths(t *testing.
 		}
 	})
 	t.Run("socket", func(t *testing.T) {
-		root := newSnapshotRoot(t)
+		// sockaddr_un has a 108-byte path limit on Linux. Nix development
+		// shells can make testing.T's normal temporary root longer than that,
+		// so keep this socket-specific fixture deliberately short.
+		base, err := os.MkdirTemp("/tmp", "kbd-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(base) })
+		root := filepath.Join(base, "b")
+		mustMakeSnapshotDirectory(t, root, 0o750)
 		listener, err := net.Listen("unix", filepath.Join(root, "socket"))
 		if err != nil {
 			if errors.Is(err, syscall.EPERM) {

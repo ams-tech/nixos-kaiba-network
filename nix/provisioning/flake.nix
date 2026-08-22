@@ -27,6 +27,7 @@
       modules = {
         default = import ./modules;
         provisioning-audit = import ./modules/provisioning-audit.nix;
+        provisioning-authority-bridge = import ./modules/provisioning-authority-bridge.nix;
         provisioning-control = import ./modules/provisioning-control.nix;
         provisioning-lane-guard = import ./modules/provisioning-lane-guard.nix;
         provisioning-probe = import ./modules/provisioning-probe.nix;
@@ -66,6 +67,34 @@
           { system, ... }@args:
           (packagesFor system).mkRpi5BootSigningPlan (builtins.removeAttrs args [ "system" ]);
 
+        mkRpi5EEPROMRelease =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5EEPROMRelease (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5EEPROMReleaseSigningInputs =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5EEPROMReleaseSigningInputs (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5EEPROMSigningPlan =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5EEPROMSigningPlan (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5OwnedRecoverySigningPlan =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5OwnedRecoverySigningPlan (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5VerifiedRPIBootBundles =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5VerifiedRPIBootBundles (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5VerifiedSignedRelease =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5VerifiedSignedRelease (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5ReleaseIntent =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5ReleaseIntent (builtins.removeAttrs args [ "system" ]);
+
         mkDevelopmentYubiKeySigning =
           { system, ... }@args:
           (packagesFor system).mkDevelopmentYubiKeySigning (builtins.removeAttrs args [ "system" ]);
@@ -78,6 +107,14 @@
           { system, ... }@args:
           (packagesFor system).mkRpi5VerifiedSignedBoot (builtins.removeAttrs args [ "system" ]);
 
+        mkRpi5VerifiedSignedEEPROM =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5VerifiedSignedEEPROM (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5VerifiedOwnedRecovery =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5VerifiedOwnedRecovery (builtins.removeAttrs args [ "system" ]);
+
         mkRpi5VerifiedUnfusedCapsule =
           { system, ... }@args:
           (packagesFor system).mkRpi5VerifiedUnfusedCapsule (builtins.removeAttrs args [ "system" ]);
@@ -85,6 +122,10 @@
         mkRpi5MediaStagingFixture =
           { system, ... }@args:
           (packagesFor system).mkRpi5MediaStagingFixture (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5ProductionMedia =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5ProductionMedia (builtins.removeAttrs args [ "system" ]);
       };
 
       packages = forAllSystems (
@@ -96,25 +137,32 @@
         {
           default = built.provision;
           kaiba-provision-audit = built.audit;
+          kaiba-provision-authority-bridge = built.authorityBridge;
           kaiba-provision-control = built.control;
           kaiba-provision-integrated-rehearsal = built.integratedRehearsal;
           kaiba-provision-lane-guard = built.laneGuard;
-          kaiba-provision-media-stager = built.mediaStager;
+          kaiba-provision-media-contract = built.mediaContractTool;
           kaiba-provision = built.provision;
           kaiba-provision-rehearsal = built.rehearsal;
           kaiba-provision-signer-foundation = built.signerFoundation;
           kaiba-provision-signing-client-foundation = built.signingClientFoundation;
           kaiba-provision-signing-gate-foundation = built.signingGateFoundation;
           kaiba-provision-sign-boot = built.signedBootTool;
+          kaiba-provision-sign-eeprom = built.eepromSigningTool;
+          kaiba-provision-rpiboot-bundles = built.rpibootBundleTool;
+          kaiba-provision-finalize-release = built.signedReleaseTool;
           kaiba-provision-station = built.liveStation;
           kaiba-provision-station-demo = built.stationDemo;
           kaiba-provision-station-pages = built.stationPages;
           kaiba-provision-unfused-compat = built.unfusedCompat;
           kaiba-provision-unfused-evidence = built.unfusedEvidence;
+          kaiba-provision-unfused-runtime-record = built.unfusedRuntimeRecordTool;
           provisioning-suite = built.suite;
           provisioning-services = built.serviceSuite;
           provisioning-test-result = provisioning.provisioningTestResult;
+          rpi5-physical-lane-guard-fixture = provisioning.physicalLaneGuardFixture;
           rpi5-probe-bundle = built.rpi5ProbeBundle;
+          rpi5-eeprom-release = built.rpi5EEPROMRelease;
           kaiba-provision-yubikey-wrapper-foundation = built.yubiKeyWrapperFoundation;
         }
       );
@@ -133,9 +181,14 @@
           module-eval = provisioning.moduleEval;
           provisioning-test-result = provisioning.provisioningTestResult;
           rpi5-probe-bundle = provisioning.probeBundleIntegrity;
+          rpi5-eeprom-release = provisioning.eepromReleaseContract;
+          rpi5-eeprom-signing = provisioning.eepromSigningContract;
+          rpi5-rpiboot-bundles = provisioning.rpibootBundleContract;
+          rpi5-signed-release = provisioning.signedReleaseFinalizationContract;
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           secure-boot-artifacts = provisioning.secureBootArtifactContract;
           media-staging-fixture = provisioning.mediaStagingFixtureContract;
+          production-media-staging = provisioning.productionMediaStagingContract;
           signed-release-manifest = provisioning.signedReleaseManifestContract;
           signed-boot-plan = provisioning.signedBootPlanContract;
           unfused-capsule = provisioning.unfusedCapsuleContract;

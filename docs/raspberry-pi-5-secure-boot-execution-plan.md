@@ -79,15 +79,25 @@ The repository already contains useful foundations:
   rehearsal;
 - a pure normal-boot signing plan, linker-fixed approval-gated runtime adapter,
   canonical Raspberry Pi `boot.sig` codec, and pure offline signed-bundle
-  finalizer; and
+  finalizer;
+- a canonical cohort-scoped release intent that fixes five signing inputs and
+  all 18 required outputs before any signature exists;
+- v1alpha2 release-intent lineage through signing grants, requests, gate
+  receipts, the normal-boot plan and result, and the complete signed-release
+  manifest;
+- a public fresh-board EEPROM signing plan, approval-gated adapter, and offline
+  finalizer exercised only with synthetic/offline evidence; and
 - an isolated fixed-extent media-staging prototype, a deterministic synthetic
   outer FAT/GPT regular-file fixture, a signer-anchored capsule verifier, and an
   offline unfused record correlator that makes no hardware claim.
 
-The repository does not yet contain a complete signed-release adapter,
-production-complete GPT/FAT/dm-verity NVMe writer and verifier,
-mutation-capable station backend, authenticated control-to-guard transport, or
-a proven RPIBOOT-to-normal-boot lane transition.
+The repository now contains a complete offline signed-release assembler and
+Nix factory, but it does not contain a production release assembled from the
+reviewed live-token results. It also does not yet contain a production-complete
+GPT/FAT/dm-verity NVMe writer and verifier, mutation-capable station backend,
+authenticated control-to-guard transport, or a proven RPIBOOT-to-normal-boot
+lane transition. In particular, the EEPROM foundation is not a production
+signed EEPROM, owned-recovery signature, hardware write, or OTP result.
 
 ## Safety invariants
 
@@ -133,31 +143,50 @@ These rules apply to every work item and rehearsal:
 ### Non-fusing prototype checkpoint
 
 The in-progress statuses above reflect implementation, not milestone exit. The
-repository now has a signed four-role capsule verifier, a fixed-extent media
-stager with a regular-file fixture mode, a `mkRpi5MediaStagingFixture` factory,
-offline unfused record correlation, and a runnable software-only orchestrator.
-The media factory constructs an outer FAT containing exactly `config.txt`,
-`boot.img`, and `boot.sig`, plus deterministic GPT fixture metadata and a safe
-initializer/verifier. Its contract runs initialization, the stager's
-`fixture-dry-run`, `fixture-stage`, and `fixture-readback`, and final GPT/FAT and
-dm-verity verification against one regular file. The repository also exposes a
-clean-revision Pi 5 target, unsigned root/boot artifacts, a
-signer-profile-bound public signing plan, and a concrete release review that
-verifies the artifact digests,
-dm-verity tree, public key, and signer-policy binding without signing or
-hardware access. The orchestrator uses
+repository now has a signed four-role capsule verifier, the legacy fixed-extent
+regular-file rehearsal, a `mkRpi5MediaStagingFixture` factory, a complete
+software-only `mkRpi5ProductionMedia` contract, offline unfused record
+serialization, a complete offline signed-release assembler, and a runnable
+software-only orchestrator. The legacy fixture constructs an outer FAT
+containing exactly `config.txt`, `boot.img`, and `boot.sig`, plus deterministic
+GPT fixture metadata and a safe initializer/verifier. Its contract runs
+initialization, the stager's `fixture-dry-run`, `fixture-stage`, and
+`fixture-readback`, and final GPT/FAT and dm-verity verification against one
+regular file.
+
+The production-media factory instead consumes the complete content-addressed
+18-role release. It freezes one exact whole-device identity and prestate, a
+three-partition GPT, the six regions covering every target byte, an exact
+four-file FAT containing `boot.img`, `boot.sig`, `config.txt`, and
+`kaiba-media-binding.json`, root-data and root-hash partitions, zero padding and
+tail, and both GPT copies. It emits a linker-fixed device writer, a separate
+read-only verifier, and canonical stage, verification, manual cold-power, and
+final receipt contracts. The software check independently validates GPT, FAT,
+release/signature lineage, full-media digests, and dm-verity using a regular
+file; it does not perform the physical ceremony.
+
+The repository also exposes a clean-revision Pi 5 target, unsigned root/boot
+artifacts, a cohort-scoped release intent, a signer-profile-bound v1alpha2
+public signing plan, and a concrete release review that verifies the artifact digests,
+release-intent lineage, dm-verity tree, public key, and signer-policy binding
+without signing or hardware access. The orchestrator uses
 the real durable control and audit services, derives the closed seven-operation
 plan, verifies both approval and initial-intent audit records under a distinct
 rehearsal actor policy, reopens and revalidates persisted state, emits no
 executable lane request, and executes only the non-authoritative simulator.
 
 These pieces are packaged in separate capability closures and are described in
-the [non-fusing prototype runbook](non-fusing-secure-boot-prototype.md). They do
-not complete the full release role set, production GPT/FAT binding, device
-staging or cold-readback proof, authenticated service transport, qualified
-physical lane, or required failure matrix, and they cannot authorize SB-08. The
-synthetic fixture's plan and receipts bind only the three staged payload extents;
-they make no cold-power, hardware, EEPROM, OTP, or secure-boot-enforcement claim.
+the [non-fusing prototype runbook](non-fusing-secure-boot-prototype.md). A
+synthetic contract now resolves the full release role set, replays both EEPROM
+updater finalizers, and verifies and tampers the resulting content-addressed
+publication. It does not resolve those roles from reviewed live-token outputs,
+prove a physical device write or cold readback, provide authenticated power or
+UART capture, qualify the physical lane, or complete the required failure
+matrix, and it cannot authorize SB-08. The public EEPROM and production-media
+foundations establish software/offline file, updater, signature, lineage,
+layout, writer, verifier, and receipt contracts. None makes a cold-power,
+hardware-observation, EEPROM, recovery-signing, OTP, or secure-boot-enforcement
+claim.
 
 ## Workstream 1: close the qualified baseline
 
@@ -235,21 +264,65 @@ of shell history is not a release process.
 
 ### Required artifact roles
 
-The release manifest must require exactly the applicable complete role set,
-including:
+The release intent and v1alpha2 signed-release manifest require exactly these
+18 final roles in canonical order:
 
-- device profile and platform adapter;
-- boot public key;
-- EEPROM configuration and `bootsys` inputs;
-- signed EEPROM image;
-- normal `boot.img` and `boot.sig`;
-- persistent-root integrity metadata, root-data image, and root-hash-tree image;
-- fresh-board readback bundle;
-- fresh-board commit bundle;
-- owned-device readback bundle;
-- owned-device recovery bootcode and bundle; and
-- separate immutable negative-boot and root-integrity test bundles used by the
-  lane plan.
+```text
+boot_public_key
+device_profile
+platform_adapter
+root_integrity
+rpi5.boot_image
+rpi5.boot_signature
+rpi5.eeprom_bootsys
+rpi5.eeprom_config
+rpi5.fresh_commit_bundle
+rpi5.fresh_readback_bundle
+rpi5.negative_boot_bundle
+rpi5.owned_readback_bundle
+rpi5.owned_recovery_bootcode
+rpi5.owned_recovery_bundle
+rpi5.root_data_image
+rpi5.root_hash_tree_image
+rpi5.root_integrity_test_bundle
+rpi5.signed_eeprom_image
+```
+
+Before signatures exist, the v1alpha1 release intent separately fixes exactly
+these five signable input records in canonical order:
+
+```text
+rpi5.boot_image
+rpi5.eeprom_bootcode
+rpi5.eeprom_bootsys
+rpi5.eeprom_config
+rpi5.owned_recovery_bootcode
+```
+
+The EEPROM bootcode record is a signing preimage, not a final release role.
+The release cannot grow an implicit nineteenth output or substitute another
+signable role.
+
+### Cohort release authorization and per-device execution authorization
+
+The `cohort_release` intent authorizes signing only for the exact public source
+identity, unsigned-artifact and EEPROM-release digests, key and policy, five
+input digests and sizes, and 18 required outputs above. It deliberately omits
+transaction, station, lane, target, claim, fence, and expiry fields. Including
+those fields before signatures exist would recreate the cycle in which the
+device plan needs the final signed release while signing needs the device plan.
+The same reviewed cohort release may ultimately be staged on more than one
+separately approved board, but the intent itself cannot authorize any device
+execution.
+
+Every v1alpha2 signing grant, request, gate result, normal-boot plan, and
+normal-boot result carries the `release_intent_digest`. The v1alpha2 complete
+signed-release manifest also requires that digest and rejects v1alpha1
+manifests without lineage. Only after all 18 outputs are resolved and verified
+may its `signed_release_manifest_digest` enter a per-device lane plan and
+control approval. That later authorization binds the exact transaction,
+target, station and lane, current claim and fence, ordered operations, and
+expiry; it does not retroactively broaden the cohort signing grant.
 
 ### Deliverables
 
@@ -264,47 +337,108 @@ including:
   reject symlinks and special files, and produce a domain-separated digest over
   the canonical tree. A byte-file `digest` and `size` pair is not sufficient for
   the directories consumed by `rpiboot -d`.
+- [x] Define and test the canonical v1alpha1 `cohort_release` intent, including
+  all source, EEPROM-release, signer, and customer-key bindings plus the exact
+  five signing inputs and 18 required output roles.
+- [x] Carry and validate `release_intent_digest` through the v1alpha2 signing
+  grant, request, result, gate response, normal-boot plan and result, and
+  v1alpha2 signed-release manifest. Older signed-boot and signed-release
+  records without lineage fail closed.
+- [x] Implement the bounded public fresh-board EEPROM signing plan, adapter,
+  result, and offline finalizer foundation for the pinned `-f` workflow and
+  synthetic fixtures. This completed item is a contract/tooling foundation,
+  not the production EEPROM deliverable below.
+- [x] Implement the separately authorized owned-device recovery plan and
+  result, one-new-request pinned `-fr` adapter, offline replay finalizer, and
+  canonical fresh/owned RPIBOOT bundle-set builder. The negative recovery and
+  root-integrity trees are deterministic test inputs and explicitly record
+  `hardware_observed=false`; this software foundation is not a live-token
+  signature or board observation.
+- [x] Implement the strict offline complete-release assembler,
+  `mkRpi5VerifiedSignedRelease` factory, publication schema, and
+  content-addressed no-replace layout. The focused synthetic contract builds
+  all 18 roles from one release intent and one canonical RPIBOOT bundle-set,
+  requires linker-pinned EEPROM and owned-recovery replay, reopens the result,
+  and rejects signature, publication, object, and unexpected-entry tampering.
 
-The repository now defines a versioned signed-release contract that requires
-the exact 18-role Raspberry Pi 5 artifact set. Its RPIBOOT directory-tree
-contract sorts canonical relative paths, binds type, mode, size, and content
-digest, and rejects symbolic links and special files. These contracts and
-their synthetic tests do not assemble a real release, resolve the declared
-roles to reviewed immutable production bytes, or verify live release
-signatures. SB-03 therefore remains in progress.
+The repository now defines a v1alpha2 signed-release contract that requires
+the exact 18-role Raspberry Pi 5 artifact set and its cohort release-intent
+lineage. Its RPIBOOT directory-tree contract sorts canonical relative paths,
+binds type, mode, size, and content digest, and rejects symbolic links and
+special files. The offline assembler independently verifies the boot, EEPROM,
+owned-recovery, root-integrity, and canonical RPIBOOT boundaries;
+deterministically replays fresh EEPROM and owned-recovery finalization; and
+publishes immutable objects, trees, lineage records, and the complete manifest
+under digest-derived paths.
+Its synthetic test assembles and tampers a complete fixture, but it does not
+supply reviewed production bytes or verify live-token ceremony evidence. SB-03
+therefore remains in progress.
 
 - [ ] Produce the signed EEPROM image with the pinned firmware, configuration,
   signing tools, public key, and customer counter-signature.
-- [ ] Pin an EEPROM release that emits the signed boot-image SHA-256
-  device-tree property. Absence of `boot_img_sha256` is a preflight failure for
-  this target, not an optional capability downgrade.
-- [x] Implement the non-mutating normal-boot signing slice: immutable public
-  plan, fixed approval-gated adapter, canonical `boot.sig`, policy/key/image
-  binding, offline verification, and public Nix bundle finalization.
+- [x] Pin an EEPROM release with upstream-declared support for the signed
+  boot-image SHA-256 device-tree property. Absence of `boot_img_sha256` on the
+  target is a preflight failure, not an optional capability downgrade.
+
+The public EEPROM contract pins rpi-eeprom tag
+[`v2026.05.17-2711-0138c0`][pinned EEPROM source tag] at commit
+[`05d94be4554ce44a057bfce8d0dd37d951703dab`][pinned EEPROM source commit]
+and selects the default Pi 5 `pieeprom-2026-05-26.bin`. The required
+`boot_img_sha256` capability entered upstream at commit
+[`7918c84b4b9d7695c3b734e628139dd78b14a6b3`][boot-image-hash capability commit].
+The recovery payload is independently pinned from
+[`firmware-2712/latest/recovery.bin`][pinned Pi 5 recovery payload]; the manifest
+records both upstream paths and channels so a reproducer cannot substitute
+`default/recovery.bin`.
+The A/B-aware signing-tool workflow is pinned at usbboot commit
+[`42ca50932f67f4571951a11da3c3161561cb49c2`][pinned A/B signing workflow],
+including the `bootsys` signing feature introduced by
+[`08d4060ecfd85d402d2134572fe1e11d8b1b2dc8`][A/B bootsys signing feature].
+The workflow's rpi-eeprom submodule is separately attributed to
+[rpi-eeprom commit `25f837ab8009a643ed85b9aad94d911baddaf0c4`][EEPROM helper compatibility commit];
+the selected release contains byte-identical helper files.
+This proves public source, digest, and capability contracts only. Actual
+hardware emission of the property remains a cold-boot gate, and the signed
+EEPROM deliverable above remains incomplete.
+
+The public EEPROM foundation narrows fresh signing to `-f` and owned recovery
+to a separately authorized `-fr` plan. Owned recovery makes exactly one new
+gate request, reuses the three independently verified fresh-EEPROM signatures,
+and requires the replayed EEPROM image and update metadata to remain
+byte-identical. The canonical bundle-set finalizer creates exact fresh commit,
+fresh and owned readback, owned recovery, unauthorized-recovery, and
+root-integrity fixture trees. It binds every path, mode, size, and digest and
+keeps `program_pubkey=1` confined to the fresh commit tree. Its current
+evidence remains synthetic/offline: it does not establish production token
+outputs, write EEPROM or target media, enter a hardware lane, change OTP, or
+observe a board.
+
+- [x] Implement the non-mutating normal-boot signing slice: immutable v1alpha2
+  public plan and result, fixed approval-gated adapter, canonical `boot.sig`,
+  release-intent/policy/key/image binding, offline verification, and public Nix
+  bundle finalization.
 - [ ] Produce and verify the detached signature for the exact normal
   release-candidate `boot.img` with the reviewed live development token and
   retain its gate receipt as private operational evidence.
-- [ ] Produce the fresh-board commit bundle for a hash-zero BCM2712 board. Its
-  recovery program must follow the vendor's fresh-board signing rules.
-- [ ] Produce the separately customer-counter-signed owned-device readback and
-  recovery bundles before the ownership commit.
+- [ ] Produce the production fresh-board commit bundle for a hash-zero BCM2712
+  board from reviewed live-token outputs. The software builder now enforces
+  the vendor's fresh-board signing rules and exact tree layout.
+- [ ] Produce the production customer-counter-signed owned-device readback and
+  recovery bundles before the ownership commit. The separate plan, one-request
+  adapter, replay finalizer, and bundle layouts are implemented; live signing
+  evidence is still required.
 - [ ] Produce narrow, deterministic test artifacts for altered image, altered
   signature, wrong key, unsigned and alternate boot sources, unauthorized
   recovery, and persistent-root tampering. Do not treat one generic marker as
   proof that every required source and failure mode was exercised.
 - [ ] Resolve every manifest entry to immutable bytes and verify its size and
   SHA-256 digest before approval.
-- [ ] Split release authorization from execution-plan authorization to avoid a
-  signing cycle:
-  1. compute a `release_intent_digest` over the canonical unsigned inputs,
-     required output roles, signing policy, and applicable transaction, target,
-     and fence context;
-  2. bind every signing grant and receipt to that release intent;
-  3. assemble and verify the signed outputs, then compute the final
-     `signed_release_manifest_digest`; and
-  4. only then compute the lane execution-plan digest that binds the final
-     signed release.
-  Do not reuse one ambiguous `plan_digest` before and after signatures exist.
+- [ ] Exercise the completed authorization-lineage foundation for one real
+  release: issue independently reviewed cohort grants for every exact signing
+  input, authenticate and retain their live gate receipts, assemble and verify
+  all 18 outputs, compute the final `signed_release_manifest_digest`, and only
+  then authorize a per-device lane plan. Do not reuse one ambiguous
+  `plan_digest` before and after signatures exist.
 - [ ] Verify every signature offline against the reviewed development public
   key and independently inspect the complete boot-image allowlist and size.
 - [ ] Scan every artifact for signing material, shared enrollment secrets,
@@ -312,6 +446,9 @@ signatures. SB-03 therefore remains in progress.
   capability.
 - [ ] Store the final artifacts at immutable content-addressed paths and record
   the exact source revision and tool versions.
+
+See [owned recovery and RPIBOOT bundles] for the implemented public workflow,
+the exact six-directory set, and its software-evidence boundary.
 
 ### Exit criteria
 
@@ -321,41 +458,56 @@ Two independent verification paths agree on every digest and signature.
 
 ## Workstream 4: stage and verify target NVMe
 
-The repository now has a software-only regular-file fixture for the proposed
-three-partition shape. It deterministically constructs and inspects primary and
-backup GPT metadata, the exact three-file outer FAT, the staged extent digests,
-and the dm-verity pair by running the real fixture-mode stager sequence. This is
-a synthetic contract test, not a frozen sacrificial-device layout or staging
-receipt: GPT bytes are not bound by the generic staging plan, no block device or
-power boundary is involved, and no hardware or one-time setting is observed.
-Every SB-04 deliverable below therefore remains separately gated.
+The repository now has both the legacy three-extent regular-file fixture and a
+complete software definition for production media. The production contract
+binds a complete signed release, one exact whole-device identity and prestate,
+every byte of the final GPT/FAT/root/verity layout, the plan-specialized writer,
+the independent verifier, and the canonical receipt chain. Its deterministic
+regular-file build and tamper tests cross no block-device or power boundary and
+observe no hardware or one-time setting. SB-04 therefore remains in progress
+until the unchecked physical gates below are completed.
 
 ### Deliverables
 
-- [ ] Define the exact GPT or fixed-partition layout, device selectors, expected
+- [x] Define the exact GPT or fixed-partition layout, device selectors, expected
   sizes, filesystem roles, and overwrite protections for the sacrificial
   target's NVMe device.
-- [ ] Select the whole NVMe only through an approved `/dev/disk/by-id` path and
-  reconcile its serial, model, capacity, existing partition table, and
+- [x] Require selection of the whole NVMe only through an approved
+  `/dev/disk/by-id` path and reconcile its serial, model, capacity, existing
+  partition table, and
   transaction binding immediately before staging.
 - [x] Implement a staging tool or frozen procedure that refuses ambiguous,
   mounted, unexpected, or system block devices and never accepts a partition
   selector where the whole device is required, or the reverse.
-- [ ] Freeze the exact layout: a boot FAT containing only the approved
-  `boot.img`, `boot.sig`, and explicitly allowed metadata, plus fixed raw
-  root-data and dm-verity hash-tree partitions.
+- [x] Freeze the exact layout: primary and backup GPT, a canonical boot FAT
+  containing exactly `boot.img`, `boot.sig`, `config.txt`, and
+  `kaiba-media-binding.json`, fixed raw root-data and dm-verity hash-tree
+  partitions, their zero padding, and the complete zero tail.
+- [x] Implement a plan-specialized writer with a fixed source closure,
+  full-prestate verification, explicit GPT invalidation/commit ordering,
+  durability barriers, complete reopened readback, and no target override,
+  force, retry, or fixture switch.
+- [x] Implement a separate read-only verifier that checks the complete media
+  digest, GPT CRCs and semantics, canonical FAT bytes and payloads, partition
+  padding and tail, signed-release and signature lineage, and direct
+  `veritysetup verify` over independently resolved partitions.
+- [x] Define canonical stage, independent-verification, manual cold-power, and
+  final staging receipts bound to the transaction, target facts, signed-release
+  manifest, layout, complete-media digest, attachment identities, and prior
+  receipt digests. Manual power evidence remains explicitly unauthenticated and
+  the final receipt makes no hardware or enforcement claim.
 - [ ] Write the approved `boot.img`, `boot.sig`, root-data image, and dm-verity
-  hash image to their fixed destinations.
+  hash image, canonical FAT, and GPT to their fixed destinations on the reviewed
+  sacrificial device.
 - [ ] Remove power, cold-read the staged bytes through an independent path, and
   compare their digests with the approved manifest.
 - [ ] Flush all writes, remove power, re-enumerate the same by-id device, verify
   the GPT and boot-FAT allowlist, read the exact approved byte lengths, recompute
   every SHA-256 digest, and run `veritysetup verify` over the staged root-data
   and hash-tree pair.
-- [ ] Produce a canonical staging receipt bound to the transaction, target,
-  by-id device facts, final signed-release manifest, partition layout, byte
-  lengths, digests, verity result, and cold-readback observation. Approval of
-  the irreversible plan occurs only after this receipt exists.
+- [ ] Produce and independently review the physical instance of the canonical
+  receipt chain, including the manual cold-power observation. The software
+  receipt definitions and finalizer alone do not satisfy this gate.
 - [ ] Boot the same capsule on an unfused board with `boot_ramdisk=1` and prove
   that the kernel, initramfs, dm-verity mapping, and pre-enrollment runtime work.
 - [ ] Confirm that the pre-enrollment runtime contains public trust and policy
@@ -391,12 +543,13 @@ strings and that no shortened campaign can produce `security_applied`.
   Every mutation must change the corresponding digest or fail canonical
   decoding. Golden material also pins JSON escaping for control characters,
   HTML-sensitive characters, backslashes, quotes, and non-ASCII text.
-- [ ] Authenticate the excluded `{plan_digest, approval_id, intent_receipt,
+- [x] Authenticate the excluded `{plan_digest, approval_id, intent_receipt,
   intent_sequence}` execution envelope against its independent authorities.
-  The compiler can load its opaque bound plan into a guard and emits only the
-  request for the current durable intent. The lane rejects a request-only
-  change, but coordinated root reconstruction of both plan and request remains
-  possible until the authenticated bridge exists.
+  The authenticated bridge double-reads the control transaction around the
+  independent audit record, rejects a changed snapshot, and passes only the
+  reconstructed current plan/request pair through its private Unix socket. The
+  compiler and lane both validate that pair; a root-edited draft cannot replace
+  the independently approved digest or durable intent receipt.
 
 The release-bound `v1alpha3` digest contract serializes fixed-order JSON
 structs without whitespace. It deliberately supersedes the earlier pre-release
@@ -441,12 +594,14 @@ not be replayed through the new guard.
   approval, require its manifest and key hashes to match the transaction, and
   require an exact match with the linker-fixed physical guard before
   hardware-adapter construction.
-- [ ] Define and independently derive the compiled artifact-set and guard
+- [x] Define and independently derive the compiled artifact-set and guard
   package digests from canonical, reviewed path-and-content-digest material.
-  The current factory embeds, reports, and enforces declared digest values, but
-  does not prove that they describe its actual closure or bundle bytes. The
-  complete signed-release adapter must derive those values rather than accept
-  an opaque declaration; SB-05 remains incomplete until it does.
+  The compiled identity covers exactly patched `rpiboot`, `gpioset`, and the
+  six closed bundle roles. The acyclic guard-package identity covers the actual
+  guard executable, that compiled identity, and the four release expectations.
+  Production validation reopens every canonical Nix-store path, rejects
+  symlinks and special files, and hashes file bytes or canonical directory-tree
+  material; neither digest is accepted from a caller.
 - [x] Require the development operation sequence to contain, in order:
   1. `program_customer_key_and_eeprom`;
   2. `cold_power_cycle`, including complete power removal and signed cold boot;
@@ -461,20 +616,37 @@ not be replayed through the new guard.
 - [x] Change the `security_applied` transition so it requires successful,
   authoritative evidence for the policy-defined complete sequence, not merely
   every operation in an arbitrary approved subset.
-- [ ] Implement a dedicated authenticated IPC or capability bridge that
+- [x] Implement a dedicated authenticated IPC or capability bridge that
   converts current control and audit records into the lane guard's closed
   `Plan` and `ExecuteRequest` contracts.
-- [ ] Keep the HTTP station unprivileged. The bridge must not expose executable
+- [x] Keep the HTTP station unprivileged. The bridge must not expose executable
   paths, bundle selection, device selectors, GPIO selectors, or a generic
   mutation primitive.
-- [ ] Verify the control identity, active claim, fence epoch, approval,
+- [x] Verify the control identity, active claim, fence epoch, approval,
   remaining lease, durable audit receipt, target fingerprint, operation order,
   and idempotency key immediately before every guarded operation.
 - [ ] Add combined tests that exercise control, audit, bridge, lane guard,
   physical-adapter state, restart, and reconciliation together rather than
   substituting fake hardware at every boundary.
 
-The new `plancompiler` closes the in-process conversion boundary: it derives
+The `kaiba-provision-authority-bridge` now closes the execute-side conversion
+boundary. It uses a station/lane client certificate and separate exclusive
+server trust roots to read the control transaction twice around one audit read,
+rejects any changed snapshot, reconstructs the two durable audit receipts, and
+passes the result through `plancompiler`. A group-restricted mode-0660 Unix
+socket in a mode-0750 bridge-owned directory emits only the paired current
+`Plan` and `ExecuteRequest`; both its client and the lane guard revalidate that pair. Requests cannot carry executable paths,
+bundle or device selectors, GPIO/UART values, or an operation selector. The
+one-shot guard must obtain fresh authority again after every successful
+operation.
+
+Approval provenance is independent of that station identity. Under mutual TLS,
+`record_approval` and `plan_approval` require exactly one canonical
+`spiffe://kaiba.network/approver/<approver-id>` certificate identity matching
+the recorded approver. Station/lane credentials are rejected at those approval
+endpoints, and approver credentials are rejected at station endpoints.
+
+The `plancompiler` derives
 the exact operation classes, state chain, operation digests, and plan digest;
 requires the all-zero fresh prestate and release-bound owned powered-off
 poststate; and validates the persisted transaction, active claim, target,
@@ -483,8 +655,8 @@ record before emitting exactly the one request backed by that pending intent.
 A successful operation must be recorded and a fresh per-operation intent bound
 before the next request can be emitted. The integrated software rehearsal uses
 a separate verifier that covers durable restart but cannot return a lane plan
-or request. The compiler is not yet the authenticated IPC transport in the
-unchecked items above and is not wired to physical execution.
+or request. The bridge is wired to physical execution, but the combined
+real-adapter restart/reconciliation test remains deliberately unchecked.
 
 Cold restart after a mutation claim expires or transfers is also still a
 deliberate blocker. Claim reconstruction advances the fence and clears the old
@@ -496,15 +668,13 @@ mutation can rely on post-restart reconciliation.
 
 ### Manual boundary limitation
 
-Root-installed plan and request JSON may be used for non-mutating development
-and failure rehearsal, but it cannot satisfy SB-05 or authorize SB-08. A root
-operator can construct a different self-consistent plan, recompute its content
-digests, and invent approval-envelope identifiers. The lane guard now detects
-stale or forged digest claims, but a digest proves consistency rather than
-authorization. The authenticated bridge and an independently approved digest
-are therefore required before a real ownership commit. Any separate experiment
-that accepts root as the approval authority is outside this plan and must not
-claim its milestones or terminal state.
+The mutation-capable lane guard no longer accepts root-installed executable
+plan or request JSON. Root installs only the authority-free draft reviewed for
+approval; changing it changes the plan digest, and the bridge rejects it unless
+the current independently authenticated approval and durable audit intent bind
+that exact digest. Root-authored executable envelopes remain valid only in
+separate non-mutating test harnesses and cannot satisfy SB-05 or authorize
+SB-08.
 
 ### Exit criteria
 
@@ -632,7 +802,8 @@ It must contain:
 - the exact clean source revision and successful CI run identifiers;
 - the station system closure and configuration digests;
 - target inventory binding and pre-commit fingerprint;
-- the complete signed manifest and independent verification record;
+- the cohort release intent, authenticated signing receipts, complete v1alpha2
+  signed manifest, and independent verification record;
 - the development signer identity and expected customer-key hash;
 - the expected EEPROM and boot-image digests;
 - the exact NVMe staging and cold-readback evidence;
@@ -697,7 +868,8 @@ only.
    claim, and bind the fixed station and lane.
 3. Re-establish the fresh-board observation and exact target continuity, then
    close every deferred baseline check.
-4. Verify the complete signed manifest and all artifact bytes and signatures.
+4. Verify the cohort release intent, its signing-receipt lineage, the complete
+   v1alpha2 signed manifest, and all artifact bytes and signatures.
 5. Stage NVMe, remove power, and reconcile the cold-readback digests.
 6. Complete the unfused compatibility boot and return the same target to the
    approved fresh prestate.
@@ -800,6 +972,9 @@ plan are:
 
 - the [signed-release manifest contract], [secure-boot bundle manifest], and
   [artifact-role vocabulary];
+- the [signed-release assembler] and [signed-release Nix factory];
+- the [release-intent contract], [signed-boot lineage contract], and
+  [EEPROM signing foundation];
 - the [lane-guard plan contract];
 - the [control-plane terminal workflow];
 - the [physical Pi 5 adapter];
@@ -836,9 +1011,22 @@ path must continue to reject `enrollment_ready`.
 [live provisioning runbook]: ./raspberry-pi-5-live-provisioning.md
 [Pi 5 provisioning-probe runbook]: ./raspberry-pi-5-provisioning-probe.md
 [qualification record]: ../tests/provisioning/evidence/sacrificial-pi-5.json
+[pinned EEPROM source tag]: https://github.com/raspberrypi/rpi-eeprom/releases/tag/v2026.05.17-2711-0138c0
+[pinned EEPROM source commit]: https://github.com/raspberrypi/rpi-eeprom/commit/05d94be4554ce44a057bfce8d0dd37d951703dab
+[pinned Pi 5 recovery payload]: https://github.com/raspberrypi/rpi-eeprom/blob/05d94be4554ce44a057bfce8d0dd37d951703dab/firmware-2712/latest/recovery.bin
+[boot-image-hash capability commit]: https://github.com/raspberrypi/rpi-eeprom/commit/7918c84b4b9d7695c3b734e628139dd78b14a6b3
+[pinned A/B signing workflow]: https://github.com/raspberrypi/usbboot/commit/42ca50932f67f4571951a11da3c3161561cb49c2
+[A/B bootsys signing feature]: https://github.com/raspberrypi/usbboot/commit/08d4060ecfd85d402d2134572fe1e11d8b1b2dc8
+[EEPROM helper compatibility commit]: https://github.com/raspberrypi/rpi-eeprom/commit/25f837ab8009a643ed85b9aad94d911baddaf0c4
 [signed-release manifest contract]: ../provisioning/internal/provisioning/bundle/release.go
+[signed-release assembler]: ../provisioning/internal/provisioning/signedrelease/verify.go
+[signed-release Nix factory]: ../nix/provisioning/signed-release.nix
 [secure-boot bundle manifest]: ../provisioning/internal/provisioning/bundle/manifest.go
 [artifact-role vocabulary]: ../provisioning/internal/provisioning/bundle/role.go
+[release-intent contract]: ../provisioning/internal/provisioning/releaseintent/release_intent.go
+[signed-boot lineage contract]: ../provisioning/internal/provisioning/signedboot/types.go
+[EEPROM signing foundation]: ../provisioning/internal/provisioning/eepromsigning/types.go
+[owned recovery and RPIBOOT bundles]: raspberry-pi-5-rpiboot-bundles.md
 [lane-guard plan contract]: ../provisioning/internal/provisioning/laneguard/contracts.go
 [control-plane terminal workflow]: ../provisioning/internal/provisioning/controlplane/workflow.go
 [physical Pi 5 adapter]: ../provisioning/internal/provisioning/physicalrpi5/adapter.go

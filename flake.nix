@@ -89,8 +89,8 @@
           expectedCustomerKeyHash,
           bootImageSizeMiB ? 96,
           bootOrderPolicy ? "nvme-only",
-          dataDevice ? "/dev/nvme0n1p2",
-          hashDevice ? "/dev/nvme0n1p3",
+          rootDataPartitionGUID ? "bdd5be20-f7ea-56e7-ae90-4465ae950596",
+          rootHashPartitionGUID ? "62616022-71fb-5036-8cc4-b7949cc6e52c",
           sourceRevision ? defaultTargetSourceRevision,
         }:
         let
@@ -185,12 +185,12 @@
               bootCommandLinePath
               bootImageSizeMiB
               bootOrderPolicy
-              dataDevice
               expectedCustomerKeyHash
               firmwareAllowlist
               firmwareTree
-              hashDevice
               rootImage
+              rootDataPartitionGUID
+              rootHashPartitionGUID
               sourceRevision
               ;
           };
@@ -202,6 +202,8 @@
             firmwareTree
             nixosSystem
             rootImage
+            rootDataPartitionGUID
+            rootHashPartitionGUID
             unsignedArtifacts
             ;
           system = targetConfig.system.build.toplevel;
@@ -290,6 +292,7 @@
           ;
         inherit (provisioning.nixosModules)
           provisioning-audit
+          provisioning-authority-bridge
           provisioning-control
           provisioning-lane-guard
           provisioning-probe
@@ -322,27 +325,34 @@
             ;
           inherit (provisioning.packages.${system})
             kaiba-provision-audit
+            kaiba-provision-authority-bridge
             kaiba-provision-control
             kaiba-provision-integrated-rehearsal
             kaiba-provision-lane-guard
-            kaiba-provision-media-stager
+            kaiba-provision-media-contract
             kaiba-provision
             kaiba-provision-rehearsal
             kaiba-provision-signer-foundation
             kaiba-provision-signing-client-foundation
             kaiba-provision-signing-gate-foundation
+            kaiba-provision-finalize-release
             kaiba-provision-sign-boot
+            kaiba-provision-sign-eeprom
             kaiba-provision-station
             kaiba-provision-station-demo
             kaiba-provision-station-pages
             kaiba-provision-unfused-compat
             kaiba-provision-unfused-evidence
+            kaiba-provision-unfused-runtime-record
             provisioning-test-result
             kaiba-provision-yubikey-wrapper-foundation
             ;
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           development-signing = developmentSigning.signing;
+          rpi5-prototype-eeprom-signing-inputs = rpi5PrototypeRelease.eepromSigningInputs;
+          rpi5-prototype-eeprom-signing-plan = rpi5PrototypeRelease.eepromSigningPlan;
+          rpi5-prototype-release-intent = rpi5PrototypeRelease.releaseIntent;
           rpi5-prototype-release-review = rpi5PrototypeRelease.review;
           rpi5-prototype-signing-plan = rpi5PrototypeRelease.signingPlan;
           inherit (dns.packages.${system})
@@ -366,27 +376,12 @@
         let
           pkgs = import nixpkgs { inherit system; };
           developmentSigning = developmentSigningFor system;
-          laneGuardFixtureBundle = "${provisioning.packages.${system}.rpi5-probe-bundle}/bundle";
-          laneGuardFixture = provisioning.lib.mkRpi5PhysicalLaneGuard {
-            inherit system;
-            name = "kaiba-rpi5-physical-lane-guard-module-fixture";
-            compiledArtifactSetDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-            expectedBootImageDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-            expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-            expectedEEPROMHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-            freshCommitBundle = laneGuardFixtureBundle;
-            freshReadbackBundle = laneGuardFixtureBundle;
-            negativeBootBundle = laneGuardFixtureBundle;
-            ownedReadbackBundle = laneGuardFixtureBundle;
-            ownedRecoveryBundle = laneGuardFixtureBundle;
-            rootIntegrityBundle = laneGuardFixtureBundle;
-            laneGuardPackageDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-            signedReleaseManifestDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-          };
+          laneGuardFixture = provisioning.packages.${system}.rpi5-physical-lane-guard-fixture;
           moduleEval = import ./tests/module-eval.nix {
             inherit pkgs lib;
             kaibaPackage = dns.packages.${system}.dns-suite;
             kaibaAuditPackage = provisioning.packages.${system}.kaiba-provision-audit;
+            kaibaAuthorityBridgePackage = provisioning.packages.${system}.kaiba-provision-authority-bridge;
             kaibaControlPackage = provisioning.packages.${system}.kaiba-provision-control;
             kaibaLaneGuardPackage = laneGuardFixture;
             kaibaProvisionPackage = provisioning.packages.${system}.kaiba-provision;
@@ -405,9 +400,11 @@
           rpiboot-metadata-stdout = provisioning.checks.${system}.rpiboot-metadata-stdout;
           rpi5-unfused-capsule = provisioning.checks.${system}.unfused-capsule;
           rpi5-media-staging-fixture = provisioning.checks.${system}.media-staging-fixture;
+          rpi5-production-media-staging = provisioning.checks.${system}.production-media-staging;
           rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
           secure-boot-artifacts = provisioning.checks.${system}.secure-boot-artifacts;
           rpi5-signed-release-manifest = provisioning.checks.${system}.signed-release-manifest;
+          rpi5-signed-release = provisioning.checks.${system}.rpi5-signed-release;
           signed-boot-plan = provisioning.checks.${system}.signed-boot-plan;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"

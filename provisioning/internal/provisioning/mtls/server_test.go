@@ -36,6 +36,63 @@ func TestMutualTLSIdentityPolicyBindsExactStationAndLaneURI(t *testing.T) {
 	}
 }
 
+func TestMutualTLSIdentityPolicyBindsExactApproverURI(t *testing.T) {
+	policy := MutualTLSIdentityPolicy()
+	matching := requestWithVerifiedIdentity(t, "ignored-common-name", "spiffe://kaiba.network/approver/approver-1")
+	if err := policy.AuthorizeApprover(matching, "approver-1"); err != nil {
+		t.Fatalf("matching approver identity failed: %v", err)
+	}
+	identity, err := policy.AuthenticateApprover(matching)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity != (ApproverIdentity{ApproverID: "approver-1"}) {
+		t.Fatalf("identity = %#v", identity)
+	}
+	if err := policy.Authorize(matching, "station-1", "lane-1"); !errors.Is(err, ErrClientIdentity) {
+		t.Fatalf("approver identity authorized as station/lane: %v", err)
+	}
+}
+
+func TestMutualTLSApproverPolicyRejectsStationMismatchAndNoncanonicalSAN(t *testing.T) {
+	policy := MutualTLSIdentityPolicy()
+	tests := []struct {
+		name    string
+		request *http.Request
+		want    error
+	}{
+		{
+			name:    "station identity is not an approver",
+			request: requestWithVerifiedIdentity(t, "ignored", "spiffe://kaiba.network/station/station-1/lane/lane-1"),
+			want:    ErrClientIdentity,
+		},
+		{
+			name:    "mismatched approver",
+			request: requestWithVerifiedIdentity(t, "ignored", "spiffe://kaiba.network/approver/approver-2"),
+			want:    ErrClientIdentityMismatch,
+		},
+		{
+			name:    "noncanonical approver URI",
+			request: requestWithVerifiedIdentity(t, "ignored", "spiffe://kaiba.network/approver/approver-1?role=admin"),
+			want:    ErrClientIdentity,
+		},
+		{
+			name: "ambiguous approver URI SANs",
+			request: requestWithVerifiedIdentity(t, "ignored",
+				"spiffe://kaiba.network/approver/approver-1",
+				"spiffe://kaiba.network/approver/approver-2"),
+			want: ErrClientIdentity,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := policy.AuthorizeApprover(test.request, "approver-1"); !errors.Is(err, test.want) {
+				t.Fatalf("AuthorizeApprover error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
 func TestMutualTLSIdentityPolicyRejectsMissingMismatchAndAmbiguousSAN(t *testing.T) {
 	policy := MutualTLSIdentityPolicy()
 	tests := []struct {
@@ -85,8 +142,14 @@ func TestLoopbackPlaintextPolicyPreservesDevelopmentMode(t *testing.T) {
 	if err := LoopbackPlaintextIdentityPolicy().Authorize(request, "station-1", "lane-1"); err != nil {
 		t.Fatalf("loopback development authorization failed: %v", err)
 	}
+	if err := LoopbackPlaintextIdentityPolicy().AuthorizeApprover(request, "approver-1"); err != nil {
+		t.Fatalf("loopback development approver authorization failed: %v", err)
+	}
 	if err := (IdentityPolicy{}).Authorize(request, "station-1", "lane-1"); !errors.Is(err, ErrClientIdentity) {
 		t.Fatalf("zero-value identity policy error = %v", err)
+	}
+	if err := (IdentityPolicy{}).AuthorizeApprover(request, "approver-1"); !errors.Is(err, ErrClientIdentity) {
+		t.Fatalf("zero-value approver identity policy error = %v", err)
 	}
 }
 

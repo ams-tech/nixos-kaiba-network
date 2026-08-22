@@ -107,15 +107,16 @@ func (s *Service) Sign(ctx context.Context, request Request, artifact []byte) (R
 		return Result{}, err
 	}
 	result := Result{
-		SchemaVersion:      ResultSchemaV1Alpha1,
-		RequestID:          request.RequestID,
-		RequestDigest:      requestDigest,
-		Role:               request.Role,
-		ArtifactDigest:     request.ArtifactDigest,
-		Algorithm:          request.Algorithm,
-		SignatureHex:       hex.EncodeToString(signature),
-		SignatureDigest:    bundle.Sum(signature),
-		SignerPolicyDigest: policyDigest,
+		SchemaVersion:       ResultSchemaV1Alpha2,
+		RequestID:           request.RequestID,
+		RequestDigest:       requestDigest,
+		Role:                request.Role,
+		ArtifactDigest:      request.ArtifactDigest,
+		Algorithm:           request.Algorithm,
+		SignatureHex:        hex.EncodeToString(signature),
+		SignatureDigest:     bundle.Sum(signature),
+		SignerPolicyDigest:  policyDigest,
+		ReleaseIntentDigest: request.Approval.ReleaseIntentDigest,
 	}
 	stored = StoredResult{RequestDigest: requestDigest, Result: result}
 	if err := s.store.Save(ctx, request.RequestID, stored); err != nil {

@@ -37,22 +37,17 @@ func developmentPolicy(t *testing.T) YubiKeyPolicy {
 func approvedRequest(artifact []byte) Request {
 	artifactDigest := bundle.Sum(artifact)
 	return Request{
-		SchemaVersion:  RequestSchemaV1Alpha1,
+		SchemaVersion:  RequestSchemaV1Alpha2,
 		RequestID:      "request:boot-image-0001",
 		Algorithm:      AlgorithmRSA2048SHA256,
 		Role:           bundle.RoleBootImage,
 		ArtifactDigest: artifactDigest,
 		Approval: ApprovalBinding{
-			ApprovalID:        "approval:boot-image-0001",
-			ApprovalDigest:    bundle.Sum([]byte("approval receipt")),
-			TransactionID:     "transaction:rpi5-0001",
-			TransactionDigest: bundle.Sum([]byte("transaction")),
-			ManifestDigest:    bundle.Sum([]byte("manifest")),
-			PlanDigest:        bundle.Sum([]byte("plan")),
-			TargetFingerprint: bundle.Sum([]byte("target")),
-			FenceEpoch:        7,
-			Role:              bundle.RoleBootImage,
-			ArtifactDigest:    artifactDigest,
+			ApprovalID:          "approval:boot-image-0001",
+			ApprovalDigest:      bundle.Sum([]byte("approval receipt")),
+			ReleaseIntentDigest: bundle.Sum([]byte("release intent")),
+			Role:                bundle.RoleBootImage,
+			ArtifactDigest:      artifactDigest,
 		},
 	}
 }
@@ -84,7 +79,7 @@ func TestServiceSignsApprovedArtifactAndIdempotentlyReplays(t *testing.T) {
 	if len(first.SignatureHex) != RSASignatureBytes*2 || first.SignatureHex != strings.ToLower(first.SignatureHex) {
 		t.Fatalf("signature_hex is not canonical: %q", first.SignatureHex)
 	}
-	if first.Role != request.Role || first.ArtifactDigest != request.ArtifactDigest || first.SignerPolicyDigest == "" {
+	if first.Role != request.Role || first.ArtifactDigest != request.ArtifactDigest || first.SignerPolicyDigest == "" || first.ReleaseIntentDigest != request.Approval.ReleaseIntentDigest {
 		t.Fatalf("result lost binding: %#v", first)
 	}
 }
@@ -162,7 +157,7 @@ func TestServiceRequiresValidApprovalAndPreservesIdempotencyKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := first
-	second.Approval.PlanDigest = bundle.Sum([]byte("changed plan"))
+	second.Approval.ReleaseIntentDigest = bundle.Sum([]byte("changed release intent"))
 	if _, err := service.Sign(context.Background(), second, artifact); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("changed request error = %v, want ErrIdempotencyConflict", err)
 	}

@@ -439,6 +439,100 @@ class ReportRendererTest(unittest.TestCase):
             self.assertIsNotNone(cases["provisioning.aarch64-linux"].find("skipped"))
             self.assertIsNone(cases["provisioning.x86_64-linux"].find("skipped"))
 
+    def test_rpi5_eeprom_release_contract_is_visible_in_every_report_format(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provisioning = json.loads(
+                (REPO_ROOT / "tests" / "provisioning" / "report-input.json").read_text(encoding="utf-8")
+            )
+            provisioning["hardware_qualification"] = {
+                "status": "pending",
+                "description": "Hardware qualification is outside this automated-report test.",
+                "evidence": [],
+            }
+            provisioning_path = root / "provisioning.json"
+            provisioning_path.write_text(json.dumps(provisioning), encoding="utf-8")
+
+            output = root / "report"
+            self.render_fixture(output, provisioning_path=provisioning_path)
+
+            rendered = json.loads((output / "provisioning.json").read_text(encoding="utf-8"))
+            contract_rows = [
+                (item["system"], item["status"])
+                for item in rendered["automated"]["checks"]
+                if item["id"] == "rpi5-eeprom-release-contract"
+            ]
+            self.assertEqual(
+                [("aarch64-linux", "not-observed"), ("x86_64-linux", "passed")],
+                contract_rows,
+            )
+
+            markdown = (output / "index.md").read_text(encoding="utf-8")
+            self.assertIn("| NOT OBSERVED | `aarch64-linux` | `rpi5-eeprom-release-contract` |", markdown)
+            self.assertIn("| PASSED | `x86_64-linux` | `rpi5-eeprom-release-contract` |", markdown)
+
+            page = (output / "index.html").read_text(encoding="utf-8")
+            self.assertEqual(2, page.count("<code>rpi5-eeprom-release-contract</code>"))
+
+            junit = ET.parse(output / "junit.xml")
+            cases = {
+                case.get("classname"): case
+                for case in junit.findall('.//testcase[@name="rpi5-eeprom-release-contract"]')
+            }
+            self.assertEqual(
+                {"provisioning.aarch64-linux", "provisioning.x86_64-linux"},
+                set(cases),
+            )
+            self.assertIsNotNone(cases["provisioning.aarch64-linux"].find("skipped"))
+            self.assertIsNone(cases["provisioning.x86_64-linux"].find("skipped"))
+
+    def test_rpi5_eeprom_signing_contract_is_visible_in_every_report_format(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provisioning = json.loads(
+                (REPO_ROOT / "tests" / "provisioning" / "report-input.json").read_text(encoding="utf-8")
+            )
+            provisioning["hardware_qualification"] = {
+                "status": "pending",
+                "description": "Hardware qualification is outside this automated-report test.",
+                "evidence": [],
+            }
+            provisioning_path = root / "provisioning.json"
+            provisioning_path.write_text(json.dumps(provisioning), encoding="utf-8")
+
+            output = root / "report"
+            self.render_fixture(output, provisioning_path=provisioning_path)
+
+            rendered = json.loads((output / "provisioning.json").read_text(encoding="utf-8"))
+            contract_rows = [
+                (item["system"], item["status"])
+                for item in rendered["automated"]["checks"]
+                if item["id"] == "rpi5-eeprom-signing-contract"
+            ]
+            self.assertEqual(
+                [("aarch64-linux", "not-observed"), ("x86_64-linux", "passed")],
+                contract_rows,
+            )
+
+            markdown = (output / "index.md").read_text(encoding="utf-8")
+            self.assertIn("| NOT OBSERVED | `aarch64-linux` | `rpi5-eeprom-signing-contract` |", markdown)
+            self.assertIn("| PASSED | `x86_64-linux` | `rpi5-eeprom-signing-contract` |", markdown)
+
+            page = (output / "index.html").read_text(encoding="utf-8")
+            self.assertEqual(2, page.count("<code>rpi5-eeprom-signing-contract</code>"))
+
+            junit = ET.parse(output / "junit.xml")
+            cases = {
+                case.get("classname"): case
+                for case in junit.findall('.//testcase[@name="rpi5-eeprom-signing-contract"]')
+            }
+            self.assertEqual(
+                {"provisioning.aarch64-linux", "provisioning.x86_64-linux"},
+                set(cases),
+            )
+            self.assertIsNotNone(cases["provisioning.aarch64-linux"].find("skipped"))
+            self.assertIsNone(cases["provisioning.x86_64-linux"].find("skipped"))
+
     def test_completed_hardware_evidence_is_copied_linked_and_manifested(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

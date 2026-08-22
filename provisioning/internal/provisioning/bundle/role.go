@@ -14,6 +14,7 @@ const (
 	RoleDeviceProfile     ArtifactRole = "device_profile"
 	RolePlatformAdapter   ArtifactRole = "platform_adapter"
 	RoleBootPublicKey     ArtifactRole = "boot_public_key"
+	RoleEEPROMBootcode    ArtifactRole = "rpi5.eeprom_bootcode"
 	RoleEEPROMConfig      ArtifactRole = "rpi5.eeprom_config"
 	RoleEEPROMBootsys     ArtifactRole = "rpi5.eeprom_bootsys"
 	RoleSignedEEPROMImage ArtifactRole = "rpi5.signed_eeprom_image"
@@ -35,7 +36,7 @@ const (
 
 var artifactRoles = map[ArtifactRole]struct{}{
 	RoleDeviceProfile: {}, RolePlatformAdapter: {}, RoleBootPublicKey: {},
-	RoleEEPROMConfig: {}, RoleEEPROMBootsys: {}, RoleSignedEEPROMImage: {},
+	RoleEEPROMBootcode: {}, RoleEEPROMConfig: {}, RoleEEPROMBootsys: {}, RoleSignedEEPROMImage: {},
 	RoleBootImage: {}, RoleBootSignature: {}, RoleRootIntegrity: {},
 	RoleFreshCommitBundle: {}, RoleFreshReadbackBundle: {}, RoleNegativeBootBundle: {},
 	RoleOwnedReadbackBundle: {}, RoleOwnedRecoveryBootcode: {}, RoleOwnedRecoveryBundle: {},
@@ -43,6 +44,7 @@ var artifactRoles = map[ArtifactRole]struct{}{
 }
 
 var signableRoles = map[ArtifactRole]struct{}{
+	RoleEEPROMBootcode:        {},
 	RoleEEPROMConfig:          {},
 	RoleEEPROMBootsys:         {},
 	RoleBootImage:             {},

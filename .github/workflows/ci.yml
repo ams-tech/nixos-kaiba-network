@@ -53,6 +53,7 @@ jobs:
             .#checks.x86_64-linux.ci-workflow \
             .#checks.x86_64-linux.module-eval \
             .#checks.x86_64-linux.rpi5-provisioning-image-eval \
+            .#checks.x86_64-linux.rpi5-production-media-staging \
             .#checks.x86_64-linux.rpi5-qualification-ceremony \
             .#checks.x86_64-linux.rpi5-secure-boot-target-eval \
             .#checks.x86_64-linux.unit \
@@ -65,6 +66,7 @@ jobs:
             ./nix/provisioning#checks.x86_64-linux.secure-boot-artifacts \
             ./nix/provisioning#checks.x86_64-linux.station-ui \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-audit \
+            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-authority-bridge \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-control \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-lane-guard \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision \
@@ -101,11 +103,13 @@ jobs:
             ./nix/dns#packages.aarch64-linux.kaiba-agent \
             ./nix/dns#packages.aarch64-linux.kaiba-controller \
             ./nix/dns#packages.aarch64-linux.kaiba-publisher \
+            ./nix/provisioning#checks.aarch64-linux.production-media-staging \
             ./nix/provisioning#checks.aarch64-linux.unit \
             ./nix/provisioning#checks.aarch64-linux.rpi5-probe-bundle \
             ./nix/provisioning#checks.aarch64-linux.rpiboot-metadata-stdout \
             ./nix/provisioning#checks.aarch64-linux.secure-boot-artifacts \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-audit \
+            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-authority-bridge \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-control \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-lane-guard \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision \

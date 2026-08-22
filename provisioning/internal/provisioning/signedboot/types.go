@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	PlanSchemaV1Alpha1   = "kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1"
-	ResultSchemaV1Alpha1 = "kaiba.provisioning.rpi5-boot-signing-result/v1alpha1"
+	PlanSchemaV1Alpha2   = "kaiba.provisioning.rpi5-boot-signing-plan/v1alpha2"
+	ResultSchemaV1Alpha2 = "kaiba.provisioning.rpi5-boot-signing-result/v1alpha2"
 
 	maxPlanBytes              = 64 * 1024
 	maxResultBytes            = 64 * 1024
@@ -37,6 +37,7 @@ var planIdentifierPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._:-]{0,127}$`)
 type Plan struct {
 	SchemaVersion        string        `json:"schema_version"`
 	PlanID               string        `json:"plan_id"`
+	ReleaseIntentDigest  bundle.Digest `json:"release_intent_digest"`
 	BootImageDigest      bundle.Digest `json:"boot_image_digest"`
 	BootImageSizeBytes   uint64        `json:"boot_image_size_bytes"`
 	PublicKeyFingerprint bundle.Digest `json:"public_key_fingerprint"`
@@ -52,6 +53,7 @@ type Result struct {
 	SchemaVersion          string        `json:"schema_version"`
 	PlanID                 string        `json:"plan_id"`
 	PlanDigest             bundle.Digest `json:"plan_digest"`
+	ReleaseIntentDigest    bundle.Digest `json:"release_intent_digest"`
 	BootImageDigest        bundle.Digest `json:"boot_image_digest"`
 	BootImageSizeBytes     uint64        `json:"boot_image_size_bytes"`
 	BootSignatureDigest    bundle.Digest `json:"boot_signature_digest"`
@@ -64,12 +66,13 @@ type Result struct {
 
 // LoadedPlan is an immutable in-memory snapshot of an exact plan directory.
 type LoadedPlan struct {
-	Plan       Plan
-	PlanJSON   []byte
-	BootImage  []byte
-	PublicPEM  []byte
-	PublicKey  *rsa.PublicKey
-	PlanDigest bundle.Digest
+	Plan              Plan
+	PlanJSON          []byte
+	ReleaseIntentJSON []byte
+	BootImage         []byte
+	PublicPEM         []byte
+	PublicKey         *rsa.PublicKey
+	PlanDigest        bundle.Digest
 }
 
 // LoadedResult is an immutable in-memory snapshot of an exact signing output.
@@ -80,11 +83,14 @@ type LoadedResult struct {
 }
 
 func (p Plan) Validate() error {
-	if p.SchemaVersion != PlanSchemaV1Alpha1 {
+	if p.SchemaVersion != PlanSchemaV1Alpha2 {
 		return fmt.Errorf("unsupported signing plan schema_version %q", p.SchemaVersion)
 	}
 	if !planIdentifierPattern.MatchString(p.PlanID) {
 		return errors.New("plan_id must be a canonical lower-case identifier")
+	}
+	if err := p.ReleaseIntentDigest.Validate(); err != nil {
+		return fmt.Errorf("release_intent_digest: %w", err)
 	}
 	if err := p.BootImageDigest.Validate(); err != nil {
 		return fmt.Errorf("boot_image_digest: %w", err)
@@ -121,13 +127,13 @@ func (p Plan) Digest() (bundle.Digest, error) {
 		return "", err
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte("kaiba.provisioning.rpi5-boot-signing-plan.v1alpha1\x00"))
+	_, _ = hash.Write([]byte("kaiba.provisioning.rpi5-boot-signing-plan.v1alpha2\x00"))
 	_, _ = hash.Write(encoded)
 	return bundle.Digest("sha256:" + hex.EncodeToString(hash.Sum(nil))), nil
 }
 
 func (r Result) Validate() error {
-	if r.SchemaVersion != ResultSchemaV1Alpha1 {
+	if r.SchemaVersion != ResultSchemaV1Alpha2 {
 		return fmt.Errorf("unsupported signing result schema_version %q", r.SchemaVersion)
 	}
 	if !planIdentifierPattern.MatchString(r.PlanID) {
@@ -135,6 +141,7 @@ func (r Result) Validate() error {
 	}
 	for name, digest := range map[string]bundle.Digest{
 		"plan_digest":            r.PlanDigest,
+		"release_intent_digest":  r.ReleaseIntentDigest,
 		"boot_image_digest":      r.BootImageDigest,
 		"boot_signature_digest":  r.BootSignatureDigest,
 		"public_key_fingerprint": r.PublicKeyFingerprint,
@@ -174,7 +181,7 @@ func (r Result) Digest() (bundle.Digest, error) {
 		return "", err
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte("kaiba.provisioning.rpi5-boot-signing-result.v1alpha1\x00"))
+	_, _ = hash.Write([]byte("kaiba.provisioning.rpi5-boot-signing-result.v1alpha2\x00"))
 	_, _ = hash.Write(encoded)
 	return bundle.Digest("sha256:" + hex.EncodeToString(hash.Sum(nil))), nil
 }

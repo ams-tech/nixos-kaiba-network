@@ -3,6 +3,7 @@
   lib,
   kaibaPackage,
   kaibaAuditPackage,
+  kaibaAuthorityBridgePackage,
   kaibaControlPackage,
   kaibaLaneGuardPackage,
   kaibaProvisionPackage,
@@ -24,6 +25,7 @@ let
       pkgs
       lib
       kaibaAuditPackage
+      kaibaAuthorityBridgePackage
       kaibaControlPackage
       kaibaLaneGuardPackage
       kaibaProvisionPackage

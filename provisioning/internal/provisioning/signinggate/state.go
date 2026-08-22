@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	StateSchemaV1Alpha1   = "kaiba.provisioning.signing-gate-state/v1alpha1"
-	ReceiptSchemaV1Alpha1 = "kaiba.provisioning.signing-gate-receipt/v1alpha1"
+	StateSchemaV1Alpha2   = "kaiba.provisioning.signing-gate-state/v1alpha2"
+	ReceiptSchemaV1Alpha2 = "kaiba.provisioning.signing-gate-receipt/v1alpha2"
 	StateIntent           = "intent"
 	StateComplete         = "complete"
 	maxStateBytes         = 128 * 1024
@@ -40,7 +40,7 @@ type Receipt struct {
 }
 
 func (r Receipt) Validate() error {
-	if r.SchemaVersion != ReceiptSchemaV1Alpha1 {
+	if r.SchemaVersion != ReceiptSchemaV1Alpha2 {
 		return fmt.Errorf("unsupported receipt schema_version %q", r.SchemaVersion)
 	}
 	if err := r.Grant.Validate(); err != nil {
@@ -84,7 +84,7 @@ func (r Receipt) Digest() (bundle.Digest, error) {
 		return "", err
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte("kaiba.provisioning.signing-gate-receipt.v1alpha1\x00"))
+	_, _ = hash.Write([]byte("kaiba.provisioning.signing-gate-receipt.v1alpha2\x00"))
 	_, _ = hash.Write(encoded)
 	return bundle.Digest("sha256:" + hex.EncodeToString(hash.Sum(nil))), nil
 }
@@ -100,7 +100,7 @@ type DurableState struct {
 }
 
 func (s DurableState) validateFor(grant Grant) error {
-	if s.SchemaVersion != StateSchemaV1Alpha1 {
+	if s.SchemaVersion != StateSchemaV1Alpha2 {
 		return fmt.Errorf("unsupported durable state schema_version %q", s.SchemaVersion)
 	}
 	if s.GrantID != grant.GrantID {
@@ -232,7 +232,7 @@ func (s *StateStore) RecordIntent(grant Grant, now time.Time) (DurableState, err
 		return DurableState{}, err
 	}
 	state := DurableState{
-		SchemaVersion:  StateSchemaV1Alpha1,
+		SchemaVersion:  StateSchemaV1Alpha2,
 		Status:         StateIntent,
 		GrantID:        grant.GrantID,
 		RequestDigest:  requestDigest,
@@ -265,7 +265,7 @@ func (s *StateStore) RecordComplete(grant Grant, intent DurableState, receipt Re
 }
 
 func (s *StateStore) statePath(grantID string) string {
-	digest := sha256.Sum256([]byte("kaiba.provisioning.signing-grant-state.v1\x00" + grantID))
+	digest := sha256.Sum256([]byte("kaiba.provisioning.signing-grant-state.v2\x00" + grantID))
 	return filepath.Join(s.directory, hex.EncodeToString(digest[:])+".json")
 }
 

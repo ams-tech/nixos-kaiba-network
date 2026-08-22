@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	RequestSchemaV1Alpha1            = "kaiba.provisioning.signing-request/v1alpha1"
-	ResultSchemaV1Alpha1             = "kaiba.provisioning.signing-result/v1alpha1"
+	RequestSchemaV1Alpha2            = "kaiba.provisioning.signing-request/v1alpha2"
+	ResultSchemaV1Alpha2             = "kaiba.provisioning.signing-result/v1alpha2"
 	AlgorithmRSA2048SHA256 Algorithm = "rsa2048-sha256"
 	MaxRequestBytes                  = 64 * 1024
 	RSASignatureBytes                = 256
@@ -32,16 +32,11 @@ type Algorithm string
 // artifact. ApprovalVerifier establishes the authenticity and current validity
 // of this secret-free record before the private key is used.
 type ApprovalBinding struct {
-	ApprovalID        string              `json:"approval_id"`
-	ApprovalDigest    bundle.Digest       `json:"approval_digest"`
-	TransactionID     string              `json:"transaction_id"`
-	TransactionDigest bundle.Digest       `json:"transaction_digest"`
-	ManifestDigest    bundle.Digest       `json:"manifest_digest"`
-	PlanDigest        bundle.Digest       `json:"plan_digest"`
-	TargetFingerprint bundle.Digest       `json:"target_fingerprint"`
-	FenceEpoch        uint64              `json:"fence_epoch"`
-	Role              bundle.ArtifactRole `json:"role"`
-	ArtifactDigest    bundle.Digest       `json:"artifact_digest"`
+	ApprovalID          string              `json:"approval_id"`
+	ApprovalDigest      bundle.Digest       `json:"approval_digest"`
+	ReleaseIntentDigest bundle.Digest       `json:"release_intent_digest"`
+	Role                bundle.ArtifactRole `json:"role"`
+	ArtifactDigest      bundle.Digest       `json:"artifact_digest"`
 }
 
 // Request contains no filesystem or executable paths and no key selector. The
@@ -58,15 +53,16 @@ type Request struct {
 
 // Result is the idempotent, secret-free signing receipt.
 type Result struct {
-	SchemaVersion      string              `json:"schema_version"`
-	RequestID          string              `json:"request_id"`
-	RequestDigest      bundle.Digest       `json:"request_digest"`
-	Role               bundle.ArtifactRole `json:"role"`
-	ArtifactDigest     bundle.Digest       `json:"artifact_digest"`
-	Algorithm          Algorithm           `json:"algorithm"`
-	SignatureHex       string              `json:"signature_hex"`
-	SignatureDigest    bundle.Digest       `json:"signature_digest"`
-	SignerPolicyDigest bundle.Digest       `json:"signer_policy_digest"`
+	SchemaVersion       string              `json:"schema_version"`
+	RequestID           string              `json:"request_id"`
+	RequestDigest       bundle.Digest       `json:"request_digest"`
+	Role                bundle.ArtifactRole `json:"role"`
+	ArtifactDigest      bundle.Digest       `json:"artifact_digest"`
+	Algorithm           Algorithm           `json:"algorithm"`
+	SignatureHex        string              `json:"signature_hex"`
+	SignatureDigest     bundle.Digest       `json:"signature_digest"`
+	SignerPolicyDigest  bundle.Digest       `json:"signer_policy_digest"`
+	ReleaseIntentDigest bundle.Digest       `json:"release_intent_digest"`
 }
 
 // ParseRequest rejects unknown fields, duplicate keys, trailing JSON values,
@@ -99,7 +95,7 @@ func ParseRequest(data []byte) (Request, error) {
 // Validate enforces the exact algorithm, signable role, digest, and approval
 // bindings. It cannot be used to authorize an arbitrary RSA operation.
 func (r Request) Validate() error {
-	if r.SchemaVersion != RequestSchemaV1Alpha1 {
+	if r.SchemaVersion != RequestSchemaV1Alpha2 {
 		return fmt.Errorf("unsupported signing request schema_version %q", r.SchemaVersion)
 	}
 	if !requestIdentifierPattern.MatchString(r.RequestID) {
@@ -130,23 +126,14 @@ func (a ApprovalBinding) validate() error {
 	if !requestIdentifierPattern.MatchString(a.ApprovalID) {
 		return errors.New("approval.approval_id must be a canonical lower-case identifier")
 	}
-	if !requestIdentifierPattern.MatchString(a.TransactionID) {
-		return errors.New("approval.transaction_id must be a canonical lower-case identifier")
-	}
 	for name, digest := range map[string]bundle.Digest{
-		"approval.approval_digest":    a.ApprovalDigest,
-		"approval.transaction_digest": a.TransactionDigest,
-		"approval.manifest_digest":    a.ManifestDigest,
-		"approval.plan_digest":        a.PlanDigest,
-		"approval.target_fingerprint": a.TargetFingerprint,
-		"approval.artifact_digest":    a.ArtifactDigest,
+		"approval.approval_digest":       a.ApprovalDigest,
+		"approval.release_intent_digest": a.ReleaseIntentDigest,
+		"approval.artifact_digest":       a.ArtifactDigest,
 	} {
 		if err := digest.Validate(); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
-	}
-	if a.FenceEpoch == 0 {
-		return errors.New("approval.fence_epoch must be positive")
 	}
 	if err := a.Role.Validate(); err != nil {
 		return fmt.Errorf("approval.role: %w", err)
@@ -167,7 +154,7 @@ func (r Request) Digest() (bundle.Digest, error) {
 		return "", fmt.Errorf("encode signing request: %w", err)
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte("kaiba.provisioning.signing-request.v1alpha1\x00"))
+	_, _ = hash.Write([]byte("kaiba.provisioning.signing-request.v1alpha2\x00"))
 	_, _ = hash.Write(encoded)
 	return bundle.Digest("sha256:" + hex.EncodeToString(hash.Sum(nil))), nil
 }

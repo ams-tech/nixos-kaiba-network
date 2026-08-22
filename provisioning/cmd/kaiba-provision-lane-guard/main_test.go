@@ -10,9 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/authoritybridge"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/physicalrpi5"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebindingmanifest"
 )
 
 type commandHardware struct {
@@ -39,7 +42,7 @@ func TestDisabledCommandValidatesLaneWithoutMutationInputs(t *testing.T) {
 
 func TestImmutableReleaseBindingUsesEveryLinkerValue(t *testing.T) {
 	restoreCommandGlobals(t)
-	setImmutableTestGlobals()
+	setImmutableTestGlobals(t)
 	binding, err := immutableReleaseBinding()
 	if err != nil {
 		t.Fatal(err)
@@ -57,12 +60,11 @@ func TestEnabledCommandRequiresRootAndImmutableBuildPaths(t *testing.T) {
 	}
 
 	effectiveUID = func() int { return 0 }
-	plan, request := commandPlanAndRequest()
+	plan, _ := commandPlanAndRequest()
 	directory := t.TempDir()
-	planPath := writeJSON(t, directory, "plan.json", plan)
-	requestPath := writeJSON(t, directory, "request.json", request)
+	draftPath := writeJSON(t, directory, "draft.json", commandDraft(plan))
 	err := run(context.Background(), []string{
-		"--enable-mutations", "--plan", planPath, "--request", requestPath,
+		"--enable-mutations", "--draft", draftPath, "--bridge-socket", filepath.Join(directory, "bridge.sock"),
 		"--journal", filepath.Join(directory, "journal.json"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "immutable") || !strings.Contains(err.Error(), "path") {
@@ -73,8 +75,9 @@ func TestEnabledCommandRequiresRootAndImmutableBuildPaths(t *testing.T) {
 func TestOneShotCommandUsesDurableJournalAndNoCallerArtifactPaths(t *testing.T) {
 	restoreCommandGlobals(t)
 	effectiveUID = func() int { return 0 }
-	setImmutableTestGlobals()
+	setImmutableTestGlobals(t)
 	plan, request := commandPlanAndRequest()
+	stubAuthorityResult(t, plan, request)
 	hardware := &commandHardware{
 		observation: laneguard.Observation{
 			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
@@ -89,11 +92,10 @@ func TestOneShotCommandUsesDurableJournalAndNoCallerArtifactPaths(t *testing.T) 
 		return hardware, nil
 	}
 	directory := t.TempDir()
-	planPath := writeJSON(t, directory, "plan.json", plan)
-	requestPath := writeJSON(t, directory, "request.json", request)
+	draftPath := writeJSON(t, directory, "draft.json", commandDraft(plan))
 	journalPath := filepath.Join(directory, "journal.json")
 	if err := run(context.Background(), []string{
-		"--enable-mutations", "--plan", planPath, "--request", requestPath,
+		"--enable-mutations", "--draft", draftPath, "--bridge-socket", filepath.Join(directory, "bridge.sock"),
 		"--journal", journalPath,
 	}); err != nil {
 		t.Fatalf("one-shot run: %v", err)
@@ -114,13 +116,21 @@ func TestOneShotCommandUsesDurableJournalAndNoCallerArtifactPaths(t *testing.T) 
 	if err := run(context.Background(), []string{"--rpiboot-binary", "/tmp/evil"}); err == nil {
 		t.Fatal("caller-selectable rpiboot path flag was accepted")
 	}
+	if err := run(context.Background(), []string{"--plan", "/tmp/root-plan.json"}); err == nil {
+		t.Fatal("root-supplied executable plan flag was accepted")
+	}
+	if err := run(context.Background(), []string{"--request", "/tmp/root-request.json"}); err == nil {
+		t.Fatal("root-supplied executable request flag was accepted")
+	}
 }
 
 func TestCommandRejectsMismatchedRequestBeforeConstructingHardware(t *testing.T) {
 	restoreCommandGlobals(t)
 	effectiveUID = func() int { return 0 }
+	setImmutableTestGlobals(t)
 	plan, request := commandPlanAndRequest()
 	request.OperationDigest = commandDigest("9")
+	stubAuthorityResult(t, plan, request)
 	buildHardware = func(physicalrpi5.Config) (laneguard.Hardware, error) {
 		t.Fatal("mismatched request reached hardware construction")
 		return nil, nil
@@ -128,8 +138,8 @@ func TestCommandRejectsMismatchedRequestBeforeConstructingHardware(t *testing.T)
 	directory := t.TempDir()
 	err := run(context.Background(), []string{
 		"--enable-mutations",
-		"--plan", writeJSON(t, directory, "plan.json", plan),
-		"--request", writeJSON(t, directory, "request.json", request),
+		"--draft", writeJSON(t, directory, "draft.json", commandDraft(plan)),
+		"--bridge-socket", filepath.Join(directory, "bridge.sock"),
 		"--journal", filepath.Join(directory, "journal.json"),
 	})
 	if !errors.Is(err, laneguard.ErrPlanMismatch) {
@@ -140,9 +150,15 @@ func TestCommandRejectsMismatchedRequestBeforeConstructingHardware(t *testing.T)
 func TestCommandRejectsReleaseThatDiffersFromImmutableBuild(t *testing.T) {
 	restoreCommandGlobals(t)
 	effectiveUID = func() int { return 0 }
-	setImmutableTestGlobals()
+	setImmutableTestGlobals(t)
 	plan, request := commandPlanAndRequest()
-	compiledArtifactSetDigest = commandDigest("9")
+	baseDeriver := deriveReleaseMaterial
+	deriveReleaseMaterial = func(executable string, paths []releasebindingmanifest.ArtifactPath, expectations releasebindingmanifest.ReleaseExpectations, mode releasebindingmanifest.ValidationMode) (immutableReleaseMaterial, error) {
+		material, err := baseDeriver(executable, paths, expectations, mode)
+		material.Binding.CompiledArtifactSetDigest = commandDigest("9")
+		return material, err
+	}
+	stubAuthorityResult(t, plan, request)
 	buildHardware = func(physicalrpi5.Config) (laneguard.Hardware, error) {
 		t.Fatal("release-binding mismatch reached hardware construction")
 		return nil, nil
@@ -150,8 +166,8 @@ func TestCommandRejectsReleaseThatDiffersFromImmutableBuild(t *testing.T) {
 	directory := t.TempDir()
 	err := run(context.Background(), []string{
 		"--enable-mutations",
-		"--plan", writeJSON(t, directory, "plan.json", plan),
-		"--request", writeJSON(t, directory, "request.json", request),
+		"--draft", writeJSON(t, directory, "draft.json", commandDraft(plan)),
+		"--bridge-socket", filepath.Join(directory, "bridge.sock"),
 		"--journal", filepath.Join(directory, "journal.json"),
 	})
 	if !errors.Is(err, laneguard.ErrPlanMismatch) {
@@ -162,6 +178,7 @@ func TestCommandRejectsReleaseThatDiffersFromImmutableBuild(t *testing.T) {
 func TestCommandRejectsExpiredApprovalBeforeConstructingHardware(t *testing.T) {
 	restoreCommandGlobals(t)
 	effectiveUID = func() int { return 0 }
+	setImmutableTestGlobals(t)
 	plan, request := commandPlanAndRequest()
 	plan.ApprovalExpiresAt = time.Now().UTC().Add(-time.Minute)
 	plan, err := plan.WithDerivedDigests()
@@ -170,6 +187,7 @@ func TestCommandRejectsExpiredApprovalBeforeConstructingHardware(t *testing.T) {
 	}
 	request.PlanDigest = plan.PlanDigest
 	request.ApprovalExpiresAt = plan.ApprovalExpiresAt
+	stubAuthorityResult(t, plan, request)
 	buildHardware = func(physicalrpi5.Config) (laneguard.Hardware, error) {
 		t.Fatal("expired approval reached hardware construction")
 		return nil, nil
@@ -177,8 +195,8 @@ func TestCommandRejectsExpiredApprovalBeforeConstructingHardware(t *testing.T) {
 	directory := t.TempDir()
 	err = run(context.Background(), []string{
 		"--enable-mutations",
-		"--plan", writeJSON(t, directory, "plan.json", plan),
-		"--request", writeJSON(t, directory, "request.json", request),
+		"--draft", writeJSON(t, directory, "draft.json", commandDraft(plan)),
+		"--bridge-socket", filepath.Join(directory, "bridge.sock"),
 		"--journal", filepath.Join(directory, "journal.json"),
 	})
 	if !errors.Is(err, laneguard.ErrApprovalExpired) {
@@ -273,6 +291,26 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 	return plan, request
 }
 
+func commandDraft(plan laneguard.Plan) laneguard.Plan {
+	plan.ApprovalID = ""
+	plan.IntentReceipt = ""
+	plan.IntentSequence = 0
+	return plan
+}
+
+func stubAuthorityResult(t *testing.T, plan laneguard.Plan, request laneguard.ExecuteRequest) {
+	t.Helper()
+	requestAuthority = func(_ context.Context, socketPath string, bridgeRequest authoritybridge.BridgeRequest) (authoritybridge.BoundExecution, error) {
+		if !filepath.IsAbs(socketPath) || bridgeRequest.SchemaVersion != authoritybridge.RequestSchemaVersion ||
+			bridgeRequest.Mode != authoritybridge.ModeExecute || bridgeRequest.TransactionID != plan.TransactionID ||
+			bridgeRequest.DraftSnapshot.ApprovalID != "" || bridgeRequest.DraftSnapshot.IntentReceipt != "" ||
+			bridgeRequest.DraftSnapshot.IntentSequence != 0 || bridgeRequest.DraftSnapshot.PlanDigest != plan.PlanDigest {
+			t.Fatalf("authority request = %#v via %q", bridgeRequest, socketPath)
+		}
+		return authoritybridge.BoundExecution{Plan: plan, Request: request}, nil
+	}
+}
+
 func commandReleaseBinding() releasebinding.Binding {
 	return releasebinding.Binding{
 		SignedReleaseManifestDigest: commandDigest("f"),
@@ -297,7 +335,8 @@ func writeJSON(t *testing.T, directory, name string, value any) string {
 	return path
 }
 
-func setImmutableTestGlobals() {
+func setImmutableTestGlobals(t *testing.T) {
+	t.Helper()
 	rpibootBinary = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-rpiboot/bin/rpiboot"
 	gpioSetBinary = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-gpio/bin/gpioset"
 	freshReadbackBundle = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-fresh-readback"
@@ -310,27 +349,61 @@ func setImmutableTestGlobals() {
 	expectedEEPROMHash = strings.Repeat("e", 64)
 	expectedBootImageDigest = "sha256:" + strings.Repeat("b", 64)
 	signedReleaseManifestDigest = commandDigest("f")
-	laneGuardPackageDigest = commandDigest("d")
-	compiledArtifactSetDigest = commandDigest("c")
+	currentExecutable = func() (string, error) {
+		return "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lane-guard/bin/kaiba-provision-lane-guard", nil
+	}
+	deriveReleaseMaterial = func(executable string, paths []releasebindingmanifest.ArtifactPath, expectations releasebindingmanifest.ReleaseExpectations, mode releasebindingmanifest.ValidationMode) (immutableReleaseMaterial, error) {
+		expectedPaths := []releasebindingmanifest.ArtifactPath{
+			{Role: releasebindingmanifest.RolePatchedRPIBoot, Path: rpibootBinary},
+			{Role: releasebindingmanifest.RoleGPIOSet, Path: gpioSetBinary},
+			{Role: releasebindingmanifest.RoleFreshCommitBundle, Path: freshCommitBundle},
+			{Role: releasebindingmanifest.RoleFreshReadbackBundle, Path: freshReadbackBundle},
+			{Role: releasebindingmanifest.RoleNegativeBootBundle, Path: negativeBootBundle},
+			{Role: releasebindingmanifest.RoleOwnedReadbackBundle, Path: ownedReadbackBundle},
+			{Role: releasebindingmanifest.RoleOwnedRecoveryBundle, Path: ownedRecoveryBundle},
+			{Role: releasebindingmanifest.RoleRootIntegrityBundle, Path: rootIntegrityBundle},
+		}
+		if executable != "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lane-guard/bin/kaiba-provision-lane-guard" ||
+			mode != releasebindingmanifest.ProductionMode || len(paths) != len(expectedPaths) {
+			t.Fatalf("release material inputs = %q, %#v, %v", executable, paths, mode)
+		}
+		for index := range paths {
+			if paths[index] != expectedPaths[index] {
+				t.Fatalf("release material path %d = %#v, want %#v", index, paths[index], expectedPaths[index])
+			}
+		}
+		if expectations.SignedReleaseManifestDigest != bundle.Digest(commandDigest("f")) ||
+			expectations.ExpectedCustomerKeyHash != bundle.Digest(commandDigest("1")) ||
+			expectations.ExpectedEEPROMDigest != bundle.Digest(commandDigest("e")) ||
+			expectations.ExpectedBootImageDigest != bundle.Digest(commandDigest("b")) {
+			t.Fatalf("release expectations = %#v", expectations)
+		}
+		return immutableReleaseMaterial{
+			SchemaVersion: releaseMaterialSchemaVersion,
+			Binding:       commandReleaseBinding(),
+		}, nil
+	}
 }
 
 func restoreCommandGlobals(t *testing.T) {
 	t.Helper()
-	savedUID, savedFactory := effectiveUID, buildHardware
+	savedUID, savedFactory, savedAuthority := effectiveUID, buildHardware, requestAuthority
+	savedExecutable, savedDeriver := currentExecutable, deriveReleaseMaterial
 	values := []string{
 		rpibootBinary, gpioSetBinary, freshReadbackBundle, freshCommitBundle,
 		ownedReadbackBundle, ownedRecoveryBundle, negativeBootBundle, rootIntegrityBundle,
-		signedReleaseManifestDigest, laneGuardPackageDigest, compiledArtifactSetDigest,
-		expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest,
+		signedReleaseManifestDigest, expectedCustomerKeyHash, expectedEEPROMHash,
+		expectedBootImageDigest,
 	}
 	t.Cleanup(func() {
-		effectiveUID, buildHardware = savedUID, savedFactory
+		effectiveUID, buildHardware, requestAuthority = savedUID, savedFactory, savedAuthority
+		currentExecutable, deriveReleaseMaterial = savedExecutable, savedDeriver
 		rpibootBinary, gpioSetBinary = values[0], values[1]
 		freshReadbackBundle, freshCommitBundle = values[2], values[3]
 		ownedReadbackBundle, ownedRecoveryBundle = values[4], values[5]
 		negativeBootBundle, rootIntegrityBundle = values[6], values[7]
-		signedReleaseManifestDigest, laneGuardPackageDigest, compiledArtifactSetDigest = values[8], values[9], values[10]
-		expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest = values[11], values[12], values[13]
+		signedReleaseManifestDigest = values[8]
+		expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest = values[9], values[10], values[11]
 	})
 }
 

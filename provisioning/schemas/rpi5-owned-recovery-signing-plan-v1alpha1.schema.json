@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-owned-recovery-signing-plan-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 owned-recovery signing plan v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "updater_mode",
+    "updater_flags",
+    "fresh_eeprom_plan",
+    "fresh_eeprom_result",
+    "owned_recovery_signing_input"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-owned-recovery-signing-plan/v1alpha1"
+    },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "updater_mode": { "const": "owned-recovery" },
+    "updater_flags": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [{ "const": "-f" }, { "const": "-r" }],
+      "items": false
+    },
+    "fresh_eeprom_plan": {
+      "$ref": "rpi5-eeprom-signing-plan-v1alpha1.schema.json"
+    },
+    "fresh_eeprom_result": {
+      "$ref": "rpi5-eeprom-signing-result-v1alpha1.schema.json"
+    },
+    "owned_recovery_signing_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "digest", "size_bytes"],
+      "properties": {
+        "role": { "const": "rpi5.owned_recovery_bootcode" },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 112120
+        }
+      }
+    }
+  }
+}

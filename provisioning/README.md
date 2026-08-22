@@ -15,6 +15,9 @@ module and uses only the Go standard library.
 - `kaiba-provision-control` owns transactions, claims, fence epochs,
   approvals, quarantine, and the terminal `security_applied` record.
 - `kaiba-provision-audit` persists an independent, secret-free hash chain.
+- `kaiba-provision-authority-bridge` authenticates stable control/audit state
+  and emits only the current closed lane plan/request over a private Unix
+  socket.
 - `kaiba-provision-lane-guard` is the root-only, one-shot physical adapter.
 - `kaiba-provision-signer`, `kaiba-provision-signing-client`, and
   `kaiba-provision-signing-gate` enforce the immutable approval boundary.
@@ -23,22 +26,47 @@ module and uses only the Go standard library.
 - `kaiba-provision-sign-boot` submits one immutable public boot plan to the
   fixed signing gate and offline-finalizes its public result. The generic build
   has no signing authority and can only finalize.
-- `kaiba-provision-media-stager` preflights, writes, and reopens exactly three
-  digest-bound payload extents. Its regular-file fixture mode is the safe
-  rehearsal path; whole-device mode remains an explicit, root-only operation.
+- `kaiba-provision-sign-eeprom` runs only the pinned fresh-board `-f` EEPROM
+  updater, requires exactly three release-intent-bound gate callbacks, and
+  offline-finalizes the public EEPROM result. It cannot select recovery
+  signing, access a device, program EEPROM, or change OTP.
+- `kaiba-provision-media-stager` is the legacy mixed prototype that preflights,
+  writes, and reopens exactly three digest-bound payload extents. Its
+  regular-file fixture mode remains a safe regression path.
+- `kaiba-provision-media-device-stager` is emitted only by
+  `lib.mkRpi5ProductionMedia`; it is linker-fixed to one complete media plan and
+  is the only production-media command here with block-device write capability.
+- `kaiba-provision-media-device-verifier` is the separately built, read-only
+  production verifier. It independently validates GPT, FAT, signed-release
+  lineage, the complete device digest, and dm-verity after reattachment.
+- `kaiba-provision-media-fixture-stager` and
+  `kaiba-provision-media-verifier` exercise that same complete production
+  layout against regular files without block-device authority.
+- `kaiba-provision-media-contract` validates and correlates canonical media
+  plans and receipts. `kaiba-provision-unfused-runtime-record` serializes two
+  bounded plan-correlated UART records; it is not a hardware collector.
 - `kaiba-provision-station` serves the separate live, loopback-only operator
   interface. It never falls back to the browser simulation.
 
-The generic lane and signer binaries are deliberately unconfigured and fail
+The generic bridge, lane, and signer binaries are deliberately unconfigured and fail
 closed. A deployment must instantiate `lib.mkRpi5PhysicalLaneGuard` and
 `lib.mkDevelopmentYubiKeySigning`, then use the corresponding NixOS modules.
+The authority bridge additionally requires runtime station mTLS credentials
+and independent control/audit server trust roots.
 The YubiKey PIN is a runtime systemd credential; it is never a Nix value.
 Normal-boot signing additionally uses `lib.mkRpi5BootSigningPlan` and
-`lib.mkRpi5VerifiedSignedBoot`. A signer-verified capsule can be wrapped in a
+`lib.mkRpi5VerifiedSignedBoot`. The shared cohort authorization is built with
+`lib.mkRpi5ReleaseIntent`; EEPROM inputs and the public fresh-board plan use
+`lib.mkRpi5EEPROMReleaseSigningInputs` and `lib.mkRpi5EEPROMSigningPlan`, while
+`lib.mkRpi5VerifiedSignedEEPROM` admits only an offline-verified public result.
+A signer-verified capsule can be wrapped in a
 deterministic outer FAT/GPT regular-file rehearsal with
-`lib.mkRpi5MediaStagingFixture`; see the
+`lib.mkRpi5MediaStagingFixture`. A complete content-addressed signed release can
+instead be bound to one exact whole-device identity, full GPT/FAT/root/verity
+layout, and plan-specialized writer/verifier pair with
+`lib.mkRpi5ProductionMedia`; see the
 [signed-boot workflow](../docs/raspberry-pi-5-signed-boot-workflow.md) and
-[media-staging prototype](../docs/target-media-staging-prototype.md).
+[target-media staging contracts](../docs/target-media-staging-prototype.md).
 
 Command entry points live under `cmd/`. Implementation packages and embedded
 station assets live under `internal/`. Device-class profiles and their schema

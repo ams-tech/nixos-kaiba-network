@@ -12,13 +12,15 @@ import (
 	"syscall"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releaseintent"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/signing"
 )
 
 var planFileLimits = map[string]int64{
-	"plan.json":  maxPlanBytes,
-	"boot.img":   int64(signing.MaxArtifactBytes),
-	"public.pem": maxPublicKeyBytes,
+	"plan.json":           maxPlanBytes,
+	"boot.img":            int64(signing.MaxArtifactBytes),
+	"public.pem":          maxPublicKeyBytes,
+	"release-intent.json": releaseintent.MaxBytes,
 }
 
 var signedFileLimits = map[string]int64{
@@ -27,7 +29,8 @@ var signedFileLimits = map[string]int64{
 }
 
 // LoadPlanDirectory opens an absolute, non-symlink directory containing
-// exactly plan.json, boot.img, and public.pem and validates every binding.
+// exactly plan.json, release-intent.json, boot.img, and public.pem and
+// validates every binding.
 func LoadPlanDirectory(path string) (LoadedPlan, error) {
 	files, err := readExactDirectory(path, planFileLimits)
 	if err != nil {
@@ -48,6 +51,24 @@ func LoadPlanDirectory(path string) (LoadedPlan, error) {
 	if err != nil {
 		return LoadedPlan{}, err
 	}
+	intent, err := releaseintent.Parse(files["release-intent.json"])
+	if err != nil {
+		return LoadedPlan{}, fmt.Errorf("parse release-intent.json: %w", err)
+	}
+	canonicalIntent, err := intent.CanonicalJSON()
+	if err != nil {
+		return LoadedPlan{}, err
+	}
+	if !bytes.Equal(files["release-intent.json"], jsonFile(canonicalIntent)) {
+		return LoadedPlan{}, errors.New("release-intent.json is not canonical JSON")
+	}
+	intentDigest, err := intent.Digest()
+	if err != nil {
+		return LoadedPlan{}, err
+	}
+	if plan.ReleaseIntentDigest != intentDigest {
+		return LoadedPlan{}, errors.New("release-intent.json digest does not match the signing plan")
+	}
 	publicKey, fingerprint, err := parsePublicKey(files["public.pem"])
 	if err != nil {
 		return LoadedPlan{}, err
@@ -61,9 +82,23 @@ func LoadPlanDirectory(path string) (LoadedPlan, error) {
 	if digest := bundle.Sum(files["boot.img"]); digest != plan.BootImageDigest {
 		return LoadedPlan{}, errors.New("boot.img digest does not match the signing plan")
 	}
+	bootInput, ok := intent.SigningInput(bundle.RoleBootImage)
+	if !ok || bootInput.Digest != plan.BootImageDigest || bootInput.SizeBytes != plan.BootImageSizeBytes {
+		return LoadedPlan{}, errors.New("release intent boot-image input does not match the signing plan")
+	}
+	if intent.PublicKeyFingerprint != plan.PublicKeyFingerprint {
+		return LoadedPlan{}, errors.New("release intent public key does not match the signing plan")
+	}
+	if intent.SigningPolicyDigest != plan.SignerPolicyDigest {
+		return LoadedPlan{}, errors.New("release intent signer policy does not match the signing plan")
+	}
+	if intent.SourceDateEpoch != plan.SourceDateEpoch {
+		return LoadedPlan{}, errors.New("release intent timestamp does not match the signing plan")
+	}
 	return LoadedPlan{
 		Plan: plan, PlanJSON: canonicalPlan, BootImage: files["boot.img"],
-		PublicPEM: files["public.pem"], PublicKey: publicKey, PlanDigest: planDigest,
+		ReleaseIntentJSON: canonicalIntent, PublicPEM: files["public.pem"],
+		PublicKey: publicKey, PlanDigest: planDigest,
 	}, nil
 }
 
@@ -286,7 +321,7 @@ func pathsOverlap(left, right string) bool {
 func sameLoadedPlan(left, right LoadedPlan) bool {
 	return left.Plan == right.Plan && left.PlanDigest == right.PlanDigest &&
 		bytes.Equal(left.PlanJSON, right.PlanJSON) && bytes.Equal(left.BootImage, right.BootImage) &&
-		bytes.Equal(left.PublicPEM, right.PublicPEM)
+		bytes.Equal(left.PublicPEM, right.PublicPEM) && bytes.Equal(left.ReleaseIntentJSON, right.ReleaseIntentJSON)
 }
 
 func sameLoadedResult(left, right LoadedResult) bool {

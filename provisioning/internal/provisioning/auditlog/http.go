@@ -31,8 +31,12 @@ func Handler(service *Service, identityPolicy mtls.IdentityPolicy) http.Handler 
 			writeError(writer, http.StatusBadRequest, err)
 			return
 		}
-		if err := identityPolicy.Authorize(request, appendRequest.Event.StationID, appendRequest.Event.LaneID); err != nil {
-			writeError(writer, authorizationStatus(err), err)
+		if err := authorizeAppend(request, identityPolicy, appendRequest.Event); err != nil {
+			status := authorizationStatus(err)
+			if errors.Is(err, ErrInvalid) {
+				status = http.StatusBadRequest
+			}
+			writeError(writer, status, err)
 			return
 		}
 		receipt, err := service.Append(request.Context(), appendRequest)
@@ -74,6 +78,16 @@ func Handler(service *Service, identityPolicy mtls.IdentityPolicy) http.Handler 
 		}{StoreSchemaVersion, records})
 	})
 	return mux
+}
+
+func authorizeAppend(request *http.Request, identityPolicy mtls.IdentityPolicy, event Event) error {
+	if event.Stage != "plan_approval" {
+		return identityPolicy.Authorize(request, event.StationID, event.LaneID)
+	}
+	if len(event.Actors) != 1 || event.Actors[0].Role != "approver" || event.Actors[0].ID == "" {
+		return invalid("plan_approval requires exactly one approver actor")
+	}
+	return identityPolicy.AuthorizeApprover(request, event.Actors[0].ID)
 }
 
 func authorizationStatus(err error) int {

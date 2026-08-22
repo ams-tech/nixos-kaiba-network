@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-eeprom-signing-result-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 EEPROM signing result v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "plan_digest",
+    "release_intent_digest",
+    "eeprom_release_manifest_digest",
+    "signer_policy_digest",
+    "public_key_fingerprint",
+    "customer_key_hash",
+    "source_date_epoch",
+    "updater_mode",
+    "recovery_mode",
+    "signatures",
+    "signed_eeprom",
+    "eeprom_update_metadata",
+    "fresh_recovery_bootcode"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-eeprom-signing-result/v1alpha1"
+    },
+    "plan_id": { "$ref": "#/$defs/identifier" },
+    "plan_digest": { "$ref": "#/$defs/digest" },
+    "release_intent_digest": { "$ref": "#/$defs/digest" },
+    "eeprom_release_manifest_digest": { "$ref": "#/$defs/digest" },
+    "signer_policy_digest": { "$ref": "#/$defs/digest" },
+    "public_key_fingerprint": { "$ref": "#/$defs/digest" },
+    "customer_key_hash": { "$ref": "#/$defs/digest" },
+    "source_date_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 253402300799
+    },
+    "updater_mode": { "const": "fresh-board" },
+    "recovery_mode": { "const": "unsigned-copy" },
+    "signatures": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signature" },
+            { "properties": { "role": { "const": "rpi5.eeprom_bootcode" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signature" },
+            { "properties": { "role": { "const": "rpi5.eeprom_bootsys" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signature" },
+            { "properties": { "role": { "const": "rpi5.eeprom_config" } } }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "signed_eeprom": {
+      "allOf": [
+        { "$ref": "#/$defs/file" },
+        { "properties": { "size_bytes": { "maximum": 2097152 } } }
+      ]
+    },
+    "eeprom_update_metadata": {
+      "allOf": [
+        { "$ref": "#/$defs/file" },
+        { "properties": { "size_bytes": { "maximum": 4096 } } }
+      ]
+    },
+    "fresh_recovery_bootcode": {
+      "allOf": [
+        { "$ref": "#/$defs/file" },
+        { "properties": { "size_bytes": { "maximum": 112108 } } }
+      ]
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "size_bytes"],
+      "properties": {
+        "digest": { "$ref": "#/$defs/digest" },
+        "size_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "input_digest",
+        "input_size_bytes",
+        "signature_digest",
+        "signature_size_bytes",
+        "gate_receipt_digest"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["rpi5.eeprom_bootcode", "rpi5.eeprom_bootsys", "rpi5.eeprom_config"]
+        },
+        "input_digest": { "$ref": "#/$defs/digest" },
+        "input_size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 112120
+        },
+        "signature_digest": { "$ref": "#/$defs/digest" },
+        "signature_size_bytes": { "const": 256 },
+        "gate_receipt_digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releaseintent"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rpi5bootsig"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/signing"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/signinggate"
@@ -28,13 +29,14 @@ import (
 const testSourceDateEpoch uint64 = 1_700_000_000
 
 type testFixture struct {
-	root        string
-	plan        string
-	expectedKey string
-	privateKey  *rsa.PrivateKey
-	publicPEM   []byte
-	fingerprint bundle.Digest
-	bootImage   []byte
+	root                string
+	plan                string
+	expectedKey         string
+	privateKey          *rsa.PrivateKey
+	publicPEM           []byte
+	fingerprint         bundle.Digest
+	bootImage           []byte
+	releaseIntentDigest bundle.Digest
 }
 
 func TestSignAndFinalize(t *testing.T) {
@@ -47,7 +49,7 @@ func TestSignAndFinalize(t *testing.T) {
 		if socketPath != "/run/kaiba/signing-gate.sock" || string(artifact) != string(fixture.bootImage) {
 			t.Fatal("signer received an unexpected socket or artifact")
 		}
-		return signForTest(t, fixture.privateKey, artifact), nil
+		return signForTest(t, fixture.privateKey, artifact, fixture.releaseIntentDigest), nil
 	})
 	if err := Sign(context.Background(), fixture.plan, signedDirectory, config); err != nil {
 		t.Fatalf("Sign() error = %v", err)
@@ -71,7 +73,7 @@ func TestSignAndFinalize(t *testing.T) {
 		t.Fatalf("Finalize() error = %v", err)
 	}
 	requireDirectoryEntries(t, finalDirectory,
-		"boot.img", "boot.sig", "manifest.json", "public.pem", "signing-plan.json", "signing-result.json",
+		"boot.img", "boot.sig", "manifest.json", "public.pem", "release-intent.json", "signing-plan.json", "signing-result.json",
 	)
 	if got := mustRead(t, filepath.Join(finalDirectory, "boot.img")); string(got) != string(fixture.bootImage) {
 		t.Fatal("final boot.img differs from planned bytes")
@@ -160,7 +162,7 @@ func TestSignRejectsSubstitutionWrongKeyAndExistingOutput(t *testing.T) {
 		output := filepath.Join(fixture.root, "signed")
 		config := fixture.signConfig(func(_ context.Context, _ string, artifact []byte) (signinggate.Result, error) {
 			mustWrite(t, filepath.Join(fixture.plan, "boot.img"), []byte("evil"))
-			return signForTest(t, fixture.privateKey, artifact), nil
+			return signForTest(t, fixture.privateKey, artifact, fixture.releaseIntentDigest), nil
 		})
 		if err := Sign(context.Background(), fixture.plan, output, config); err == nil {
 			t.Fatal("Sign() accepted a substituted boot image")
@@ -207,10 +209,19 @@ func TestSignRejectsSubstitutionWrongKeyAndExistingOutput(t *testing.T) {
 		fixture := newTestFixture(t, "wrong-signature", []byte("boot"))
 		wrong := newTestFixture(t, "wrong-signature-key", []byte("boot"))
 		config := fixture.signConfig(func(_ context.Context, _ string, artifact []byte) (signinggate.Result, error) {
-			return signForTest(t, wrong.privateKey, artifact), nil
+			return signForTest(t, wrong.privateKey, artifact, fixture.releaseIntentDigest), nil
 		})
 		if err := Sign(context.Background(), fixture.plan, filepath.Join(fixture.root, "signed"), config); err == nil || !strings.Contains(err.Error(), "verify") {
 			t.Fatalf("Sign() error = %v, want signature verification failure", err)
+		}
+	})
+	t.Run("wrong gate release intent", func(t *testing.T) {
+		fixture := newTestFixture(t, "wrong-gate-intent", []byte("boot"))
+		config := fixture.signConfig(func(_ context.Context, _ string, artifact []byte) (signinggate.Result, error) {
+			return signForTest(t, fixture.privateKey, artifact, bundle.Sum([]byte("other release intent"))), nil
+		})
+		if err := Sign(context.Background(), fixture.plan, filepath.Join(fixture.root, "signed"), config); err == nil || !strings.Contains(err.Error(), "release intent") {
+			t.Fatalf("Sign() error = %v, want release-intent mismatch", err)
 		}
 	})
 	t.Run("pre-existing output", func(t *testing.T) {
@@ -237,7 +248,7 @@ func TestFinalizeRejectsRawSignatureTamperingReplayAndExistingOutput(t *testing.
 	fixture := newTestFixture(t, "original-plan", []byte("boot"))
 	signed := filepath.Join(fixture.root, "signed")
 	if err := Sign(context.Background(), fixture.plan, signed, fixture.signConfig(func(_ context.Context, _ string, artifact []byte) (signinggate.Result, error) {
-		return signForTest(t, fixture.privateKey, artifact), nil
+		return signForTest(t, fixture.privateKey, artifact, fixture.releaseIntentDigest), nil
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -364,9 +375,14 @@ func newTestFixture(t *testing.T, planID string, bootImage []byte) testFixture {
 	expectedKey := filepath.Join(root, "expected-public.pem")
 	mustWrite(t, expectedKey, publicPEM)
 	plan := makePlanDirectory(t, filepath.Join(root, "plan"), privateKey, planID, bootImage, testSourceDateEpoch)
+	loadedPlan, err := LoadPlanDirectory(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return testFixture{
 		root: root, plan: plan, expectedKey: expectedKey, privateKey: privateKey,
 		publicPEM: publicPEM, fingerprint: fingerprint, bootImage: append([]byte(nil), bootImage...),
+		releaseIntentDigest: loadedPlan.Plan.ReleaseIntentDigest,
 	}
 }
 
@@ -386,8 +402,37 @@ func makePlanDirectory(t *testing.T, path string, privateKey *rsa.PrivateKey, pl
 	if err != nil {
 		t.Fatal(err)
 	}
+	intentInputs := []bundle.Artifact{
+		{Role: bundle.RoleBootImage, Digest: bundle.Sum(bootImage), SizeBytes: uint64(len(bootImage))},
+		{Role: bundle.RoleEEPROMBootcode, Digest: bundle.Sum([]byte("EEPROM bootcode preimage")), SizeBytes: uint64(len("EEPROM bootcode preimage"))},
+		{Role: bundle.RoleEEPROMBootsys, Digest: bundle.Sum([]byte("EEPROM bootsys preimage")), SizeBytes: uint64(len("EEPROM bootsys preimage"))},
+		{Role: bundle.RoleEEPROMConfig, Digest: bundle.Sum([]byte("EEPROM config")), SizeBytes: uint64(len("EEPROM config"))},
+		{Role: bundle.RoleOwnedRecoveryBootcode, Digest: bundle.Sum([]byte("owned recovery preimage")), SizeBytes: uint64(len("owned recovery preimage"))},
+	}
+	intent, err := releaseintent.New(releaseintent.Parameters{
+		ReleaseID:                   "release:" + planID,
+		SourceRevision:              strings.Repeat("a", 40),
+		SourceDateEpoch:             epoch,
+		UnsignedArtifactSetDigest:   bundle.Sum([]byte("unsigned artifact set")),
+		EEPROMReleaseManifestDigest: bundle.Sum([]byte("EEPROM release manifest")),
+		PublicKeyFingerprint:        fingerprint,
+		SigningPolicyDigest:         policyDigest,
+		ExpectedCustomerKeyHash:     bundle.Sum([]byte("customer public key")),
+		SigningInputs:               intentInputs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentJSON, err := intent.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentDigest, err := intent.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
 	plan := Plan{
-		SchemaVersion: PlanSchemaV1Alpha1, PlanID: planID,
+		SchemaVersion: PlanSchemaV1Alpha2, PlanID: planID, ReleaseIntentDigest: intentDigest,
 		BootImageDigest: bundle.Sum(bootImage), BootImageSizeBytes: uint64(len(bootImage)),
 		PublicKeyFingerprint: fingerprint, SignerPolicyDigest: policyDigest, SourceDateEpoch: epoch,
 	}
@@ -396,6 +441,7 @@ func makePlanDirectory(t *testing.T, path string, privateKey *rsa.PrivateKey, pl
 		t.Fatal(err)
 	}
 	mustWrite(t, filepath.Join(path, "plan.json"), jsonFile(encoded))
+	mustWrite(t, filepath.Join(path, "release-intent.json"), jsonFile(intentJSON))
 	mustWrite(t, filepath.Join(path, "boot.img"), bootImage)
 	mustWrite(t, filepath.Join(path, "public.pem"), publicPEM)
 	return path
@@ -419,7 +465,7 @@ func (fixture testFixture) signConfig(request SignatureRequester) SignConfig {
 	}
 }
 
-func signForTest(t *testing.T, privateKey *rsa.PrivateKey, artifact []byte) signinggate.Result {
+func signForTest(t *testing.T, privateKey *rsa.PrivateKey, artifact []byte, releaseIntentDigest bundle.Digest) signinggate.Result {
 	t.Helper()
 	digest := sha256.Sum256(artifact)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, digest[:])
@@ -428,6 +474,7 @@ func signForTest(t *testing.T, privateKey *rsa.PrivateKey, artifact []byte) sign
 	}
 	return signinggate.Result{
 		SignatureHex: hex.EncodeToString(signature), ReceiptDigest: bundle.Sum([]byte("durable gate receipt")),
+		ReleaseIntentDigest: releaseIntentDigest,
 	}
 }
 
@@ -523,8 +570,9 @@ func TestPlanAndResultRejectOutOfRangeSourceDateEpoch(t *testing.T) {
 	}
 
 	result := Result{
-		SchemaVersion: ResultSchemaV1Alpha1, PlanID: loaded.Plan.PlanID,
-		PlanDigest: loaded.PlanDigest, BootImageDigest: loaded.Plan.BootImageDigest,
+		SchemaVersion: ResultSchemaV1Alpha2, PlanID: loaded.Plan.PlanID,
+		PlanDigest: loaded.PlanDigest, ReleaseIntentDigest: loaded.Plan.ReleaseIntentDigest,
+		BootImageDigest:     loaded.Plan.BootImageDigest,
 		BootImageSizeBytes:  loaded.Plan.BootImageSizeBytes,
 		BootSignatureDigest: bundle.Sum([]byte("signature")), BootSignatureSizeBytes: 1,
 		PublicKeyFingerprint: loaded.Plan.PublicKeyFingerprint,
@@ -548,8 +596,9 @@ func TestPlanAndResultRejectOutOfRangeSizes(t *testing.T) {
 	}
 
 	validResult := Result{
-		SchemaVersion: ResultSchemaV1Alpha1, PlanID: loaded.Plan.PlanID,
-		PlanDigest: loaded.PlanDigest, BootImageDigest: loaded.Plan.BootImageDigest,
+		SchemaVersion: ResultSchemaV1Alpha2, PlanID: loaded.Plan.PlanID,
+		PlanDigest: loaded.PlanDigest, ReleaseIntentDigest: loaded.Plan.ReleaseIntentDigest,
+		BootImageDigest:     loaded.Plan.BootImageDigest,
 		BootImageSizeBytes:  uint64(len(fixture.bootImage)),
 		BootSignatureDigest: bundle.Sum([]byte("signature")), BootSignatureSizeBytes: 1,
 		PublicKeyFingerprint: loaded.Plan.PublicKeyFingerprint,

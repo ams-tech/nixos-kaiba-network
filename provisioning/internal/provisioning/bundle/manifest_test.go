@@ -73,7 +73,7 @@ func TestArtifactRolesAreClosedAndSigningIsNarrow(t *testing.T) {
 			t.Fatalf("role %q: %v", role, err)
 		}
 	}
-	if !RoleBootImage.Signable() || !RoleEEPROMConfig.Signable() || !RoleEEPROMBootsys.Signable() || !RoleOwnedRecoveryBootcode.Signable() {
+	if !RoleBootImage.Signable() || !RoleEEPROMBootcode.Signable() || !RoleEEPROMConfig.Signable() || !RoleEEPROMBootsys.Signable() || !RoleOwnedRecoveryBootcode.Signable() {
 		t.Fatal("expected Raspberry Pi signing input role is not signable")
 	}
 	for _, role := range []ArtifactRole{RoleBootPublicKey, RoleBootSignature, RoleSignedEEPROMImage, RoleFreshCommitBundle, RoleOwnedRecoveryBundle, RoleDeviceProfile, RolePlatformAdapter} {
