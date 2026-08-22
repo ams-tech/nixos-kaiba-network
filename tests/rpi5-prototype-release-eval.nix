@@ -9,6 +9,9 @@ let
   metadata = prototype.metadata;
   signingContract = signingProfile.signing.kaibaSigning;
   planContract = prototype.signingPlan.kaibaBootSigningPlan;
+  releaseIntentContract = prototype.releaseIntent.kaibaRpi5ReleaseIntent;
+  eepromInputContract = prototype.eepromSigningInputs.kaibaRpi5EEPROMReleaseSigningInputs;
+  eepromPlanContract = prototype.eepromSigningPlan.kaibaRpi5EEPROMSigningPlan;
   unsignedContract = prototype.unsignedArtifacts.kaibaUnsignedArtifacts;
   reviewContract = prototype.review.kaibaPrototypeReleaseReview;
   targetConfig = prototype.target.nixosSystem.config;
@@ -24,6 +27,32 @@ let
     planContract.otpCapable
     planContract.privateKeyAccess
     planContract.signingAuthorityConfigured
+    releaseIntentContract.blockDeviceWriteCapable
+    releaseIntentContract.directHardwareAccess
+    releaseIntentContract.eepromProgrammingCapable
+    releaseIntentContract.mutationCapable
+    releaseIntentContract.oneTimeSettingCapable
+    releaseIntentContract.otpCapable
+    releaseIntentContract.privateKeyAccess
+    releaseIntentContract.signingAuthorityConfigured
+    eepromInputContract.blockDeviceWriteCapable
+    eepromInputContract.directHardwareAccess
+    eepromInputContract.eepromProgrammingCapable
+    eepromInputContract.mutationCapable
+    eepromInputContract.oneTimeSettingCapable
+    eepromInputContract.otpCapable
+    eepromInputContract.privateKeyAccess
+    eepromInputContract.signingAuthorityConfigured
+    eepromPlanContract.blockDeviceWriteCapable
+    eepromPlanContract.directHardwareAccess
+    eepromPlanContract.eepromProgrammingCapable
+    eepromPlanContract.mutationCapable
+    eepromPlanContract.oneTimeSettingCapable
+    eepromPlanContract.otpCapable
+    eepromPlanContract.privateKeyAccess
+    eepromPlanContract.recoverySigningPerformed
+    eepromPlanContract.signedEEPROMProduced
+    eepromPlanContract.signingAuthorityConfigured
     unsignedContract.blockDeviceWriteCapable
     unsignedContract.directHardwareAccess
     unsignedContract.eepromProgrammingCapable
@@ -48,11 +77,18 @@ assert lib.assertMsg (lib.isDerivation prototype.unsignedArtifacts)
   "the prototype unsigned artifact set is not a derivation";
 assert lib.assertMsg (lib.isDerivation prototype.signingPlan)
   "the prototype signing plan is not a derivation";
+assert lib.assertMsg (lib.isDerivation prototype.releaseIntent)
+  "the prototype release intent is not a derivation";
+assert lib.assertMsg (lib.isDerivation prototype.eepromSigningInputs)
+  "the prototype EEPROM signing inputs are not a derivation";
+assert lib.assertMsg (lib.isDerivation prototype.eepromSigningPlan)
+  "the prototype EEPROM signing plan is not a derivation";
 assert lib.assertMsg (lib.isDerivation prototype.review)
   "the prototype release review is not a derivation";
 assert lib.assertMsg (
   builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" metadata.sourceRevision != null
   && metadata.planID == "release:rpi5-prototype:${builtins.substring 0 12 metadata.sourceRevision}"
+  && metadata.eepromPlanID == "${metadata.planID}:eeprom"
   && builtins.isInt metadata.sourceDateEpoch
 ) "the prototype release identity is not derived from canonical source metadata";
 assert lib.assertMsg (
@@ -78,15 +114,38 @@ assert lib.assertMsg (
 ) "the exposed prototype unsigned output differs from the target artifact set";
 assert lib.assertMsg (
   planContract.bootImage == "${prototype.unsignedArtifacts}/unsigned/boot.img"
+  && planContract.releaseIntent == prototype.releaseIntent
   && planContract.planID == metadata.planID
   && planContract.reviewedPublicKeyPEM == signingProfile.reviewedPublicKeyPEM
   && planContract.publicKeyFingerprint == metadata.publicKeyFingerprint
   && planContract.signerPolicyDigest == metadata.signerPolicyDigest
   && planContract.sourceDateEpoch == metadata.sourceDateEpoch
-  && planContract.schemaVersion == "kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1"
+  && planContract.schemaVersion == "kaiba.provisioning.rpi5-boot-signing-plan/v1alpha2"
 ) "the exposed prototype signing plan differs from the reviewed public release inputs";
 assert lib.assertMsg (
+  releaseIntentContract.releaseID == metadata.planID
+  && releaseIntentContract.expectedCustomerKeyHash == "sha256:${metadata.expectedCustomerKeyHash}"
+  && releaseIntentContract.publicKeyFingerprint == metadata.publicKeyFingerprint
+  && releaseIntentContract.signerPolicyDigest == metadata.signerPolicyDigest
+  && releaseIntentContract.sourceDateEpoch == metadata.sourceDateEpoch
+  && releaseIntentContract.sourceRevision == metadata.sourceRevision
+  && releaseIntentContract.authorizationScope == "cohort_release"
+) "the exposed prototype release intent differs from the reviewed public release inputs";
+assert lib.assertMsg (
+  eepromPlanContract.planID == metadata.eepromPlanID
+  && eepromPlanContract.releaseIntent == prototype.releaseIntent
+  && eepromPlanContract.publicKeyFingerprint == metadata.publicKeyFingerprint
+  && eepromPlanContract.signerPolicyDigest == metadata.signerPolicyDigest
+  && eepromPlanContract.customerKeyHash == "sha256:${metadata.expectedCustomerKeyHash}"
+  && eepromPlanContract.sourceDateEpoch == metadata.sourceDateEpoch
+  && eepromPlanContract.schemaVersion == "kaiba.provisioning.rpi5-eeprom-signing-plan/v1alpha1"
+  && eepromPlanContract.updaterMode == "fresh-board"
+  && eepromPlanContract.updaterFlags == [ "-f" ]
+) "the exposed prototype EEPROM signing plan differs from the reviewed public release inputs";
+assert lib.assertMsg (
   reviewContract.planID == metadata.planID
+  && reviewContract.eepromPlanID == metadata.eepromPlanID
+  && reviewContract.releaseIntent == prototype.releaseIntent
   && reviewContract.sourceDateEpoch == metadata.sourceDateEpoch
   && reviewContract.sourceRevision == metadata.sourceRevision
 ) "the prototype release review is not bound to the same release identity";
@@ -100,6 +159,7 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-evaluation" { } ''
     'repository-signing-profile-binding: pass' \
     'unsigned-target-binding: pass' \
     'public-signing-plan-binding: pass' \
+    'public-eeprom-signing-plan-binding: pass' \
     'no-signing-or-mutation-capability: pass' \
     > "$out/results.txt"
 ''

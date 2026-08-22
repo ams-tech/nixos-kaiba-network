@@ -467,6 +467,102 @@ let
   rpi5EEPROMRelease = mkRpi5EEPROMRelease { };
   rpi5EEPROMReleaseVerifier = eepromReleaseFactories.verifier;
 
+  eepromPython = pkgs.python3.withPackages (pythonPackages: [ pythonPackages.pycryptodomex ]);
+  eepromToolRuntime =
+    pkgs.runCommand "kaiba-rpi5-eeprom-signing-toolchain"
+      {
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+      }
+      ''
+        mkdir -p "$out/bin"
+        makeWrapper ${eepromPython}/bin/python3 "$out/bin/rpi-eeprom-config" \
+          --add-flags ${lib.escapeShellArg "${rpi5EEPROMRelease}/toolchain/rpi-eeprom-config"}
+        makeWrapper ${eepromPython}/bin/python3 "$out/bin/rpi-sign-bootcode" \
+          --add-flags ${lib.escapeShellArg "${rpi5EEPROMRelease}/toolchain/rpi-sign-bootcode"}
+        makeWrapper ${eepromPython}/bin/python3 "$out/bin/rpi-bootloader-key-convert" \
+          --add-flags ${lib.escapeShellArg "${rpi5EEPROMRelease}/toolchain/rpi-bootloader-key-convert"}
+        ${pkgs.gnused}/bin/sed \
+          '1c #!${pkgs.dash}/bin/dash' \
+          ${rpi5EEPROMRelease}/toolchain/rpi-eeprom-digest \
+          > "$out/bin/rpi-eeprom-digest"
+        ${pkgs.gnused}/bin/sed \
+          '1c #!${pkgs.dash}/bin/dash' \
+          ${rpi5EEPROMRelease}/toolchain/update-pieeprom.sh \
+          > "$out/bin/update-pieeprom.sh"
+        chmod 0555 "$out/bin/rpi-eeprom-digest" "$out/bin/update-pieeprom.sh"
+      '';
+  eepromToolPATH = lib.makeBinPath [
+    eepromToolRuntime
+    pkgs.binutils
+    pkgs.coreutils
+    pkgs.findutils
+    pkgs.gawk
+    pkgs.gnugrep
+    pkgs.gnused
+    pkgs.openssl
+    pkgs.xxd
+  ];
+  eepromSigningTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-sign-eeprom";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-sign-eeprom" ];
+    vendorHash = null;
+    doCheck = false;
+    ldflags = [
+      "-X=main.signingGateSocketPath=/run/kaiba-provision-signing/signing.sock"
+      "-X=main.pinnedUpdatePieepromExecutablePath=${eepromToolRuntime}/bin/update-pieeprom.sh"
+      "-X=main.pinnedRpiEEPROMConfigExecutablePath=${eepromToolRuntime}/bin/rpi-eeprom-config"
+      "-X=main.pinnedToolRuntimePath=${eepromToolPATH}"
+      "-X=main.expectedEEPROMReleaseManifestDigest=${rpi5EEPROMRelease.kaibaRpi5EEPROMRelease.releaseManifestDigest}"
+      "-X=main.expectedOriginalEEPROMDigest=${eepromReleaseFactories.policy.firmware.image.sha256}"
+      "-X=main.expectedOriginalRecoveryDigest=${eepromReleaseFactories.policy.firmware.recovery.sha256}"
+      "-X=main.expectedOriginalBootcodeDigest=${eepromReleaseFactories.policy.firmware.bootcode.sha256}"
+      "-X=main.expectedOriginalBootsysDigest=${eepromReleaseFactories.policy.firmware.bootsys.sha256}"
+      "-X=main.expectedEEPROMFirmwareBuildEpoch=${toString eepromReleaseFactories.policy.firmware.buildEpoch}"
+    ];
+    passthru.kaibaEEPROMSigningTool = {
+      inherit eepromToolRuntime;
+      approvalGateConfigured = true;
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      recoverySigningCapable = false;
+      signingAuthorityConfigured = true;
+      toolPATH = eepromToolPATH;
+      updaterFlags = [ "-f" ];
+      updaterMode = "fresh-board";
+    };
+    meta = {
+      mainProgram = "kaiba-provision-sign-eeprom";
+      description = "Approval-gated fresh-board Raspberry Pi 5 EEPROM signing adapter and verifier";
+      platforms = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+    };
+  };
+
+  releaseIntentFactories = import ./release-intent.nix {
+    inherit lib pkgs;
+  };
+  inherit (releaseIntentFactories) mkRpi5EEPROMReleaseSigningInputs mkRpi5ReleaseIntent;
+
+  eepromSigningFactories = import ./eeprom-signing.nix {
+    eepromRelease = rpi5EEPROMRelease;
+    inherit
+      eepromSigningTool
+      eepromToolRuntime
+      lib
+      pkgs
+      ;
+  };
+  inherit (eepromSigningFactories) mkRpi5EEPROMSigningPlan mkRpi5VerifiedSignedEEPROM;
+
   signedBootFactories = import ./signed-boot.nix {
     inherit lib pkgs signedBootTool;
   };
@@ -908,13 +1004,19 @@ in
     laneGuard
     liveStation
     mediaStager
+    eepromSigningTool
+    eepromToolRuntime
     mkDevelopmentYubiKeySigning
     mkRpi5BootSigningPlan
     mkRpi5EEPROMRelease
+    mkRpi5EEPROMReleaseSigningInputs
+    mkRpi5EEPROMSigningPlan
     mkRpi5PhysicalLaneGuard
     mkRpi5MediaStagingFixture
+    mkRpi5ReleaseIntent
     mkRpi5UnfusedVerifier
     mkRpi5VerifiedSignedBoot
+    mkRpi5VerifiedSignedEEPROM
     mkRpi5VerifiedUnfusedCapsule
     provision
     rehearsal

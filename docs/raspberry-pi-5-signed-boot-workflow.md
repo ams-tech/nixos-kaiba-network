@@ -1,28 +1,83 @@
 # Raspberry Pi 5 signed-boot workflow
 
-This workflow produces and verifies a signed `boot.img` without writing target
-media, programming EEPROM, or changing OTP. Nix builds only public artifacts.
-The private key remains behind the fixed, approval-gated YubiKey service and is
-used only by an explicit runtime command.
+This workflow constructs the public release-intent lineage, then produces and
+verifies a signed `boot.img` without writing target media, programming EEPROM,
+or changing OTP. Nix builds only public artifacts. The private key remains
+behind the fixed, approval-gated YubiKey service and is used only by an
+explicit runtime command.
 
 ## Boundaries and outputs
 
+`mkRpi5ReleaseIntent` is the pure, pre-signature authorization boundary. Its
+v1alpha1 document binds the release ID, device class, clean source revision,
+fixed source epoch, unsigned-artifact-set digest, pinned EEPROM-release
+manifest digest, public-key fingerprint, signing-policy digest, expected
+customer-key hash, exact signing inputs, and exact required signed-release
+roles. It fixes `authorization_scope` to `cohort_release` and emits exactly:
+
+```text
+release-intent.json
+```
+
+The signing inputs are exactly these five immutable byte records, in canonical
+role order:
+
+```text
+rpi5.boot_image
+rpi5.eeprom_bootcode
+rpi5.eeprom_bootsys
+rpi5.eeprom_config
+rpi5.owned_recovery_bootcode
+```
+
+The required final outputs are exactly these 18 roles, also in canonical role
+order:
+
+```text
+boot_public_key
+device_profile
+platform_adapter
+root_integrity
+rpi5.boot_image
+rpi5.boot_signature
+rpi5.eeprom_bootsys
+rpi5.eeprom_config
+rpi5.fresh_commit_bundle
+rpi5.fresh_readback_bundle
+rpi5.negative_boot_bundle
+rpi5.owned_readback_bundle
+rpi5.owned_recovery_bootcode
+rpi5.owned_recovery_bundle
+rpi5.root_data_image
+rpi5.root_hash_tree_image
+rpi5.root_integrity_test_bundle
+rpi5.signed_eeprom_image
+```
+
+`rpi5.eeprom_bootcode` is deliberately a signing-only intermediate; it does
+not add a nineteenth role to the final signed-release manifest.
+
 `mkRpi5BootSigningPlan` is a pure derivation. Its inputs are an already-built
-`boot.img`, a reviewed RSA-2048 public key, that key's canonical SPKI SHA-256
-fingerprint, the reviewed signer-policy digest, a release ID, and a fixed
-timestamp. It emits exactly:
+`boot.img`, the canonical release-intent output, a reviewed RSA-2048 public
+key, that key's canonical SPKI SHA-256 fingerprint, the reviewed signer-policy
+digest, a plan ID, and the same fixed timestamp. Its v1alpha2 plan verifies
+that the release intent authorizes the exact boot-image digest and size and
+emits exactly:
 
 ```text
 boot.img
 plan.json
 public.pem
+release-intent.json
 ```
 
 `mkDevelopmentYubiKeySigning` builds the runtime adapter. The package fixes the
 signing-gate socket, signer/cohort IDs, YKCS11 URI, public-key path, and public
 fingerprint at link time. The `sign` command accepts only a plan directory and
 a new output directory; it has no runtime key, URI, provider, module, socket,
-algorithm, or PIN selector. It emits exactly:
+algorithm, or PIN selector. The v1alpha2 grant, signing request, gate response,
+and signing result must all carry the same `release_intent_digest`, artifact
+role, and artifact digest. It emits exactly:
 
 ```text
 boot.sig
@@ -38,6 +93,7 @@ boot.img
 boot.sig
 manifest.json
 public.pem
+release-intent.json
 signing-plan.json
 signing-result.json
 ```
@@ -49,6 +105,32 @@ bound by the reviewed plan and final Nix output; the Raspberry Pi signature
 format itself does not cryptographically authenticate those metadata fields.
 Similarly, `gate_receipt_digest` is correlation metadata unless the associated
 root-managed gate receipt is obtained and checked separately.
+
+The v1alpha2 signed-boot plan and result reject v1alpha1 records instead of
+silently treating them as lineage-aware. The offline finalizer revalidates the
+embedded release intent, its domain-separated digest, the boot input, signer
+metadata, plan/result lineage, and signature before copying
+`release-intent.json` into the public bundle. That bundle's `manifest.json` is
+still the narrow signed-boot slice; it is not the complete 18-role
+`rpi5-signed-release-manifest/v1alpha2`.
+
+### Release authorization is not device execution authorization
+
+The release intent answers a cohort-level question: may this exact set of five
+public byte strings be signed under this reviewed key and policy, with all 18
+outputs required before the release is complete? It intentionally contains no
+station, lane, target, transaction, claim, fence, or execution expiry. A valid
+release intent and signing receipt therefore grant no authority to write a
+device or change OTP.
+
+Per-device execution authorization is created later, after all signed outputs
+exist. The complete signed-release manifest v1alpha2 includes the same
+`release_intent_digest`; only its final manifest digest can then be bound into
+the lane plan and control approval for one exact transaction, target, lane,
+fence, and expiry. Keeping the order
+`release intent -> signing grants and receipts -> signed-release manifest ->
+device execution plan` avoids a cycle while keeping release signing separate
+from one-shot hardware authority.
 
 ## Review the public signer metadata
 
@@ -143,22 +225,28 @@ silently reusing a plan ID. Inspect the completed public review with:
 ```console
 jq . result-rpi5-prototype-unsigned-artifacts/manifest.json
 jq . result-rpi5-prototype-signing-plan/plan.json
+jq . result-rpi5-prototype-signing-plan/release-intent.json
 jq . result-rpi5-prototype-release-review/review.json
 cmp \
   result-rpi5-prototype-unsigned-artifacts/unsigned/boot.img \
   result-rpi5-prototype-signing-plan/boot.img
 ```
 
-The review revalidates both JSON schemas, every artifact digest, the canonical
-unsigned-bundle digest, the dm-verity tree and boot command line, the reviewed
-PEM and SPKI fingerprint, the Raspberry Pi customer-key representation, and
-the signer-policy digest. These three builds have no PC/SC, YubiKey, private-key,
-signing-grant, block-device, EEPROM, or OTP access. Their result is still an
-unsigned normal-boot artifact set and a public signing plan, not a signed
-release or authority to change a board.
+The review revalidates the JSON schemas, every artifact digest, the canonical
+unsigned-bundle and release-intent digests, the exact five signing inputs and
+18 required output roles, the dm-verity tree and boot command line, the
+reviewed PEM and SPKI fingerprint, the Raspberry Pi customer-key
+representation, and the signer-policy digest. These builds have no PC/SC,
+YubiKey, private-key, signing-grant, block-device, EEPROM-device, or OTP
+access. Their result is still an unsigned artifact set, a cohort-scoped public
+release intent, and a public signing plan—not a signed release or authority to
+change a board.
 
-Another deployment can expose its unsigned plan and configured runtime package
-with the factories below. Replace every marked deployment value.
+Another deployment can expose its reviewed release intent, unsigned plan, and
+configured runtime package with the factories below. Replace every marked
+deployment value. `releaseIntent` must be a fixed output of
+`mkRpi5ReleaseIntent`, not hand-authored JSON; the abbreviated binding below
+assumes that reviewed output is available as `releaseIntent`.
 `sourceDateEpoch` must be a fixed release value, not the evaluation time.
 
 ```nix
@@ -190,10 +278,16 @@ with the factories below. Replace every marked deployment value.
         sourceRevision = "<40_OR_64_LOWERCASE_HEX_GIT_REVISION>";
       };
 
+      # Construct this with mkRpi5ReleaseIntent from the target's unsigned
+      # artifacts, the pinned EEPROM release, and the exact five signing
+      # inputs listed above.
+      releaseIntent = ./reviewed-release-intent;
+
       plan = kaiba.lib.mkRpi5BootSigningPlan {
         inherit system;
         bootImage = "${target.unsignedArtifacts}/unsigned/boot.img";
         planID = "release:rpi5-prototype:1";
+        inherit releaseIntent;
         reviewedPublicKeyPEM = ./reviewed-boot-public.pem;
         publicKeyFingerprint = signing.kaibaSigning.publicKeyFingerprint;
         signerPolicyDigest = signing.kaibaSigning.signerPolicyDigest;
@@ -239,9 +333,11 @@ plan_path="$(readlink -f result-boot-signing-plan)"
 signing_path="$(readlink -f result-development-signing)"
 ```
 
-Review `plan.json`, `public.pem`, the signer policy, the public fingerprint,
-and the exact `boot.img` digest before authorizing a grant. The root-managed
-grant registry must contain an unexpired grant for that image digest, and the
+Review `release-intent.json`, `plan.json`, `public.pem`, the signer policy, the
+public fingerprint, and the exact `boot.img` digest and size before authorizing
+a grant. The root-managed v1alpha2 grant registry must contain an unexpired
+grant whose release-intent digest, role `rpi5.boot_image`, and artifact digest
+all match the plan. A grant for only the image digest is insufficient. The
 configured signing-gate service must be running with the PIN supplied through
 its systemd credential.
 
@@ -261,11 +357,12 @@ sudo -u kaiba-signing \
   --output /var/lib/kaiba-provision-signing/exports/rpi5-prototype-1
 ```
 
-The command fails closed if the output already exists, the plan changes during
-the touch wait, the configured public key changes, the plan names another
-signer policy, the gate rejects the digest, or the returned signature fails
-verification. The operation invokes the private key but performs no Pi, NVMe,
-EEPROM, or OTP mutation.
+The command fails closed if the output already exists, the plan or release
+intent changes during the touch wait, the configured public key changes, the
+plan names another signer policy, the gate returns another release-intent
+lineage, the grant does not bind the boot role and digest, or the returned
+signature fails verification. The operation invokes the private key but
+performs no Pi, NVMe, EEPROM, or OTP mutation.
 
 Copy the two public output files to the release workspace through the reviewed
 handoff procedure. For a local prototype, place them in `./signed-output` and
@@ -314,14 +411,35 @@ touches a Pi, EEPROM, OTP, removable medium, or block device. Changing the boot
 or root artifacts invalidates the bindings and requires review and a new
 signature rather than silently reusing this result.
 
+## EEPROM fresh-board foundation boundary
+
+The repository also contains a public EEPROM fresh-board signing plan,
+approval-gated adapter, and offline finalizer. They bind the same
+`release_intent_digest` and model the pinned updater's `-f` path over exactly
+`rpi5.eeprom_bootcode`, `rpi5.eeprom_bootsys`, and `rpi5.eeprom_config`. The
+finalizer reopens the public plan and result, verifies the signatures and
+derived files, and admits only that verified public snapshot.
+
+This is a synthetic/offline foundation only. Current repository evidence does
+not establish that a reviewed production input was signed with a live approved
+token, and an output named `pieeprom.bin` from a synthetic fixture is not the
+production signed-EEPROM deliverable. The fresh-board plan deliberately copies
+the pinned unsigned recovery payload; it does not customer-counter-sign owned
+recovery. It also does not produce the fresh commit or owned recovery bundles,
+write EEPROM or target media, enter RPIBOOT, change OTP, or report any hardware
+result. The separately authorized `rpi5.owned_recovery_bootcode` input remains
+for a later recovery-signing workflow.
+
 ## Safety status
 
 Completing this workflow proves that the selected `boot.img` verifies under
-the reviewed public key and that the public records are internally bound. It
-does not prove a live YubiKey ceremony unless the root-managed receipt and
-operator evidence are reviewed. The repository's exact 18-role manifest and
-canonical RPIBOOT directory-tree contracts do not change that boundary: this
-workflow does not produce a signed EEPROM, recovery/commit bundles, an
+the reviewed public key and that the v1alpha2 public records carry one valid
+release-intent lineage. It does not prove a live YubiKey ceremony unless the
+root-managed receipt and operator evidence are reviewed. The repository's
+v1alpha2 exact 18-role signed-release manifest and canonical RPIBOOT
+directory-tree contracts do not change that boundary: this workflow does not
+produce a production signed EEPROM, signed recovery/commit bundles, an
 assembled complete signed release with every role resolved to immutable bytes,
-target-media cold readback, or secure-boot enforcement on hardware. Those
-remain prerequisites before any one-time setting may be changed.
+target-media cold readback, per-device execution authorization, or secure-boot
+enforcement on hardware. Those remain prerequisites before any one-time
+setting may be changed.

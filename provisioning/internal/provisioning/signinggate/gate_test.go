@@ -21,26 +21,21 @@ var fixedNow = time.Date(2026, 8, 15, 18, 30, 0, 0, time.UTC)
 func testGrant(artifact []byte, suffix string, expiresAt time.Time) Grant {
 	digest := bundle.Sum(artifact)
 	return Grant{
-		SchemaVersion: GrantSchemaV1Alpha1,
+		SchemaVersion: GrantSchemaV1Alpha2,
 		GrantID:       "grant:boot-" + suffix,
 		ExpiresAt:     canonicalTime(expiresAt),
 		Request: signing.Request{
-			SchemaVersion:  signing.RequestSchemaV1Alpha1,
+			SchemaVersion:  signing.RequestSchemaV1Alpha2,
 			RequestID:      "request:boot-" + suffix,
 			Algorithm:      signing.AlgorithmRSA2048SHA256,
 			Role:           bundle.RoleBootImage,
 			ArtifactDigest: digest,
 			Approval: signing.ApprovalBinding{
-				ApprovalID:        "approval:boot-" + suffix,
-				ApprovalDigest:    bundle.Sum([]byte("approval-" + suffix)),
-				TransactionID:     "transaction:device-" + suffix,
-				TransactionDigest: bundle.Sum([]byte("transaction-" + suffix)),
-				ManifestDigest:    bundle.Sum([]byte("manifest-" + suffix)),
-				PlanDigest:        bundle.Sum([]byte("plan-" + suffix)),
-				TargetFingerprint: bundle.Sum([]byte("target-" + suffix)),
-				FenceEpoch:        4,
-				Role:              bundle.RoleBootImage,
-				ArtifactDigest:    digest,
+				ApprovalID:          "approval:boot-" + suffix,
+				ApprovalDigest:      bundle.Sum([]byte("approval-" + suffix)),
+				ReleaseIntentDigest: bundle.Sum([]byte("release-intent-" + suffix)),
+				Role:                bundle.RoleBootImage,
+				ArtifactDigest:      digest,
 			},
 		},
 	}
@@ -140,6 +135,9 @@ func TestGateRecordsIntentBeforeKeyUseAndPersistsReceipt(t *testing.T) {
 	}
 	if backend.calls != 1 || len(result.SignatureHex) != signing.RSASignatureBytes*2 || result.Replayed {
 		t.Fatalf("backend/result = %d/%#v", backend.calls, result)
+	}
+	if result.ReleaseIntentDigest != grant.Request.Approval.ReleaseIntentDigest {
+		t.Fatalf("release-intent digest = %s, want %s", result.ReleaseIntentDigest, grant.Request.Approval.ReleaseIntentDigest)
 	}
 	state, found, err := store.Load(grant)
 	if err != nil || !found || state.Status != StateComplete || state.Receipt == nil {
@@ -256,6 +254,23 @@ func TestGateRejectsDifferentExpiredAndAmbiguousInputs(t *testing.T) {
 				t.Fatalf("rejected input reached backend %d times", backend.Calls)
 			}
 		})
+	}
+}
+
+func TestGateRejectsSameBytesAuthorizedForDifferentReleaseIntents(t *testing.T) {
+	artifact := []byte("shared signing preimage")
+	first := testGrant(artifact, "intent-a", fixedNow.Add(time.Hour))
+	second := testGrant(artifact, "intent-b", fixedNow.Add(time.Hour))
+	if first.Request.Approval.ReleaseIntentDigest == second.Request.Approval.ReleaseIntentDigest {
+		t.Fatal("test grants unexpectedly share a release intent")
+	}
+	backend := &signing.DeterministicFakeBackend{}
+	gate := testGate(t, testRegistry(t, first, second), testStore(t), backend)
+	if _, err := gate.Sign(context.Background(), artifact); err == nil || !strings.Contains(err.Error(), "2 current") {
+		t.Fatalf("Sign() error = %v, want ambiguous-intent denial", err)
+	}
+	if backend.Calls != 0 {
+		t.Fatalf("ambiguous intent reached backend %d times", backend.Calls)
 	}
 }
 

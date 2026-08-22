@@ -419,6 +419,7 @@ let
   };
 
   releaseManifestJSON = builtins.toJSON releaseManifest;
+  releaseManifestDigest = "sha256:${builtins.hashString "sha256" "${releaseManifestJSON}\n"}";
 
   mkRpi5EEPROMRelease =
     {
@@ -436,6 +437,7 @@ let
           inherit
             eepromSource
             releaseManifest
+            releaseManifestDigest
             updatePieeprom
             verifier
             ;
@@ -506,6 +508,8 @@ let
 
         printf '%s\n' ${lib.escapeShellArg releaseManifestJSON} \
           | jq --sort-keys --compact-output . > "$out/release.json"
+        test "sha256:$(sha256sum "$out/release.json" | cut -d ' ' -f 1)" = \
+          '${releaseManifestDigest}'
         chmod 0444 "$out/release.json"
 
         jq -r '
@@ -556,6 +560,7 @@ in
     mkRpi5EEPROMRelease
     policy
     releaseManifest
+    releaseManifestDigest
     updatePieeprom
     verifier
     ;

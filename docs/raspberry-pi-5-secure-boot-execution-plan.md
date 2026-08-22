@@ -79,7 +79,14 @@ The repository already contains useful foundations:
   rehearsal;
 - a pure normal-boot signing plan, linker-fixed approval-gated runtime adapter,
   canonical Raspberry Pi `boot.sig` codec, and pure offline signed-bundle
-  finalizer; and
+  finalizer;
+- a canonical cohort-scoped release intent that fixes five signing inputs and
+  all 18 required outputs before any signature exists;
+- v1alpha2 release-intent lineage through signing grants, requests, gate
+  receipts, the normal-boot plan and result, and the complete signed-release
+  manifest;
+- a public fresh-board EEPROM signing plan, approval-gated adapter, and offline
+  finalizer exercised only with synthetic/offline evidence; and
 - an isolated fixed-extent media-staging prototype, a deterministic synthetic
   outer FAT/GPT regular-file fixture, a signer-anchored capsule verifier, and an
   offline unfused record correlator that makes no hardware claim.
@@ -87,7 +94,9 @@ The repository already contains useful foundations:
 The repository does not yet contain a complete signed-release adapter,
 production-complete GPT/FAT/dm-verity NVMe writer and verifier,
 mutation-capable station backend, authenticated control-to-guard transport, or
-a proven RPIBOOT-to-normal-boot lane transition.
+a proven RPIBOOT-to-normal-boot lane transition. In particular, the EEPROM
+foundation is not a production signed EEPROM, owned-recovery signature,
+hardware write, or OTP result.
 
 ## Safety invariants
 
@@ -142,10 +151,10 @@ initializer/verifier. Its contract runs initialization, the stager's
 `fixture-dry-run`, `fixture-stage`, and `fixture-readback`, and final GPT/FAT and
 dm-verity verification against one regular file. The repository also exposes a
 clean-revision Pi 5 target, unsigned root/boot artifacts, a
-signer-profile-bound public signing plan, and a concrete release review that
-verifies the artifact digests,
-dm-verity tree, public key, and signer-policy binding without signing or
-hardware access. The orchestrator uses
+cohort-scoped release intent, a signer-profile-bound v1alpha2 public signing
+plan, and a concrete release review that verifies the artifact digests,
+release-intent lineage, dm-verity tree, public key, and signer-policy binding
+without signing or hardware access. The orchestrator uses
 the real durable control and audit services, derives the closed seven-operation
 plan, verifies both approval and initial-intent audit records under a distinct
 rehearsal actor policy, reopens and revalidates persisted state, emits no
@@ -153,11 +162,15 @@ executable lane request, and executes only the non-authoritative simulator.
 
 These pieces are packaged in separate capability closures and are described in
 the [non-fusing prototype runbook](non-fusing-secure-boot-prototype.md). They do
-not complete the full release role set, production GPT/FAT binding, device
-staging or cold-readback proof, authenticated service transport, qualified
-physical lane, or required failure matrix, and they cannot authorize SB-08. The
-synthetic fixture's plan and receipts bind only the three staged payload extents;
-they make no cold-power, hardware, EEPROM, OTP, or secure-boot-enforcement claim.
+not resolve the full release role set to reviewed immutable bytes, complete
+production GPT/FAT binding, prove device staging or cold readback, provide
+authenticated service transport, qualify the physical lane, or complete the
+required failure matrix, and they cannot authorize SB-08. The
+synthetic media fixture's plan and receipts bind only the three staged payload
+extents. The public EEPROM fresh-board plan, adapter, and finalizer likewise
+establish only synthetic/offline file, updater, signature, and lineage
+contracts. Neither foundation makes a cold-power, hardware-write, EEPROM,
+recovery-signing, OTP, or secure-boot-enforcement claim.
 
 ## Workstream 1: close the qualified baseline
 
@@ -235,21 +248,65 @@ of shell history is not a release process.
 
 ### Required artifact roles
 
-The release manifest must require exactly the applicable complete role set,
-including:
+The release intent and v1alpha2 signed-release manifest require exactly these
+18 final roles in canonical order:
 
-- device profile and platform adapter;
-- boot public key;
-- EEPROM configuration and `bootsys` inputs;
-- signed EEPROM image;
-- normal `boot.img` and `boot.sig`;
-- persistent-root integrity metadata, root-data image, and root-hash-tree image;
-- fresh-board readback bundle;
-- fresh-board commit bundle;
-- owned-device readback bundle;
-- owned-device recovery bootcode and bundle; and
-- separate immutable negative-boot and root-integrity test bundles used by the
-  lane plan.
+```text
+boot_public_key
+device_profile
+platform_adapter
+root_integrity
+rpi5.boot_image
+rpi5.boot_signature
+rpi5.eeprom_bootsys
+rpi5.eeprom_config
+rpi5.fresh_commit_bundle
+rpi5.fresh_readback_bundle
+rpi5.negative_boot_bundle
+rpi5.owned_readback_bundle
+rpi5.owned_recovery_bootcode
+rpi5.owned_recovery_bundle
+rpi5.root_data_image
+rpi5.root_hash_tree_image
+rpi5.root_integrity_test_bundle
+rpi5.signed_eeprom_image
+```
+
+Before signatures exist, the v1alpha1 release intent separately fixes exactly
+these five signable input records in canonical order:
+
+```text
+rpi5.boot_image
+rpi5.eeprom_bootcode
+rpi5.eeprom_bootsys
+rpi5.eeprom_config
+rpi5.owned_recovery_bootcode
+```
+
+The EEPROM bootcode record is a signing preimage, not a final release role.
+The release cannot grow an implicit nineteenth output or substitute another
+signable role.
+
+### Cohort release authorization and per-device execution authorization
+
+The `cohort_release` intent authorizes signing only for the exact public source
+identity, unsigned-artifact and EEPROM-release digests, key and policy, five
+input digests and sizes, and 18 required outputs above. It deliberately omits
+transaction, station, lane, target, claim, fence, and expiry fields. Including
+those fields before signatures exist would recreate the cycle in which the
+device plan needs the final signed release while signing needs the device plan.
+The same reviewed cohort release may ultimately be staged on more than one
+separately approved board, but the intent itself cannot authorize any device
+execution.
+
+Every v1alpha2 signing grant, request, gate result, normal-boot plan, and
+normal-boot result carries the `release_intent_digest`. The v1alpha2 complete
+signed-release manifest also requires that digest and rejects v1alpha1
+manifests without lineage. Only after all 18 outputs are resolved and verified
+may its `signed_release_manifest_digest` enter a per-device lane plan and
+control approval. That later authorization binds the exact transaction,
+target, station and lane, current claim and fence, ordered operations, and
+expiry; it does not retroactively broaden the cohort signing grant.
 
 ### Deliverables
 
@@ -264,14 +321,25 @@ including:
   reject symlinks and special files, and produce a domain-separated digest over
   the canonical tree. A byte-file `digest` and `size` pair is not sufficient for
   the directories consumed by `rpiboot -d`.
+- [x] Define and test the canonical v1alpha1 `cohort_release` intent, including
+  all source, EEPROM-release, signer, and customer-key bindings plus the exact
+  five signing inputs and 18 required output roles.
+- [x] Carry and validate `release_intent_digest` through the v1alpha2 signing
+  grant, request, result, gate response, normal-boot plan and result, and
+  v1alpha2 signed-release manifest. Older signed-boot and signed-release
+  records without lineage fail closed.
+- [x] Implement the bounded public fresh-board EEPROM signing plan, adapter,
+  result, and offline finalizer foundation for the pinned `-f` workflow and
+  synthetic fixtures. This completed item is a contract/tooling foundation,
+  not the production EEPROM deliverable below.
 
-The repository now defines a versioned signed-release contract that requires
-the exact 18-role Raspberry Pi 5 artifact set. Its RPIBOOT directory-tree
-contract sorts canonical relative paths, binds type, mode, size, and content
-digest, and rejects symbolic links and special files. These contracts and
-their synthetic tests do not assemble a real release, resolve the declared
-roles to reviewed immutable production bytes, or verify live release
-signatures. SB-03 therefore remains in progress.
+The repository now defines a v1alpha2 signed-release contract that requires
+the exact 18-role Raspberry Pi 5 artifact set and its cohort release-intent
+lineage. Its RPIBOOT directory-tree contract sorts canonical relative paths,
+binds type, mode, size, and content digest, and rejects symbolic links and
+special files. These contracts and their synthetic tests do not assemble a
+real release, resolve the declared roles to reviewed immutable production
+bytes, or verify live release signatures. SB-03 therefore remains in progress.
 
 - [ ] Produce the signed EEPROM image with the pinned firmware, configuration,
   signing tools, public key, and customer counter-signature.
@@ -300,9 +368,21 @@ This proves public source, digest, and capability contracts only. Actual
 hardware emission of the property remains a cold-boot gate, and the signed
 EEPROM deliverable above remains incomplete.
 
-- [x] Implement the non-mutating normal-boot signing slice: immutable public
-  plan, fixed approval-gated adapter, canonical `boot.sig`, policy/key/image
-  binding, offline verification, and public Nix bundle finalization.
+The new public fresh-board EEPROM foundation narrows the updater to `-f`,
+derives and checks the three EEPROM signing preimages, carries the cohort
+release-intent digest through plan and result, and can revalidate the public
+outputs offline. Its present evidence is synthetic/offline only. It does not
+establish a production `pieeprom.bin`, invoke the owned-device recovery
+counter-signing path, build the required recovery/commit directory trees,
+write EEPROM or target media, enter a hardware lane, change OTP, or observe a
+board. Its `recovery_mode` is an unsigned copy of the pinned fresh-board
+recovery payload; `rpi5.owned_recovery_bootcode` remains a separately
+authorized input for future recovery signing.
+
+- [x] Implement the non-mutating normal-boot signing slice: immutable v1alpha2
+  public plan and result, fixed approval-gated adapter, canonical `boot.sig`,
+  release-intent/policy/key/image binding, offline verification, and public Nix
+  bundle finalization.
 - [ ] Produce and verify the detached signature for the exact normal
   release-candidate `boot.img` with the reviewed live development token and
   retain its gate receipt as private operational evidence.
@@ -316,17 +396,12 @@ EEPROM deliverable above remains incomplete.
   proof that every required source and failure mode was exercised.
 - [ ] Resolve every manifest entry to immutable bytes and verify its size and
   SHA-256 digest before approval.
-- [ ] Split release authorization from execution-plan authorization to avoid a
-  signing cycle:
-  1. compute a `release_intent_digest` over the canonical unsigned inputs,
-     required output roles, signing policy, and applicable transaction, target,
-     and fence context;
-  2. bind every signing grant and receipt to that release intent;
-  3. assemble and verify the signed outputs, then compute the final
-     `signed_release_manifest_digest`; and
-  4. only then compute the lane execution-plan digest that binds the final
-     signed release.
-  Do not reuse one ambiguous `plan_digest` before and after signatures exist.
+- [ ] Exercise the completed authorization-lineage foundation for one real
+  release: issue independently reviewed cohort grants for every exact signing
+  input, authenticate and retain their live gate receipts, assemble and verify
+  all 18 outputs, compute the final `signed_release_manifest_digest`, and only
+  then authorize a per-device lane plan. Do not reuse one ambiguous
+  `plan_digest` before and after signatures exist.
 - [ ] Verify every signature offline against the reviewed development public
   key and independently inspect the complete boot-image allowlist and size.
 - [ ] Scan every artifact for signing material, shared enrollment secrets,
@@ -654,7 +729,8 @@ It must contain:
 - the exact clean source revision and successful CI run identifiers;
 - the station system closure and configuration digests;
 - target inventory binding and pre-commit fingerprint;
-- the complete signed manifest and independent verification record;
+- the cohort release intent, authenticated signing receipts, complete v1alpha2
+  signed manifest, and independent verification record;
 - the development signer identity and expected customer-key hash;
 - the expected EEPROM and boot-image digests;
 - the exact NVMe staging and cold-readback evidence;
@@ -719,7 +795,8 @@ only.
    claim, and bind the fixed station and lane.
 3. Re-establish the fresh-board observation and exact target continuity, then
    close every deferred baseline check.
-4. Verify the complete signed manifest and all artifact bytes and signatures.
+4. Verify the cohort release intent, its signing-receipt lineage, the complete
+   v1alpha2 signed manifest, and all artifact bytes and signatures.
 5. Stage NVMe, remove power, and reconcile the cold-readback digests.
 6. Complete the unfused compatibility boot and return the same target to the
    approved fresh prestate.
@@ -822,6 +899,8 @@ plan are:
 
 - the [signed-release manifest contract], [secure-boot bundle manifest], and
   [artifact-role vocabulary];
+- the [release-intent contract], [signed-boot lineage contract], and
+  [EEPROM signing foundation];
 - the [lane-guard plan contract];
 - the [control-plane terminal workflow];
 - the [physical Pi 5 adapter];
@@ -868,6 +947,9 @@ path must continue to reject `enrollment_ready`.
 [signed-release manifest contract]: ../provisioning/internal/provisioning/bundle/release.go
 [secure-boot bundle manifest]: ../provisioning/internal/provisioning/bundle/manifest.go
 [artifact-role vocabulary]: ../provisioning/internal/provisioning/bundle/role.go
+[release-intent contract]: ../provisioning/internal/provisioning/releaseintent/release_intent.go
+[signed-boot lineage contract]: ../provisioning/internal/provisioning/signedboot/types.go
+[EEPROM signing foundation]: ../provisioning/internal/provisioning/eepromsigning/types.go
 [lane-guard plan contract]: ../provisioning/internal/provisioning/laneguard/contracts.go
 [control-plane terminal workflow]: ../provisioning/internal/provisioning/controlplane/workflow.go
 [physical Pi 5 adapter]: ../provisioning/internal/provisioning/physicalrpi5/adapter.go

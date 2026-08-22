@@ -21,10 +21,11 @@ type GateConfig struct {
 }
 
 type Result struct {
-	SignatureHex  string
-	ReceiptDigest bundle.Digest
-	GrantID       string
-	Replayed      bool
+	SignatureHex        string
+	ReceiptDigest       bundle.Digest
+	ReleaseIntentDigest bundle.Digest
+	GrantID             string
+	Replayed            bool
 }
 
 // Gate is the only component allowed to invoke the fixed private-key backend.
@@ -81,7 +82,8 @@ func (g *Gate) Sign(ctx context.Context, artifact []byte) (Result, error) {
 			}
 			result = Result{
 				SignatureHex: state.Receipt.SignatureHex, ReceiptDigest: receiptDigest,
-				GrantID: grant.GrantID, Replayed: true,
+				ReleaseIntentDigest: grant.Request.Approval.ReleaseIntentDigest,
+				GrantID:             grant.GrantID, Replayed: true,
 			}
 			return nil
 		}
@@ -107,7 +109,7 @@ func (g *Gate) Sign(ctx context.Context, artifact []byte) (Result, error) {
 			return err
 		}
 		receipt := Receipt{
-			SchemaVersion: ReceiptSchemaV1Alpha1, Grant: grant, RequestDigest: requestDigest,
+			SchemaVersion: ReceiptSchemaV1Alpha2, Grant: grant, RequestDigest: requestDigest,
 			BackendID: g.backendID, SignatureHex: signatureHex,
 			SignatureDigest: bundle.Sum(signature), SignedAt: canonicalTime(g.now()),
 		}
@@ -121,7 +123,8 @@ func (g *Gate) Sign(ctx context.Context, artifact []byte) (Result, error) {
 		}
 		result = Result{
 			SignatureHex: hex.EncodeToString(signature), ReceiptDigest: receiptDigest,
-			GrantID: grant.GrantID,
+			ReleaseIntentDigest: grant.Request.Approval.ReleaseIntentDigest,
+			GrantID:             grant.GrantID,
 		}
 		return nil
 	})

@@ -54,6 +54,13 @@
         "evidence": []
       },
       {
+        "id": "rpi5-eeprom-signing-contract",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Canonical release intent binds the exact boot, EEPROM, and owned-recovery signing inputs and the deterministic fresh-board EEPROM signing plan, result, and finalizer without device-mutation authority.",
+        "evidence": []
+      },
+      {
         "id": "signed-release-manifest-contract",
         "system": "aarch64-linux",
         "status": "not-observed",
@@ -114,6 +121,13 @@
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Pinned Raspberry Pi 5 EEPROM firmware and A/B-aware signing-tool sources match exact public provenance, digest, and mandatory boot_img_sha256 capability contracts without signing or hardware authority.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-eeprom-signing-contract",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Canonical release intent binds the exact boot, EEPROM, and owned-recovery signing inputs and the deterministic fresh-board EEPROM signing plan, result, and finalizer without device-mutation authority.",
         "evidence": []
       },
       {

@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-eeprom-signing-plan-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 EEPROM signing plan v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "release_intent_digest",
+    "eeprom_release_manifest_digest",
+    "signer_policy_digest",
+    "public_key_fingerprint",
+    "customer_key_hash",
+    "firmware_build_epoch",
+    "source_date_epoch",
+    "updater_mode",
+    "updater_flags",
+    "original_eeprom",
+    "original_recovery",
+    "original_bootcode",
+    "original_bootsys",
+    "boot_config",
+    "public_key_pem",
+    "signing_inputs"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-eeprom-signing-plan/v1alpha1"
+    },
+    "plan_id": { "$ref": "#/$defs/identifier" },
+    "release_intent_digest": { "$ref": "#/$defs/digest" },
+    "eeprom_release_manifest_digest": { "$ref": "#/$defs/digest" },
+    "signer_policy_digest": { "$ref": "#/$defs/digest" },
+    "public_key_fingerprint": { "$ref": "#/$defs/digest" },
+    "customer_key_hash": { "$ref": "#/$defs/digest" },
+    "firmware_build_epoch": { "$ref": "#/$defs/epoch" },
+    "source_date_epoch": { "$ref": "#/$defs/epoch" },
+    "updater_mode": { "const": "fresh-board" },
+    "updater_flags": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "prefixItems": [{ "const": "-f" }],
+      "items": false
+    },
+    "original_eeprom": {
+      "allOf": [
+        { "$ref": "#/$defs/file" },
+        { "properties": { "size_bytes": { "maximum": 2097152 } } }
+      ]
+    },
+    "original_recovery": {
+      "allOf": [
+        { "$ref": "#/$defs/file" },
+        { "properties": { "size_bytes": { "maximum": 112108 } } }
+      ]
+    },
+    "original_bootcode": {
+      "allOf": [
+        { "$ref": "#/$defs/file" },
+        { "properties": { "size_bytes": { "maximum": 112108 } } }
+      ]
+    },
+    "original_bootsys": {
+      "allOf": [
+        { "$ref": "#/$defs/file" },
+        { "properties": { "size_bytes": { "maximum": 112108 } } }
+      ]
+    },
+    "boot_config": {
+      "allOf": [
+        { "$ref": "#/$defs/file" },
+        { "properties": { "size_bytes": { "maximum": 4076 } } }
+      ]
+    },
+    "public_key_pem": {
+      "allOf": [
+        { "$ref": "#/$defs/file" },
+        { "properties": { "size_bytes": { "maximum": 16384 } } }
+      ]
+    },
+    "signing_inputs": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signing_input" },
+            { "properties": { "role": { "const": "rpi5.eeprom_bootcode" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signing_input" },
+            { "properties": { "role": { "const": "rpi5.eeprom_bootsys" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signing_input" },
+            { "properties": { "role": { "const": "rpi5.eeprom_config" } } }
+          ]
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 253402300799
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "size_bytes"],
+      "properties": {
+        "digest": { "$ref": "#/$defs/digest" },
+        "size_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "signing_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "digest", "size_bytes"],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["rpi5.eeprom_bootcode", "rpi5.eeprom_bootsys", "rpi5.eeprom_config"]
+        },
+        "digest": { "$ref": "#/$defs/digest" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 112120
+        }
+      }
+    }
+  }
+}

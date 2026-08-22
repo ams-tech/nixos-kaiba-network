@@ -332,6 +332,7 @@
             kaiba-provision-signing-client-foundation
             kaiba-provision-signing-gate-foundation
             kaiba-provision-sign-boot
+            kaiba-provision-sign-eeprom
             kaiba-provision-station
             kaiba-provision-station-demo
             kaiba-provision-station-pages
@@ -343,6 +344,9 @@
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           development-signing = developmentSigning.signing;
+          rpi5-prototype-eeprom-signing-inputs = rpi5PrototypeRelease.eepromSigningInputs;
+          rpi5-prototype-eeprom-signing-plan = rpi5PrototypeRelease.eepromSigningPlan;
+          rpi5-prototype-release-intent = rpi5PrototypeRelease.releaseIntent;
           rpi5-prototype-release-review = rpi5PrototypeRelease.review;
           rpi5-prototype-signing-plan = rpi5PrototypeRelease.signingPlan;
           inherit (dns.packages.${system})

@@ -18,17 +18,18 @@ import (
 )
 
 const (
-	WireResponseSchemaV1Alpha1 = "kaiba.provisioning.signing-gate-response/v1alpha1"
+	WireResponseSchemaV1Alpha2 = "kaiba.provisioning.signing-gate-response/v1alpha2"
 	maxWireResponseBytes       = 16 * 1024
 	wireReadTimeout            = 30 * time.Second
 )
 
 type WireResponse struct {
-	SchemaVersion string        `json:"schema_version"`
-	Status        string        `json:"status"`
-	SignatureHex  string        `json:"signature_hex,omitempty"`
-	ReceiptDigest bundle.Digest `json:"receipt_digest,omitempty"`
-	ErrorCode     string        `json:"error_code,omitempty"`
+	SchemaVersion       string        `json:"schema_version"`
+	Status              string        `json:"status"`
+	SignatureHex        string        `json:"signature_hex,omitempty"`
+	ReceiptDigest       bundle.Digest `json:"receipt_digest,omitempty"`
+	ReleaseIntentDigest bundle.Digest `json:"release_intent_digest,omitempty"`
+	ErrorCode           string        `json:"error_code,omitempty"`
 }
 
 type ServerConfig struct {
@@ -98,7 +99,7 @@ func handleConnection(ctx context.Context, connection deadlineConnection, gate *
 			fmt.Fprintf(errorLog, "read signing client artifact: %v\n", err)
 		}
 		_ = writeWireResponse(connection, WireResponse{
-			SchemaVersion: WireResponseSchemaV1Alpha1,
+			SchemaVersion: WireResponseSchemaV1Alpha2,
 			Status:        "error",
 			ErrorCode:     "invalid_artifact",
 		})
@@ -108,17 +109,18 @@ func handleConnection(ctx context.Context, connection deadlineConnection, gate *
 	if err != nil {
 		fmt.Fprintf(errorLog, "deny signing request for %s: %v\n", bundle.Sum(artifact), err)
 		_ = writeWireResponse(connection, WireResponse{
-			SchemaVersion: WireResponseSchemaV1Alpha1,
+			SchemaVersion: WireResponseSchemaV1Alpha2,
 			Status:        "error",
 			ErrorCode:     "signing_denied",
 		})
 		return
 	}
 	if err := writeWireResponse(connection, WireResponse{
-		SchemaVersion: WireResponseSchemaV1Alpha1,
-		Status:        "ok",
-		SignatureHex:  result.SignatureHex,
-		ReceiptDigest: result.ReceiptDigest,
+		SchemaVersion:       WireResponseSchemaV1Alpha2,
+		Status:              "ok",
+		SignatureHex:        result.SignatureHex,
+		ReceiptDigest:       result.ReceiptDigest,
+		ReleaseIntentDigest: result.ReleaseIntentDigest,
 	}); err != nil {
 		fmt.Fprintf(errorLog, "write signing response: %v\n", err)
 	}
@@ -171,11 +173,11 @@ func parseWireResponse(responseBytes []byte) (Result, error) {
 	if err := strictDecode(responseBytes, &response); err != nil {
 		return Result{}, fmt.Errorf("decode signing gate response: %w", err)
 	}
-	if response.SchemaVersion != WireResponseSchemaV1Alpha1 {
+	if response.SchemaVersion != WireResponseSchemaV1Alpha2 {
 		return Result{}, fmt.Errorf("unsupported signing gate response schema_version %q", response.SchemaVersion)
 	}
 	if response.Status == "error" {
-		if response.SignatureHex != "" || response.ReceiptDigest != "" || response.ErrorCode == "" {
+		if response.SignatureHex != "" || response.ReceiptDigest != "" || response.ReleaseIntentDigest != "" || response.ErrorCode == "" {
 			return Result{}, errors.New("signing gate returned a malformed error response")
 		}
 		if response.ErrorCode != "invalid_artifact" && response.ErrorCode != "signing_denied" {
@@ -196,11 +198,15 @@ func parseWireResponse(responseBytes []byte) (Result, error) {
 	if err := response.ReceiptDigest.Validate(); err != nil {
 		return Result{}, fmt.Errorf("signing gate receipt digest: %w", err)
 	}
+	if err := response.ReleaseIntentDigest.Validate(); err != nil {
+		return Result{}, fmt.Errorf("signing gate release-intent digest: %w", err)
+	}
 	return Result{
-		SignatureHex:  response.SignatureHex,
-		ReceiptDigest: response.ReceiptDigest,
-		Replayed:      false,
-		GrantID:       "",
+		SignatureHex:        response.SignatureHex,
+		ReceiptDigest:       response.ReceiptDigest,
+		ReleaseIntentDigest: response.ReleaseIntentDigest,
+		Replayed:            false,
+		GrantID:             "",
 	}, nil
 }
 

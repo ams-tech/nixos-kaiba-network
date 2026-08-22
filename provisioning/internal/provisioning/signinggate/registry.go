@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	RegistrySchemaV1Alpha1 = "kaiba.provisioning.signing-grant-registry/v1alpha1"
-	GrantSchemaV1Alpha1    = "kaiba.provisioning.signing-grant/v1alpha1"
+	RegistrySchemaV1Alpha2 = "kaiba.provisioning.signing-grant-registry/v1alpha2"
+	GrantSchemaV1Alpha2    = "kaiba.provisioning.signing-grant/v1alpha2"
 	MaxRegistryBytes       = 1024 * 1024
 	MaxRegistryGrants      = 512
 )
@@ -68,7 +68,7 @@ func LoadRegistry(config RegistryConfig) (Registry, error) {
 }
 
 func (r Registry) Validate() error {
-	if r.SchemaVersion != RegistrySchemaV1Alpha1 {
+	if r.SchemaVersion != RegistrySchemaV1Alpha2 {
 		return fmt.Errorf("unsupported signing grant registry schema_version %q", r.SchemaVersion)
 	}
 	if len(r.Grants) == 0 || len(r.Grants) > MaxRegistryGrants {
@@ -98,7 +98,7 @@ func (r Registry) Validate() error {
 }
 
 func (g Grant) Validate() error {
-	if g.SchemaVersion != GrantSchemaV1Alpha1 {
+	if g.SchemaVersion != GrantSchemaV1Alpha2 {
 		return fmt.Errorf("unsupported grant schema_version %q", g.SchemaVersion)
 	}
 	if !grantIdentifierPattern.MatchString(g.GrantID) {
@@ -152,7 +152,7 @@ func (r Registry) CurrentGrant(digest bundle.Digest, now time.Time) (Grant, erro
 func NewRegistry(grants []Grant) (Registry, error) {
 	canonical := append([]Grant(nil), grants...)
 	sort.Slice(canonical, func(i, j int) bool { return canonical[i].GrantID < canonical[j].GrantID })
-	registry := Registry{SchemaVersion: RegistrySchemaV1Alpha1, Grants: canonical}
+	registry := Registry{SchemaVersion: RegistrySchemaV1Alpha2, Grants: canonical}
 	if err := registry.Validate(); err != nil {
 		return Registry{}, err
 	}

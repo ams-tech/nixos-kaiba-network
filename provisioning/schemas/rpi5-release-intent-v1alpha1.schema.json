@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-release-intent-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 pre-signature release intent v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "device_class",
+    "source_revision",
+    "source_date_epoch",
+    "unsigned_artifact_set_digest",
+    "eeprom_release_manifest_digest",
+    "public_key_fingerprint",
+    "signing_policy_digest",
+    "expected_customer_key_hash",
+    "authorization_scope",
+    "signing_inputs",
+    "required_output_roles"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-release-intent/v1alpha1"
+    },
+    "release_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "device_class": {
+      "const": "raspberry-pi-5-model-b-v1alpha1"
+    },
+    "source_revision": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "source_date_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 253402300799
+    },
+    "unsigned_artifact_set_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "eeprom_release_manifest_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "public_key_fingerprint": {
+      "$ref": "#/$defs/digest"
+    },
+    "signing_policy_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "expected_customer_key_hash": {
+      "$ref": "#/$defs/digest"
+    },
+    "authorization_scope": {
+      "const": "cohort_release"
+    },
+    "signing_inputs": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signing_input" },
+            { "properties": { "role": { "const": "rpi5.boot_image" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signing_input" },
+            { "properties": { "role": { "const": "rpi5.eeprom_bootcode" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signing_input" },
+            { "properties": { "role": { "const": "rpi5.eeprom_bootsys" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signing_input" },
+            { "properties": { "role": { "const": "rpi5.eeprom_config" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signing_input" },
+            { "properties": { "role": { "const": "rpi5.owned_recovery_bootcode" } } }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "required_output_roles": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "prefixItems": [
+        { "const": "boot_public_key" },
+        { "const": "device_profile" },
+        { "const": "platform_adapter" },
+        { "const": "root_integrity" },
+        { "const": "rpi5.boot_image" },
+        { "const": "rpi5.boot_signature" },
+        { "const": "rpi5.eeprom_bootsys" },
+        { "const": "rpi5.eeprom_config" },
+        { "const": "rpi5.fresh_commit_bundle" },
+        { "const": "rpi5.fresh_readback_bundle" },
+        { "const": "rpi5.negative_boot_bundle" },
+        { "const": "rpi5.owned_readback_bundle" },
+        { "const": "rpi5.owned_recovery_bootcode" },
+        { "const": "rpi5.owned_recovery_bundle" },
+        { "const": "rpi5.root_data_image" },
+        { "const": "rpi5.root_hash_tree_image" },
+        { "const": "rpi5.root_integrity_test_bundle" },
+        { "const": "rpi5.signed_eeprom_image" }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "signing_role": {
+      "type": "string",
+      "enum": [
+        "rpi5.boot_image",
+        "rpi5.eeprom_bootcode",
+        "rpi5.eeprom_bootsys",
+        "rpi5.eeprom_config",
+        "rpi5.owned_recovery_bootcode"
+      ]
+    },
+    "signing_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "digest", "size_bytes"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/signing_role"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100663296
+        }
+      }
+    }
+  }
+}

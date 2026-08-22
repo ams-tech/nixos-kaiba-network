@@ -70,6 +70,18 @@
           { system, ... }@args:
           (packagesFor system).mkRpi5EEPROMRelease (builtins.removeAttrs args [ "system" ]);
 
+        mkRpi5EEPROMReleaseSigningInputs =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5EEPROMReleaseSigningInputs (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5EEPROMSigningPlan =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5EEPROMSigningPlan (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5ReleaseIntent =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5ReleaseIntent (builtins.removeAttrs args [ "system" ]);
+
         mkDevelopmentYubiKeySigning =
           { system, ... }@args:
           (packagesFor system).mkDevelopmentYubiKeySigning (builtins.removeAttrs args [ "system" ]);
@@ -81,6 +93,10 @@
         mkRpi5VerifiedSignedBoot =
           { system, ... }@args:
           (packagesFor system).mkRpi5VerifiedSignedBoot (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5VerifiedSignedEEPROM =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5VerifiedSignedEEPROM (builtins.removeAttrs args [ "system" ]);
 
         mkRpi5VerifiedUnfusedCapsule =
           { system, ... }@args:
@@ -110,6 +126,7 @@
           kaiba-provision-signing-client-foundation = built.signingClientFoundation;
           kaiba-provision-signing-gate-foundation = built.signingGateFoundation;
           kaiba-provision-sign-boot = built.signedBootTool;
+          kaiba-provision-sign-eeprom = built.eepromSigningTool;
           kaiba-provision-station = built.liveStation;
           kaiba-provision-station-demo = built.stationDemo;
           kaiba-provision-station-pages = built.stationPages;
@@ -139,6 +156,7 @@
           provisioning-test-result = provisioning.provisioningTestResult;
           rpi5-probe-bundle = provisioning.probeBundleIntegrity;
           rpi5-eeprom-release = provisioning.eepromReleaseContract;
+          rpi5-eeprom-signing = provisioning.eepromSigningContract;
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           secure-boot-artifacts = provisioning.secureBootArtifactContract;
           media-staging-fixture = provisioning.mediaStagingFixtureContract;

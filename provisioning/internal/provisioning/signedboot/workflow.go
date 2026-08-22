@@ -91,6 +91,9 @@ func Sign(ctx context.Context, planDirectory, outputDirectory string, config Sig
 	if err := gateResult.ReceiptDigest.Validate(); err != nil {
 		return fmt.Errorf("signing-gate receipt digest: %w", err)
 	}
+	if gateResult.ReleaseIntentDigest != loaded.Plan.ReleaseIntentDigest {
+		return errors.New("signing-gate release intent does not match the signing plan")
+	}
 	rawSignature, err := signing.ParseSignatureHex([]byte(gateResult.SignatureHex))
 	if err != nil {
 		return fmt.Errorf("signing-gate signature: %w", err)
@@ -128,8 +131,9 @@ func Sign(ctx context.Context, planDirectory, outputDirectory string, config Sig
 	}
 
 	result := Result{
-		SchemaVersion: ResultSchemaV1Alpha1, PlanID: loaded.Plan.PlanID,
-		PlanDigest: loaded.PlanDigest, BootImageDigest: loaded.Plan.BootImageDigest,
+		SchemaVersion: ResultSchemaV1Alpha2, PlanID: loaded.Plan.PlanID,
+		PlanDigest: loaded.PlanDigest, ReleaseIntentDigest: loaded.Plan.ReleaseIntentDigest,
+		BootImageDigest:     loaded.Plan.BootImageDigest,
 		BootImageSizeBytes:  loaded.Plan.BootImageSizeBytes,
 		BootSignatureDigest: bundle.Sum(bootSignature), BootSignatureSizeBytes: uint64(len(bootSignature)),
 		PublicKeyFingerprint: loaded.Plan.PublicKeyFingerprint,
@@ -205,6 +209,7 @@ func Finalize(planDirectory, signedDirectory, outputDirectory string) error {
 	if err := createAtomicDirectory(outputDirectory, map[string][]byte{
 		"boot.img": loadedPlan.BootImage, "boot.sig": loadedResult.BootSig,
 		"public.pem": loadedPlan.PublicPEM, "signing-plan.json": jsonFile(loadedPlan.PlanJSON),
+		"release-intent.json": jsonFile(loadedPlan.ReleaseIntentJSON),
 		"signing-result.json": jsonFile(loadedResult.ResultJSON), "manifest.json": jsonFile(manifestJSON),
 	}); err != nil {
 		return fmt.Errorf("publish signed-boot bundle: %w", err)
@@ -216,6 +221,9 @@ func verifyBindings(plan LoadedPlan, signed LoadedResult) error {
 	result := signed.Result
 	if result.PlanID != plan.Plan.PlanID || result.PlanDigest != plan.PlanDigest {
 		return errors.New("signing result does not bind the exact signing plan")
+	}
+	if result.ReleaseIntentDigest != plan.Plan.ReleaseIntentDigest {
+		return errors.New("signing result does not bind the release intent")
 	}
 	if result.BootImageDigest != plan.Plan.BootImageDigest || result.BootImageSizeBytes != plan.Plan.BootImageSizeBytes {
 		return errors.New("signing result boot image does not match the signing plan")

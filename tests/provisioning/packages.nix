@@ -109,14 +109,14 @@ let
   ];
   signingGrantFixture = pkgs.writeText "kaiba-signing-grant-registry-fixture.json" (
     builtins.toJSON {
-      schema_version = "kaiba.provisioning.signing-grant-registry/v1alpha1";
+      schema_version = "kaiba.provisioning.signing-grant-registry/v1alpha2";
       grants = [
         {
-          schema_version = "kaiba.provisioning.signing-grant/v1alpha1";
+          schema_version = "kaiba.provisioning.signing-grant/v1alpha2";
           grant_id = "grant:boot-image:1";
           expires_at = "2099-01-01T00:00:00Z";
           request = {
-            schema_version = "kaiba.provisioning.signing-request/v1alpha1";
+            schema_version = "kaiba.provisioning.signing-request/v1alpha2";
             request_id = "request:boot-image:1";
             algorithm = "rsa2048-sha256";
             role = "rpi5.boot_image";
@@ -124,12 +124,7 @@ let
             approval = {
               approval_id = "approval:development:1";
               approval_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-              transaction_id = "transaction:development:1";
-              transaction_digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-              manifest_digest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-              plan_digest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-              target_fingerprint = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-              fence_epoch = 1;
+              release_intent_digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
               role = "rpi5.boot_image";
               artifact_digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
             };
@@ -144,6 +139,113 @@ let
   developmentYubiKeyPublicKeyPEM = pkgs.writeText "kaiba-development-boot-public-key.pem" (
     builtins.readFile ./fixtures/development-boot-public.pem
   );
+  releaseIntentEEPROMBootcodeInput = pkgs.writeText "kaiba-release-intent-eeprom-bootcode-input" ''
+    synthetic EEPROM bootcode signing preimage
+  '';
+  releaseIntentEEPROMBootsysInput = pkgs.writeText "kaiba-release-intent-eeprom-bootsys-input" ''
+    synthetic EEPROM bootsys signing preimage
+  '';
+  releaseIntentEEPROMConfigInput = pkgs.writeText "kaiba-release-intent-eeprom-config-input" ''
+    BOOT_UART=1
+    BOOT_ORDER=0xf2461
+  '';
+  releaseIntentOwnedRecoveryInput = pkgs.writeText "kaiba-release-intent-owned-recovery-input" ''
+    synthetic owned-recovery signing preimage
+  '';
+  releaseIntentEEPROMRelease = pkgs.runCommand "kaiba-release-intent-eeprom-release-fixture" { } ''
+    mkdir "$out"
+    printf '%s' ${
+      lib.escapeShellArg (
+        builtins.toJSON {
+          schema_version = "kaiba.provisioning.rpi5-eeprom-release/v1alpha1";
+        }
+      )
+    } > "$out/release.json"
+    chmod 0444 "$out/release.json"
+  '';
+  mkReleaseIntentUnsignedArtifacts =
+    {
+      bootImage,
+      expectedCustomerKeyHash,
+      name,
+      sourceRevision,
+    }:
+    pkgs.runCommand name
+      {
+        bootImageInput = bootImage;
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        export LC_ALL=C
+
+        mkdir -p "$out/unsigned"
+        install -m 0444 "$bootImageInput" "$out/unsigned/boot.img"
+        boot_digest="sha256:$(sha256sum "$out/unsigned/boot.img" | cut -d ' ' -f 1)"
+        boot_size="$(stat --format=%s "$out/unsigned/boot.img")"
+        jq \
+          --null-input \
+          --arg schema 'provisioning.kaiba.network/unsigned-artifact-set/v1alpha1' \
+          --arg source_revision '${sourceRevision}' \
+          --arg expected_customer_key_hash '${expectedCustomerKeyHash}' \
+          --arg boot_digest "$boot_digest" \
+          --argjson boot_size "$boot_size" \
+          '{
+            schema: $schema,
+            source_revision: $source_revision,
+            expected_customer_key_hash: $expected_customer_key_hash,
+            boot_image_size_bytes: $boot_size,
+            artifacts: {boot_image: {digest: $boot_digest}}
+          }' > "$TMPDIR/manifest-without-digest.json"
+        jq --sort-keys --compact-output . \
+          "$TMPDIR/manifest-without-digest.json" > "$TMPDIR/canonical.json"
+        bundle_digest="sha256:$({
+          printf '%s\0' 'kaiba.rpi5.unsigned-artifacts.v1'
+          cat "$TMPDIR/canonical.json"
+        } | sha256sum | cut -d ' ' -f 1)"
+        jq --arg bundle_digest "$bundle_digest" \
+          '. + {bundle_digest: $bundle_digest}' \
+          "$TMPDIR/manifest-without-digest.json" > "$out/manifest.json"
+        chmod 0444 "$out/manifest.json"
+      '';
+  mkTestReleaseIntent =
+    {
+      bootImage,
+      name,
+      publicKeyFingerprint,
+      releaseID,
+      signerPolicyDigest,
+      sourceDateEpoch,
+    }:
+    let
+      expectedCustomerKeyHash = "sha256:${developmentYubiKeyCustomerKeyHash}";
+      sourceRevision = canonicalSourceRevision40;
+      unsignedArtifacts = mkReleaseIntentUnsignedArtifacts {
+        inherit bootImage expectedCustomerKeyHash sourceRevision;
+        name = "${name}-unsigned-artifacts";
+      };
+    in
+    built.mkRpi5ReleaseIntent {
+      bootImage = "${unsignedArtifacts}/unsigned/boot.img";
+      inherit
+        name
+        publicKeyFingerprint
+        releaseID
+        signerPolicyDigest
+        sourceDateEpoch
+        sourceRevision
+        unsignedArtifacts
+        ;
+      eepromBootcodeSigningInput = releaseIntentEEPROMBootcodeInput;
+      eepromBootsysSigningInput = releaseIntentEEPROMBootsysInput;
+      eepromConfigSigningInput = releaseIntentEEPROMConfigInput;
+      eepromRelease = releaseIntentEEPROMRelease;
+      ownedRecoveryBootcodeSigningInput = releaseIntentOwnedRecoveryInput;
+      inherit expectedCustomerKeyHash;
+    };
   developmentYubiKeySigning = built.mkDevelopmentYubiKeySigning {
     name = "kaiba-development-yubikey-signing-fixture";
     signerID = "signer:development-fixture";
@@ -159,11 +261,20 @@ let
     name = "kaiba-rpi5-unfused-verifier-fixture";
     trustedPublicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
   };
+  bootReleaseIntentFixture = mkTestReleaseIntent {
+    name = "kaiba-rpi5-boot-release-intent-fixture";
+    bootImage = "${secureBootFixtureA}/unsigned/boot.img";
+    releaseID = "release:rpi5-development-fixture:1";
+    publicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+    signerPolicyDigest = developmentYubiKeySigning.kaibaSigning.signerPolicyDigest;
+    sourceDateEpoch = 1786968000;
+  };
   bootSigningPlanFixture = built.mkRpi5BootSigningPlan {
     name = "kaiba-rpi5-boot-signing-plan-fixture";
     bootImage = "${secureBootFixtureA}/unsigned/boot.img";
     planID = "plan:rpi5-development-fixture:1";
     publicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+    releaseIntent = bootReleaseIntentFixture;
     # Exercise a key nested directly below the flake source.  The factory must
     # preserve its Nix path context so the sandbox mounts it as an input.
     reviewedPublicKeyPEM = ./fixtures/development-boot-public.pem;
@@ -179,6 +290,7 @@ let
           bootImage = "${secureBootFixtureA}/unsigned/boot.img";
           planID = "plan:rpi5-development-fixture:1";
           publicKeyFingerprint = developmentYubiKeySigning.kaibaSigning.publicKeyFingerprint;
+          releaseIntent = bootReleaseIntentFixture;
           reviewedPublicKeyPEM = developmentYubiKeyPublicKeyPEM;
           signerPolicyDigest = developmentYubiKeySigning.kaibaSigning.signerPolicyDigest;
           sourceDateEpoch = 1786968000;
@@ -186,6 +298,85 @@ let
         // overrides
       )).drvPath
     )).success;
+  eepromReleaseSigningInputsFixture = built.mkRpi5EEPROMReleaseSigningInputs {
+    name = "kaiba-rpi5-eeprom-release-signing-inputs-fixture";
+    eepromRelease = built.rpi5EEPROMRelease;
+    bootConfig = ../../provisioning/config/rpi5-prototype-eeprom/boot.conf;
+  };
+  eepromPlanUnsignedArtifacts = mkReleaseIntentUnsignedArtifacts {
+    name = "kaiba-rpi5-eeprom-plan-unsigned-artifacts";
+    bootImage = "${secureBootFixtureA}/unsigned/boot.img";
+    expectedCustomerKeyHash = "sha256:${developmentYubiKeyCustomerKeyHash}";
+    sourceRevision = canonicalSourceRevision40;
+  };
+  eepromReleaseIntentFixture = built.mkRpi5ReleaseIntent {
+    name = "kaiba-rpi5-eeprom-release-intent-fixture";
+    releaseID = "release:rpi5-eeprom-fixture:1";
+    bootImage = "${eepromPlanUnsignedArtifacts}/unsigned/boot.img";
+    eepromBootcodeSigningInput = "${eepromReleaseSigningInputsFixture}/eeprom-bootcode.signing-input";
+    eepromBootsysSigningInput = "${eepromReleaseSigningInputsFixture}/eeprom-bootsys.signing-input";
+    eepromConfigSigningInput = "${eepromReleaseSigningInputsFixture}/eeprom-config.signing-input";
+    eepromRelease = built.rpi5EEPROMRelease;
+    ownedRecoveryBootcodeSigningInput = "${eepromReleaseSigningInputsFixture}/owned-recovery-bootcode.signing-input";
+    expectedCustomerKeyHash = "sha256:${developmentYubiKeyCustomerKeyHash}";
+    publicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
+    signerPolicyDigest = developmentYubiKeySignerPolicyDigest;
+    sourceDateEpoch = 1786968000;
+    sourceRevision = canonicalSourceRevision40;
+    unsignedArtifacts = eepromPlanUnsignedArtifacts;
+  };
+  eepromSigningPlanFixture = built.mkRpi5EEPROMSigningPlan {
+    name = "kaiba-rpi5-eeprom-signing-plan-fixture";
+    planID = "plan:rpi5-eeprom-fixture:1";
+    bootConfig = ../../provisioning/config/rpi5-prototype-eeprom/boot.conf;
+    customerKeyHash = "sha256:${developmentYubiKeyCustomerKeyHash}";
+    eepromSigningInputs = eepromReleaseSigningInputsFixture;
+    publicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
+    releaseIntent = eepromReleaseIntentFixture;
+    reviewedPublicKeyPEM = developmentYubiKeyPublicKeyPEM;
+    signerPolicyDigest = developmentYubiKeySignerPolicyDigest;
+    sourceDateEpoch = 1786968000;
+  };
+  oversizedEEPROMBootConfig = pkgs.writeText "kaiba-oversized-eeprom-boot.conf" (
+    builtins.concatStringsSep "" (builtins.genList (_: "X") 4077)
+  );
+  eepromPinnedUpdaterTestHSM = pkgs.writeShellScript "kaiba-eeprom-pinned-updater-test-hsm" ''
+    set -euo pipefail
+    test "$#" -eq 3
+    test "$1" = '-a'
+    test "$2" = 'rsa2048-sha256'
+    test -f "$3"
+    test -f "$KAIBA_TEST_PRIVATE_KEY"
+    test -n "$KAIBA_TEST_CALLBACK_LOG"
+    printf '%s\n' "sha256:$(${pkgs.coreutils}/bin/sha256sum "$3" | ${pkgs.coreutils}/bin/cut -d ' ' -f 1)" \
+      >> "$KAIBA_TEST_CALLBACK_LOG"
+    ${pkgs.openssl}/bin/openssl dgst -sha256 -sign "$KAIBA_TEST_PRIVATE_KEY" "$3" \
+      | ${pkgs.xxd}/bin/xxd -c 4096 -p
+  '';
+  eepromSigningPlanInputAccepted =
+    overrides:
+    (builtins.tryEval (
+      (built.mkRpi5EEPROMSigningPlan (
+        {
+          name = "kaiba-rpi5-eeprom-signing-plan-evaluation";
+          planID = "plan:rpi5-eeprom-fixture:1";
+          bootConfig = ../../provisioning/config/rpi5-prototype-eeprom/boot.conf;
+          customerKeyHash = "sha256:${developmentYubiKeyCustomerKeyHash}";
+          eepromSigningInputs = eepromReleaseSigningInputsFixture;
+          publicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
+          releaseIntent = eepromReleaseIntentFixture;
+          reviewedPublicKeyPEM = developmentYubiKeyPublicKeyPEM;
+          signerPolicyDigest = developmentYubiKeySignerPolicyDigest;
+          sourceDateEpoch = 1786968000;
+        }
+        // overrides
+      )).drvPath
+    )).success;
+  verifiedSignedEEPROMEvaluationFixture = built.mkRpi5VerifiedSignedEEPROM {
+    name = "kaiba-rpi5-verified-signed-eeprom-evaluation";
+    signedOutput = emptySignedOutputFixture;
+    signingPlan = eepromSigningPlanFixture;
+  };
   emptySignedOutputFixture = pkgs.runCommand "kaiba-empty-signed-output-fixture" { } ''
     mkdir "$out"
   '';
@@ -200,24 +391,86 @@ let
   signedBootFinalizerPublicKey = pkgs.writeText "kaiba-signed-boot-finalizer-public.pem" (
     builtins.readFile ./fixtures/signed-boot-finalizer-public.pem
   );
+  signedBootFinalizerReleaseIntent = mkTestReleaseIntent {
+    name = "kaiba-rpi5-signed-boot-finalizer-release-intent";
+    bootImage = signedBootFinalizerBootImage;
+    releaseID = "release:rpi5-finalizer-fixture:1";
+    publicKeyFingerprint = "sha256:104dbbf42aacd5c3357ed4229237f8d8d848af868b8f680b46cba5505d8f67fc";
+    signerPolicyDigest = "sha256:68498f57aa811b8a714260a4ac4390118c78efdb2af416cc64bfbd8eac4c42e3";
+    sourceDateEpoch = 1786968000;
+  };
   signedBootFinalizerPlan = built.mkRpi5BootSigningPlan {
     name = "kaiba-rpi5-signed-boot-finalizer-plan";
     bootImage = signedBootFinalizerBootImage;
     planID = "plan:rpi5-finalizer-fixture:1";
     publicKeyFingerprint = "sha256:104dbbf42aacd5c3357ed4229237f8d8d848af868b8f680b46cba5505d8f67fc";
+    releaseIntent = signedBootFinalizerReleaseIntent;
     reviewedPublicKeyPEM = signedBootFinalizerPublicKey;
     signerPolicyDigest = "sha256:68498f57aa811b8a714260a4ac4390118c78efdb2af416cc64bfbd8eac4c42e3";
     sourceDateEpoch = 1786968000;
   };
-  signedBootFinalizerSignedOutput = pkgs.runCommand "kaiba-signed-boot-finalizer-result" { } ''
-    mkdir "$out"
-    install -m 0444 \
-      ${./fixtures/signed-boot-finalizer/boot.sig} \
-      "$out/boot.sig"
-    install -m 0444 \
-      ${./fixtures/signed-boot-finalizer/signing-result.json} \
-      "$out/signing-result.json"
-  '';
+  signedBootFinalizerSignedOutput =
+    pkgs.runCommand "kaiba-signed-boot-finalizer-result"
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        export LC_ALL=C
+
+        mkdir "$out"
+        install -m 0444 \
+          ${./fixtures/signed-boot-finalizer/boot.sig} \
+          "$out/boot.sig"
+        canonical_plan="$(cat ${signedBootFinalizerPlan}/plan.json)"
+        plan_digest="sha256:$({
+          printf '%s\0' 'kaiba.provisioning.rpi5-boot-signing-plan.v1alpha2'
+          printf '%s' "$canonical_plan"
+        } | sha256sum | cut -d ' ' -f 1)"
+        boot_signature_digest="sha256:$(sha256sum "$out/boot.sig" | cut -d ' ' -f 1)"
+        boot_signature_size="$(stat --format=%s "$out/boot.sig")"
+
+        jq \
+          --null-input \
+          --compact-output \
+          --arg schema_version 'kaiba.provisioning.rpi5-boot-signing-result/v1alpha2' \
+          --arg plan_id "$(jq -r .plan_id ${signedBootFinalizerPlan}/plan.json)" \
+          --arg plan_digest "$plan_digest" \
+          --arg release_intent_digest \
+            "$(jq -r .release_intent_digest ${signedBootFinalizerPlan}/plan.json)" \
+          --arg boot_image_digest \
+            "$(jq -r .boot_image_digest ${signedBootFinalizerPlan}/plan.json)" \
+          --argjson boot_image_size_bytes \
+            "$(jq -r .boot_image_size_bytes ${signedBootFinalizerPlan}/plan.json)" \
+          --arg boot_signature_digest "$boot_signature_digest" \
+          --argjson boot_signature_size_bytes "$boot_signature_size" \
+          --arg public_key_fingerprint \
+            "$(jq -r .public_key_fingerprint ${signedBootFinalizerPlan}/plan.json)" \
+          --arg signer_policy_digest \
+            "$(jq -r .signer_policy_digest ${signedBootFinalizerPlan}/plan.json)" \
+          --arg gate_receipt_digest \
+            'sha256:eced6ea3c3a42c7a0ee24e6cabf6338536e106faee65f5e2627ac55cbcd3ccb2' \
+          --argjson source_date_epoch \
+            "$(jq -r .source_date_epoch ${signedBootFinalizerPlan}/plan.json)" \
+          '{
+            schema_version: $schema_version,
+            plan_id: $plan_id,
+            plan_digest: $plan_digest,
+            release_intent_digest: $release_intent_digest,
+            boot_image_digest: $boot_image_digest,
+            boot_image_size_bytes: $boot_image_size_bytes,
+            boot_signature_digest: $boot_signature_digest,
+            boot_signature_size_bytes: $boot_signature_size_bytes,
+            public_key_fingerprint: $public_key_fingerprint,
+            signer_policy_digest: $signer_policy_digest,
+            gate_receipt_digest: $gate_receipt_digest,
+            source_date_epoch: $source_date_epoch
+          }' > "$out/signing-result.json"
+        chmod 0444 "$out/signing-result.json"
+      '';
   signedBootFinalizerHSMWrapper = pkgs.writeShellScript "kaiba-signed-boot-finalizer-hsm-wrapper" ''
     set -euo pipefail
     test "$#" -eq 3
@@ -235,11 +488,20 @@ let
     builtins.readFile ./fixtures/unfused-capsule/public.pem
   );
   unfusedCapsulePublicKeyFingerprint = "sha256:82c052b2366dee3e8831baf823dc192aa4ac344373d694e980cbc27d663e3c1d";
+  unfusedCapsuleReleaseIntent = mkTestReleaseIntent {
+    name = "kaiba-rpi5-unfused-capsule-release-intent";
+    bootImage = "${secureBootFixtureA}/unsigned/boot.img";
+    releaseID = "release:rpi5-unfused-capsule-fixture:1";
+    publicKeyFingerprint = unfusedCapsulePublicKeyFingerprint;
+    signerPolicyDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    sourceDateEpoch = 1786968000;
+  };
   unfusedCapsuleSigningPlan = built.mkRpi5BootSigningPlan {
     name = "kaiba-rpi5-unfused-capsule-signing-plan-fixture";
     bootImage = "${secureBootFixtureA}/unsigned/boot.img";
     planID = "plan:rpi5-unfused-capsule-fixture:1";
     publicKeyFingerprint = unfusedCapsulePublicKeyFingerprint;
+    releaseIntent = unfusedCapsuleReleaseIntent;
     reviewedPublicKeyPEM = unfusedCapsulePublicKey;
     signerPolicyDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     sourceDateEpoch = 1786968000;
@@ -262,7 +524,7 @@ let
           "$out/boot.sig"
         canonical_plan="$(cat ${unfusedCapsuleSigningPlan}/plan.json)"
         plan_digest="sha256:$({
-          printf '%s\0' 'kaiba.provisioning.rpi5-boot-signing-plan.v1alpha1'
+          printf '%s\0' 'kaiba.provisioning.rpi5-boot-signing-plan.v1alpha2'
           printf '%s' "$canonical_plan"
         } | sha256sum | cut -d ' ' -f 1)"
         boot_signature_digest="sha256:$(
@@ -274,10 +536,12 @@ let
           --null-input \
           --compact-output \
           --arg schema_version \
-            'kaiba.provisioning.rpi5-boot-signing-result/v1alpha1' \
+            'kaiba.provisioning.rpi5-boot-signing-result/v1alpha2' \
           --arg plan_id \
             "$(jq -r .plan_id ${unfusedCapsuleSigningPlan}/plan.json)" \
           --arg plan_digest "$plan_digest" \
+          --arg release_intent_digest \
+            "$(jq -r .release_intent_digest ${unfusedCapsuleSigningPlan}/plan.json)" \
           --arg boot_image_digest \
             "$(jq -r .boot_image_digest ${unfusedCapsuleSigningPlan}/plan.json)" \
           --argjson boot_image_size_bytes \
@@ -296,6 +560,7 @@ let
             schema_version: $schema_version,
             plan_id: $plan_id,
             plan_digest: $plan_digest,
+            release_intent_digest: $release_intent_digest,
             boot_image_digest: $boot_image_digest,
             boot_image_size_bytes: $boot_image_size_bytes,
             boot_signature_digest: $boot_signature_digest,
@@ -467,19 +732,22 @@ let
         check-jsonschema --check-metaschema \
           ${built.goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json
         check-jsonschema --check-metaschema \
-          ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha1.schema.json \
-          ${built.goSource}/schemas/rpi5-boot-signing-result-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha2.schema.json \
+          ${built.goSource}/schemas/rpi5-boot-signing-result-v1alpha2.schema.json \
+          ${built.goSource}/schemas/rpi5-eeprom-signing-plan-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-eeprom-signing-result-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-release-intent-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-rpiboot-directory-tree-v1alpha1.schema.json \
-          ${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha2.schema.json \
           ${built.goSource}/schemas/secure-boot-bundle-v1alpha1.schema.json \
-          ${built.goSource}/schemas/signing-grant-registry-v1alpha1.schema.json \
-          ${built.goSource}/schemas/signing-request-v1alpha1.schema.json \
+          ${built.goSource}/schemas/signing-grant-registry-v1alpha2.schema.json \
+          ${built.goSource}/schemas/signing-request-v1alpha2.schema.json \
           ${built.goSource}/schemas/unsigned-artifact-set-v1alpha1.schema.json \
           ${built.goSource}/schemas/yubikey-signing-policy-v1alpha1.schema.json
         # Resolve cross-schema references from the immutable source tree.
         check-jsonschema \
           --base-uri file://${built.goSource}/schemas/ \
-          --schemafile ${built.goSource}/schemas/signing-grant-registry-v1alpha1.schema.json \
+          --schemafile ${built.goSource}/schemas/signing-grant-registry-v1alpha2.schema.json \
           ${signingGrantFixture}
 
         ${built.provision}/bin/kaiba-provision probe \
@@ -804,6 +1072,10 @@ let
     {
       id = "rpi5-eeprom-release-contract";
       description = "Pinned Raspberry Pi 5 EEPROM firmware and A/B-aware signing-tool sources match exact public provenance, digest, and mandatory boot_img_sha256 capability contracts without signing or hardware authority.";
+    }
+    {
+      id = "rpi5-eeprom-signing-contract";
+      description = "Canonical release intent binds the exact boot, EEPROM, and owned-recovery signing inputs and the deterministic fresh-board EEPROM signing plan, result, and finalizer without device-mutation authority.";
     }
     {
       id = "signed-release-manifest-contract";
@@ -1175,6 +1447,366 @@ let
         touch "$out/passed"
       '';
 
+  eepromSigningContract =
+    assert lib.assertMsg (eepromSigningPlanInputAccepted
+      { }
+    ) "the EEPROM signing-plan factory rejected reviewed public store inputs";
+    assert lib.assertMsg (
+      !(eepromSigningPlanInputAccepted {
+        bootConfig = "/tmp/kaiba-untrusted-eeprom-boot.conf";
+      })
+    ) "the EEPROM signing-plan factory accepted an untrusted boot config";
+    assert lib.assertMsg (
+      !(eepromSigningPlanInputAccepted {
+        eepromSigningInputs = "/tmp/kaiba-untrusted-eeprom-inputs";
+      })
+    ) "the EEPROM signing-plan factory accepted untrusted signing inputs";
+    assert lib.assertMsg (
+      !(eepromSigningPlanInputAccepted {
+        releaseIntent = "/tmp/kaiba-untrusted-release-intent";
+      })
+    ) "the EEPROM signing-plan factory accepted an untrusted release intent";
+    assert lib.assertMsg (
+      !(eepromSigningPlanInputAccepted {
+        reviewedPublicKeyPEM = "/tmp/kaiba-untrusted-public.pem";
+      })
+    ) "the EEPROM signing-plan factory accepted an untrusted public key";
+    assert lib.assertMsg (
+      !(eepromSigningPlanInputAccepted {
+        planID = "EEPROM Plan With Spaces";
+      })
+    ) "the EEPROM signing-plan factory accepted a non-canonical plan ID";
+    assert lib.assertMsg (
+      !(eepromSigningPlanInputAccepted {
+        sourceDateEpoch = 0;
+      })
+    ) "the EEPROM signing-plan factory accepted an unset source epoch";
+    assert lib.assertMsg (
+      !(eepromSigningPlanInputAccepted {
+        customerKeyHash = "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      })
+    ) "the EEPROM signing-plan factory accepted a non-canonical customer-key hash";
+    assert lib.assertMsg (lib.isDerivation verifiedSignedEEPROMEvaluationFixture)
+      "the signed-EEPROM finalizer factory rejected public store inputs";
+    assert lib.assertMsg (
+      let
+        contract = eepromSigningPlanFixture.kaibaRpi5EEPROMSigningPlan;
+      in
+      contract.schemaVersion == "kaiba.provisioning.rpi5-eeprom-signing-plan/v1alpha1"
+      && contract.updaterMode == "fresh-board"
+      && contract.updaterFlags == [ "-f" ]
+      && lib.all (value: value == false) [
+        contract.blockDeviceWriteCapable
+        contract.directHardwareAccess
+        contract.eepromProgrammingCapable
+        contract.mutationCapable
+        contract.oneTimeSettingCapable
+        contract.otpCapable
+        contract.privateKeyAccess
+        contract.recoverySigningPerformed
+        contract.signedEEPROMProduced
+        contract.signingAuthorityConfigured
+      ]
+    ) "the public EEPROM signing plan gained signing, hardware, or mutation authority";
+    assert lib.assertMsg (
+      let
+        contract = built.eepromSigningTool.kaibaEEPROMSigningTool;
+      in
+      contract.approvalGateConfigured
+      && contract.updaterMode == "fresh-board"
+      && contract.updaterFlags == [ "-f" ]
+      && contract.signingAuthorityConfigured
+      && lib.all (value: value == false) [
+        contract.blockDeviceWriteCapable
+        contract.directHardwareAccess
+        contract.eepromProgrammingCapable
+        contract.mutationCapable
+        contract.oneTimeSettingCapable
+        contract.otpCapable
+        contract.privateKeyAccess
+        contract.recoverySigningCapable
+      ]
+    ) "the EEPROM signing adapter gained device, private-key, or recovery-signing authority";
+    pkgs.runCommand "kaiba-rpi5-eeprom-signing-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.binutils
+          pkgs.check-jsonschema
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.go
+          pkgs.gnugrep
+          pkgs.jq
+          pkgs.openssl
+        ];
+      }
+      ''
+        set -euo pipefail
+        export CGO_ENABLED=0
+        export GOCACHE="$TMPDIR/go-cache"
+        export GOPATH="$TMPDIR/go-path"
+        export LC_ALL=C
+
+        cd ${built.goSource}
+        go test \
+          ./internal/provisioning/eepromsigning \
+          ./cmd/kaiba-provision-sign-eeprom \
+          -count=1
+
+        readonly plan_schema=${built.goSource}/schemas/rpi5-eeprom-signing-plan-v1alpha1.schema.json
+        readonly result_schema=${built.goSource}/schemas/rpi5-eeprom-signing-result-v1alpha1.schema.json
+        readonly plan=${eepromSigningPlanFixture}
+        check-jsonschema --check-metaschema "$plan_schema" "$result_schema"
+        check-jsonschema --schemafile "$plan_schema" "$plan/plan.json"
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/rpi5-release-intent-v1alpha1.schema.json \
+          "$plan/release-intent.json"
+
+        ${eepromSigningPlanFixture.eepromBootConfigValidator} "$plan/boot.conf"
+        if ${eepromSigningPlanFixture.eepromBootConfigValidator} ${oversizedEEPROMBootConfig}; then
+          echo 'EEPROM signing-plan boot config validator accepted 4077 bytes' >&2
+          exit 1
+        fi
+
+        find "$plan" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort \
+          > "$TMPDIR/actual-plan-files"
+        printf '%s\n' \
+          boot.conf \
+          bootcode.original.bin \
+          bootsys.original \
+          pieeprom.original.bin \
+          plan.json \
+          public.pem \
+          recovery.original.bin \
+          release-intent.json \
+          > "$TMPDIR/expected-plan-files"
+        cmp "$TMPDIR/expected-plan-files" "$TMPDIR/actual-plan-files"
+
+        release_intent_json="$(cat "$plan/release-intent.json")"
+        release_intent_digest="sha256:$({
+          printf '%s\0' 'kaiba.provisioning.rpi5-release-intent.v1alpha1'
+          printf '%s' "$release_intent_json"
+        } | sha256sum | cut -d ' ' -f 1)"
+        eeprom_release_manifest_digest="sha256:$(
+          sha256sum ${built.rpi5EEPROMRelease}/release.json | cut -d ' ' -f 1
+        )"
+        jq -e \
+          --arg release_intent_digest "$release_intent_digest" \
+          --arg eeprom_release_manifest_digest "$eeprom_release_manifest_digest" \
+          --arg public_key_fingerprint '${developmentYubiKeyPublicKeyFingerprint}' \
+          --arg signer_policy_digest '${developmentYubiKeySignerPolicyDigest}' \
+          --arg customer_key_hash 'sha256:${developmentYubiKeyCustomerKeyHash}' \
+          '
+            .schema_version == "kaiba.provisioning.rpi5-eeprom-signing-plan/v1alpha1"
+            and .plan_id == "plan:rpi5-eeprom-fixture:1"
+            and .release_intent_digest == $release_intent_digest
+            and .eeprom_release_manifest_digest == $eeprom_release_manifest_digest
+            and .public_key_fingerprint == $public_key_fingerprint
+            and .signer_policy_digest == $signer_policy_digest
+            and .customer_key_hash == $customer_key_hash
+            and .firmware_build_epoch == 1779807685
+            and .source_date_epoch == 1786968000
+            and .updater_mode == "fresh-board"
+            and .updater_flags == ["-f"]
+            and (.signing_inputs | map(.role)) == [
+              "rpi5.eeprom_bootcode",
+              "rpi5.eeprom_bootsys",
+              "rpi5.eeprom_config"
+            ]
+          ' "$plan/plan.json" > /dev/null
+
+        jq -r '
+          [
+            ["pieeprom.original.bin", .original_eeprom],
+            ["recovery.original.bin", .original_recovery],
+            ["bootcode.original.bin", .original_bootcode],
+            ["bootsys.original", .original_bootsys],
+            ["boot.conf", .boot_config],
+            ["public.pem", .public_key_pem]
+          ][]
+          | [.[0], .[1].digest, (.[1].size_bytes | tostring)]
+          | @tsv
+        ' "$plan/plan.json" > "$TMPDIR/plan-files.tsv"
+        while IFS=$'\t' read -r name expected_digest expected_size; do
+          test "sha256:$(sha256sum "$plan/$name" | cut -d ' ' -f 1)" = \
+            "$expected_digest"
+          test "$(stat --format=%s "$plan/$name")" = "$expected_size"
+        done < "$TMPDIR/plan-files.tsv"
+
+        plan_json="$(cat "$plan/plan.json")"
+        plan_digest="sha256:$({
+          printf '%s\0' 'kaiba.provisioning.rpi5-eeprom-signing-plan.v1alpha1'
+          printf '%s' "$plan_json"
+        } | sha256sum | cut -d ' ' -f 1)"
+        jq \
+          --null-input \
+          --compact-output \
+          --arg schema_version 'kaiba.provisioning.rpi5-eeprom-signing-result/v1alpha1' \
+          --arg plan_id "$(jq -r .plan_id "$plan/plan.json")" \
+          --arg plan_digest "$plan_digest" \
+          --arg release_intent_digest "$release_intent_digest" \
+          --arg eeprom_release_manifest_digest "$eeprom_release_manifest_digest" \
+          --arg signer_policy_digest '${developmentYubiKeySignerPolicyDigest}' \
+          --arg public_key_fingerprint '${developmentYubiKeyPublicKeyFingerprint}' \
+          --arg customer_key_hash 'sha256:${developmentYubiKeyCustomerKeyHash}' \
+          --argjson source_date_epoch 1786968000 \
+          --argjson signing_inputs "$(jq -c .signing_inputs "$plan/plan.json")" \
+          --argjson original_eeprom "$(jq -c .original_eeprom "$plan/plan.json")" \
+          --argjson original_recovery "$(jq -c .original_recovery "$plan/plan.json")" \
+          '
+            {
+              schema_version: $schema_version,
+              plan_id: $plan_id,
+              plan_digest: $plan_digest,
+              release_intent_digest: $release_intent_digest,
+              eeprom_release_manifest_digest: $eeprom_release_manifest_digest,
+              signer_policy_digest: $signer_policy_digest,
+              public_key_fingerprint: $public_key_fingerprint,
+              customer_key_hash: $customer_key_hash,
+              source_date_epoch: $source_date_epoch,
+              updater_mode: "fresh-board",
+              recovery_mode: "unsigned-copy",
+              signatures: ($signing_inputs | map({
+                role: .role,
+                input_digest: .digest,
+                input_size_bytes: .size_bytes,
+                signature_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                signature_size_bytes: 256,
+                gate_receipt_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              })),
+              signed_eeprom: {
+                digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                size_bytes: $original_eeprom.size_bytes
+              },
+              eeprom_update_metadata: {
+                digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                size_bytes: 80
+              },
+              fresh_recovery_bootcode: $original_recovery
+            }
+          ' > "$TMPDIR/result.json"
+        check-jsonschema --schemafile "$result_schema" "$TMPDIR/result.json"
+
+        # Exercise the exact pinned vendor updater and helpers with an
+        # ephemeral test key that exists only in this build sandbox. The
+        # callback log must contain precisely the three release-authorized
+        # preimages in order; the output is deliberately not published.
+        readonly updater_work="$TMPDIR/pinned-updater"
+        mkdir "$updater_work"
+        install -m 0600 "$plan/pieeprom.original.bin" \
+          "$updater_work/pieeprom.original.bin"
+        install -m 0600 "$plan/recovery.original.bin" \
+          "$updater_work/recovery.original.bin"
+        install -m 0600 "$plan/boot.conf" "$updater_work/boot.conf"
+        ${pkgs.openssl}/bin/openssl genpkey \
+          -algorithm RSA \
+          -pkeyopt rsa_keygen_bits:2048 \
+          -out "$TMPDIR/ephemeral-private.pem" \
+          > /dev/null 2>&1
+        ${pkgs.openssl}/bin/openssl pkey \
+          -in "$TMPDIR/ephemeral-private.pem" \
+          -pubout \
+          -out "$updater_work/public.pem"
+        export KAIBA_TEST_PRIVATE_KEY="$TMPDIR/ephemeral-private.pem"
+        export KAIBA_TEST_CALLBACK_LOG="$TMPDIR/updater-callbacks"
+        : > "$KAIBA_TEST_CALLBACK_LOG"
+        set +e
+        (
+          cd "$updater_work"
+          PATH=${lib.escapeShellArg built.eepromSigningTool.kaibaEEPROMSigningTool.toolPATH} \
+            SOURCE_DATE_EPOCH=1786968000 \
+            ${built.eepromToolRuntime}/bin/update-pieeprom.sh \
+              -f \
+              -c boot.conf \
+              -i pieeprom.original.bin \
+              -o pieeprom.bin \
+              -p public.pem \
+              -H ${eepromPinnedUpdaterTestHSM}
+        ) > "$TMPDIR/updater.stdout" 2> "$TMPDIR/updater.stderr"
+        updater_status="$?"
+        set -e
+        if test "$updater_status" -ne 0; then
+          sed 's/^/pinned updater stdout: /' "$TMPDIR/updater.stdout" >&2
+          sed 's/^/pinned updater stderr: /' "$TMPDIR/updater.stderr" >&2
+          exit "$updater_status"
+        fi
+        jq -r '.signing_inputs[].digest' "$plan/plan.json" \
+          > "$TMPDIR/expected-updater-callbacks"
+        cmp "$TMPDIR/expected-updater-callbacks" "$KAIBA_TEST_CALLBACK_LOG"
+        test "$(wc -l < "$KAIBA_TEST_CALLBACK_LOG")" -eq 3
+        test "$(stat --format=%s "$updater_work/pieeprom.bin")" = \
+          "$(stat --format=%s "$plan/pieeprom.original.bin")"
+        cmp "$updater_work/bootcode5.bin" "$plan/recovery.original.bin"
+        test "$(sed -n '2p' "$updater_work/pieeprom.sig")" = 'ts: 1786968000'
+        test "$(sed -n '1p' "$updater_work/pieeprom.sig")" = \
+          "$(sha256sum "$updater_work/pieeprom.bin" | cut -d ' ' -f 1)"
+        mkdir "$TMPDIR/extracted-pinned-updater"
+        (
+          cd "$TMPDIR/extracted-pinned-updater"
+          ${built.eepromToolRuntime}/bin/rpi-eeprom-config \
+            -x "$updater_work/pieeprom.bin"
+        )
+        cmp "$TMPDIR/extracted-pinned-updater/bootconf.txt" "$plan/boot.conf"
+        test "$(stat --format=%s "$TMPDIR/extracted-pinned-updater/pubkey.bin")" -eq 264
+        test "$(stat --format=%s "$TMPDIR/extracted-pinned-updater/bootcode.bin")" -eq \
+          "$(( $(stat --format=%s "$plan/bootcode.original.bin") + 532 ))"
+        test "$(stat --format=%s "$TMPDIR/extracted-pinned-updater/bootsys")" -eq \
+          "$(( $(stat --format=%s "$plan/bootsys.original") + 532 ))"
+
+        test -x ${built.eepromSigningTool}/bin/kaiba-provision-sign-eeprom
+        set +e
+        ${built.eepromSigningTool}/bin/kaiba-provision-sign-eeprom sign \
+          --plan "$TMPDIR/missing-plan" \
+          --output "$TMPDIR/signed-output" \
+          > "$TMPDIR/packaged-smoke.stdout" \
+          2> "$TMPDIR/packaged-smoke.stderr"
+        packaged_smoke_status="$?"
+        set -e
+        test "$packaged_smoke_status" -eq 1
+        grep -F 'load EEPROM signing plan directory' "$TMPDIR/packaged-smoke.stderr"
+        if grep -F 'EEPROM signing adapter configuration' "$TMPDIR/packaged-smoke.stderr"; then
+          echo 'EEPROM signing adapter is missing a linker-fixed release input' >&2
+          exit 1
+        fi
+
+        # The signing-plan factory uses this exact OpenSSL invariant after
+        # canonicalizing the reviewed key. Exercise its rejection branch with
+        # an ephemeral exponent-3 key that never leaves the build sandbox.
+        ${eepromSigningPlanFixture.eepromPublicKeyValidator} "$plan/public.pem"
+        openssl genpkey \
+          -algorithm RSA \
+          -pkeyopt rsa_keygen_bits:2048 \
+          -pkeyopt rsa_keygen_pubexp:3 \
+          -out "$TMPDIR/exponent-three-private.pem" \
+          > /dev/null 2>&1
+        openssl pkey \
+          -in "$TMPDIR/exponent-three-private.pem" \
+          -pubout \
+          -out "$TMPDIR/exponent-three-public.pem"
+        exponent="$(
+          openssl pkey \
+            -pubin \
+            -in "$TMPDIR/exponent-three-public.pem" \
+            -text \
+            -noout \
+            | sed -n 's/^Exponent: //p'
+        )"
+        test "$exponent" = '3 (0x3)'
+        if ${eepromSigningPlanFixture.eepromPublicKeyValidator} \
+          "$TMPDIR/exponent-three-public.pem"; then
+          echo 'EEPROM signing-plan key check accepted RSA exponent 3' >&2
+          exit 1
+        fi
+        if strings ${built.eepromSigningTool}/bin/kaiba-provision-sign-eeprom \
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          echo 'EEPROM signing adapter links a physical provisioning capability' >&2
+          exit 1
+        fi
+
+        mkdir "$out"
+        touch "$out/passed"
+      '';
+
   signedReleaseManifestContract =
     pkgs.runCommand "kaiba-rpi5-signed-release-manifest-contract"
       {
@@ -1201,10 +1833,10 @@ let
           -count=1
         check-jsonschema --check-metaschema \
           ${built.goSource}/schemas/rpi5-rpiboot-directory-tree-v1alpha1.schema.json \
-          ${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha1.schema.json
+          ${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha2.schema.json
 
-        readonly release_schema=${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha1.schema.json
-        readonly golden_manifest=${built.goSource}/internal/provisioning/bundle/testdata/rpi5-signed-release-manifest-v1alpha1.json
+        readonly release_schema=${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha2.schema.json
+        readonly golden_manifest=${built.goSource}/internal/provisioning/bundle/testdata/rpi5-signed-release-manifest-v1alpha2.json
         readonly tree_schema=${built.goSource}/schemas/rpi5-rpiboot-directory-tree-v1alpha1.schema.json
         readonly multibyte_tree=${built.goSource}/internal/provisioning/bundle/testdata/rpiboot-directory-tree-multibyte-v1alpha1.json
         check-jsonschema \
@@ -1350,6 +1982,11 @@ let
     ) "the signed-boot plan factory accepted a public key outside the Nix store";
     assert lib.assertMsg (
       !(bootSigningPlanInputAccepted {
+        releaseIntent = "/tmp/kaiba-untrusted-release-intent";
+      })
+    ) "the signed-boot plan factory accepted a release intent outside the Nix store";
+    assert lib.assertMsg (
+      !(bootSigningPlanInputAccepted {
         planID = "Plan With Spaces";
       })
     ) "the signed-boot plan factory accepted a non-canonical plan ID";
@@ -1404,13 +2041,19 @@ let
 
         find ${bootSigningPlanFixture} -mindepth 1 -maxdepth 1 -printf '%f\n' | sort \
           > "$TMPDIR/actual-plan-files"
-        printf '%s\n' boot.img plan.json public.pem \
+        printf '%s\n' boot.img plan.json public.pem release-intent.json \
           > "$TMPDIR/expected-plan-files"
         cmp "$TMPDIR/expected-plan-files" "$TMPDIR/actual-plan-files"
 
         check-jsonschema \
-          --schemafile ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha1.schema.json \
+          --schemafile ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha2.schema.json \
           ${bootSigningPlanFixture}/plan.json
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/rpi5-release-intent-v1alpha1.schema.json \
+          ${bootSigningPlanFixture}/release-intent.json
+        cmp \
+          ${bootReleaseIntentFixture}/release-intent.json \
+          ${bootSigningPlanFixture}/release-intent.json
 
         cmp \
           ${secureBootFixtureA}/unsigned/boot.img \
@@ -1419,7 +2062,7 @@ let
           ${./fixtures/development-boot-public.pem} \
           ${bootSigningPlanFixture}/public.pem
         test "$(jq -r .schema_version ${bootSigningPlanFixture}/plan.json)" = \
-          'kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1'
+          'kaiba.provisioning.rpi5-boot-signing-plan/v1alpha2'
         test "$(jq -r .plan_id ${bootSigningPlanFixture}/plan.json)" = \
           'plan:rpi5-development-fixture:1'
         test "$(jq -r .public_key_fingerprint ${bootSigningPlanFixture}/plan.json)" = \
@@ -1438,6 +2081,7 @@ let
             "boot_image_size_bytes",
             "plan_id",
             "public_key_fingerprint",
+            "release_intent_digest",
             "schema_version",
             "signer_policy_digest",
             "source_date_epoch"
@@ -1479,7 +2123,7 @@ let
         test '${builtins.toJSON bootSigningPlanFixture.kaibaBootSigningPlan.signingAuthorityConfigured}' = 'false'
         test '${builtins.toJSON bootSigningPlanFixture.kaibaBootSigningPlan.mutationCapable}' = 'false'
         test '${bootSigningPlanFixture.kaibaBootSigningPlan.schemaVersion}' = \
-          'kaiba.provisioning.rpi5-boot-signing-plan/v1alpha1'
+          'kaiba.provisioning.rpi5-boot-signing-plan/v1alpha2'
         test '${bootSigningPlanFixture.kaibaBootSigningPlan.signerPolicyDigest}' = \
           '${developmentYubiKeySignerPolicyDigest}'
         test '${builtins.toJSON verifiedSignedBootEvaluationFixture.kaibaVerifiedSignedBoot.privateKeyAccess}' = \
@@ -1498,6 +2142,7 @@ let
           boot.sig \
           manifest.json \
           public.pem \
+          release-intent.json \
           signing-plan.json \
           signing-result.json \
           > "$TMPDIR/expected-final-files"
@@ -1505,12 +2150,15 @@ let
         cmp ${signedBootFinalizerBootImage} ${verifiedSignedBootFixture}/boot.img
         cmp ${./fixtures/signed-boot-finalizer/boot.sig} ${verifiedSignedBootFixture}/boot.sig
         cmp ${signedBootFinalizerPublicKey} ${verifiedSignedBootFixture}/public.pem
+        cmp \
+          ${signedBootFinalizerReleaseIntent}/release-intent.json \
+          ${verifiedSignedBootFixture}/release-intent.json
         cmp ${signedBootFinalizerPlan}/plan.json ${verifiedSignedBootFixture}/signing-plan.json
         cmp \
-          ${./fixtures/signed-boot-finalizer/signing-result.json} \
+          ${signedBootFinalizerSignedOutput}/signing-result.json \
           ${verifiedSignedBootFixture}/signing-result.json
         check-jsonschema \
-          --schemafile ${built.goSource}/schemas/rpi5-boot-signing-result-v1alpha1.schema.json \
+          --schemafile ${built.goSource}/schemas/rpi5-boot-signing-result-v1alpha2.schema.json \
           ${verifiedSignedBootFixture}/signing-result.json
         check-jsonschema \
           --schemafile ${built.goSource}/schemas/secure-boot-bundle-v1alpha1.schema.json \
@@ -2705,6 +3353,7 @@ let
         test -f ${probeBundleIntegrity}/passed
         test -f ${rpibootMetadataStdoutCompatibility}/passed
         test -f ${eepromReleaseContract}/passed
+        test -f ${eepromSigningContract}/passed
         test -f ${signedReleaseManifestContract}/passed
         test -f ${secureBootArtifactContract}/passed
         test -f ${signedBootPlanContract}/passed
@@ -2728,6 +3377,16 @@ let
         jq -e '
           [.automated.checks[]
             | select(.id == "rpi5-eeprom-release-contract")
+            | [.system, .status]
+          ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
+        ' ${canonicalJSON}/report-input.json > /dev/null
+        jq -e \
+          '[.checks[] | select(.id == "rpi5-eeprom-signing-contract") | .status]
+            == ["passed"]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "rpi5-eeprom-signing-contract")
             | [.system, .status]
           ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
         ' ${canonicalJSON}/report-input.json > /dev/null
@@ -2781,6 +3440,7 @@ in
     developmentYubiKeySigningContract
     deviceProfileSchema
     eepromReleaseContract
+    eepromSigningContract
     mediaStagingFixtureContract
     moduleEval
     probeBundleIntegrity

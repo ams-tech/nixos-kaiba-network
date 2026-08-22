@@ -39,7 +39,7 @@ func TestConnectionHandlerAcceptsOnlyRawArtifactBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.SignatureHex == "" || result.ReceiptDigest == "" || backend.calls != 1 {
+	if result.SignatureHex == "" || result.ReceiptDigest == "" || result.ReleaseIntentDigest != grant.Request.Approval.ReleaseIntentDigest || backend.calls != 1 {
 		t.Fatalf("result/backend = %#v/%d", result, backend.calls)
 	}
 	if _, err := io.ReadAll(connection.input); err != nil {
@@ -80,7 +80,7 @@ func TestUnixBridgeSendsOnlyArtifactAndReturnsSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.SignatureHex != second.SignatureHex || first.ReceiptDigest != second.ReceiptDigest || backend.calls != 1 {
+	if first.SignatureHex != second.SignatureHex || first.ReceiptDigest != second.ReceiptDigest || first.ReleaseIntentDigest != grant.Request.Approval.ReleaseIntentDigest || second.ReleaseIntentDigest != first.ReleaseIntentDigest || backend.calls != 1 {
 		t.Fatalf("wire replay = %#v/%#v, calls=%d", first, second, backend.calls)
 	}
 	if _, err := signing.ParseSignatureHex([]byte(first.SignatureHex)); err != nil {
