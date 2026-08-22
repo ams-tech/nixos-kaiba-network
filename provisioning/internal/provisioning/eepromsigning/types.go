@@ -24,6 +24,7 @@ const (
 	RoleEEPROMBootcode SigningInputRole = "rpi5.eeprom_bootcode"
 	RoleEEPROMBootsys  SigningInputRole = "rpi5.eeprom_bootsys"
 	RoleEEPROMConfig   SigningInputRole = "rpi5.eeprom_config"
+	RoleOwnedRecovery  SigningInputRole = "rpi5.owned_recovery_bootcode"
 
 	maxPlanBytes                        = 128 * 1024
 	maxResultBytes                      = 128 * 1024

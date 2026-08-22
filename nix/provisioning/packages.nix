@@ -531,7 +531,13 @@ let
       oneTimeSettingCapable = false;
       otpCapable = false;
       privateKeyAccess = false;
-      recoverySigningCapable = false;
+      recoverySigningCapable = true;
+      ownedRecoveryGateRequestCount = 1;
+      ownedRecoveryReusedSignatureCount = 3;
+      ownedRecoveryUpdaterFlags = [
+        "-f"
+        "-r"
+      ];
       signingAuthorityConfigured = true;
       toolPATH = eepromToolPATH;
       updaterFlags = [ "-f" ];
@@ -539,7 +545,38 @@ let
     };
     meta = {
       mainProgram = "kaiba-provision-sign-eeprom";
-      description = "Approval-gated fresh-board Raspberry Pi 5 EEPROM signing adapter and verifier";
+      description = "Approval-gated Raspberry Pi 5 EEPROM and one-input owned-recovery signing adapter";
+      platforms = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+    };
+  };
+
+  # Pure public bundle construction is isolated from the physical lane guard:
+  # this closure can only copy, mutate the two deterministic negative-test
+  # fixtures, snapshot directory trees, and verify public signatures/digests.
+  rpibootBundleTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-rpiboot-bundles";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-rpiboot-bundles" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaRPIBootBundleTool = {
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      eepromProgrammingCapable = false;
+      fixtureHardwareObserved = false;
+      mutationCapable = false;
+      oneTimeSettingCapable = false;
+      otpCapable = false;
+      privateKeyAccess = false;
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-rpiboot-bundles";
+      description = "Offline constructor and verifier for immutable Raspberry Pi 5 RPIBOOT bundle sets";
       platforms = [
         "x86_64-linux"
         "aarch64-linux"
@@ -562,6 +599,25 @@ let
       ;
   };
   inherit (eepromSigningFactories) mkRpi5EEPROMSigningPlan mkRpi5VerifiedSignedEEPROM;
+
+  ownedRecoverySigningFactories = import ./owned-recovery-signing.nix {
+    inherit eepromSigningTool lib pkgs;
+  };
+  inherit (ownedRecoverySigningFactories)
+    mkRpi5OwnedRecoverySigningPlan
+    mkRpi5VerifiedOwnedRecovery
+    ;
+
+  rpibootBundleFactories = import ./rpiboot-bundles.nix {
+    inherit
+      eepromSigningTool
+      lib
+      pkgs
+      rpibootBundleTool
+      signedBootTool
+      ;
+  };
+  inherit (rpibootBundleFactories) mkRpi5VerifiedRPIBootBundles;
 
   signedBootFactories = import ./signed-boot.nix {
     inherit lib pkgs signedBootTool;
@@ -1013,14 +1069,18 @@ in
     mkRpi5EEPROMSigningPlan
     mkRpi5PhysicalLaneGuard
     mkRpi5MediaStagingFixture
+    mkRpi5OwnedRecoverySigningPlan
+    mkRpi5VerifiedRPIBootBundles
     mkRpi5ReleaseIntent
     mkRpi5UnfusedVerifier
     mkRpi5VerifiedSignedBoot
     mkRpi5VerifiedSignedEEPROM
+    mkRpi5VerifiedOwnedRecovery
     mkRpi5VerifiedUnfusedCapsule
     provision
     rehearsal
     rpiboot
+    rpibootBundleTool
     rpibootSource
     rpi5EEPROMRelease
     rpi5EEPROMReleaseVerifier

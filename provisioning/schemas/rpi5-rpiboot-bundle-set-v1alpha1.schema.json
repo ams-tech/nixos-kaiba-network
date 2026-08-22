@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.invalid/schemas/rpi5-rpiboot-bundle-set-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 canonical RPIBOOT bundle set v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release_intent_digest", "inputs", "bundles", "fixtures"],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-rpiboot-bundle-set/v1alpha1"
+    },
+    "release_intent_digest": { "$ref": "#/$defs/digest" },
+    "inputs": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/input", "properties": { "name": { "const": "boot_image" } } },
+        { "$ref": "#/$defs/input", "properties": { "name": { "const": "boot_public_key" } } },
+        { "$ref": "#/$defs/input", "properties": { "name": { "const": "boot_signature" } } },
+        { "$ref": "#/$defs/input", "properties": { "name": { "const": "eeprom_update_metadata" } } },
+        { "$ref": "#/$defs/input", "properties": { "name": { "const": "fresh_recovery_bootcode" } } },
+        { "$ref": "#/$defs/input", "properties": { "name": { "const": "owned_recovery_bootcode" } } },
+        { "$ref": "#/$defs/input", "properties": { "name": { "const": "root_data_image" } } },
+        { "$ref": "#/$defs/input", "properties": { "name": { "const": "root_hash_tree_image" } } },
+        { "$ref": "#/$defs/input", "properties": { "name": { "const": "signed_eeprom_image" } } }
+      ],
+      "items": false,
+      "minItems": 9,
+      "maxItems": 9
+    },
+    "bundles": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/bundle", "properties": { "role": { "const": "rpi5.fresh_commit_bundle" }, "relative_path": { "const": "fresh-commit" } } },
+        { "$ref": "#/$defs/bundle", "properties": { "role": { "const": "rpi5.fresh_readback_bundle" }, "relative_path": { "const": "fresh-readback" } } },
+        { "$ref": "#/$defs/bundle", "properties": { "role": { "const": "rpi5.negative_boot_bundle" }, "relative_path": { "const": "negative-boot" } } },
+        { "$ref": "#/$defs/bundle", "properties": { "role": { "const": "rpi5.owned_readback_bundle" }, "relative_path": { "const": "owned-readback" } } },
+        { "$ref": "#/$defs/bundle", "properties": { "role": { "const": "rpi5.owned_recovery_bundle" }, "relative_path": { "const": "owned-recovery" } } },
+        { "$ref": "#/$defs/bundle", "properties": { "role": { "const": "rpi5.root_integrity_test_bundle" }, "relative_path": { "const": "root-integrity-test" } } }
+      ],
+      "items": false,
+      "minItems": 6,
+      "maxItems": 6
+    },
+    "fixtures": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/fixture", "properties": { "fixture_id": { "const": "unauthorized-owned-recovery" }, "failure_class": { "const": "unauthorized_recovery" }, "mutation": { "const": "replace_customer_counter_signed_recovery_with_unsigned_fresh_recovery" }, "expected_outcome": { "const": "owned_rom_rejects_second_stage" } } },
+        { "$ref": "#/$defs/fixture", "properties": { "fixture_id": { "const": "persistent-root-data-tamper" }, "failure_class": { "const": "root_integrity" }, "mutation": { "const": "flip_first_root_data_byte_keep_hash_tree" }, "expected_outcome": { "const": "verity_rejects_root_data" } } }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "size_bytes"],
+      "properties": {
+        "digest": { "$ref": "#/$defs/digest" },
+        "size_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "file"],
+      "properties": {
+        "name": { "type": "string" },
+        "file": { "$ref": "#/$defs/file" }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "relative_path", "digest", "size_bytes", "tree"],
+      "properties": {
+        "role": { "type": "string" },
+        "relative_path": { "type": "string" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "size_bytes": { "type": "integer", "minimum": 1 },
+        "tree": { "$ref": "rpi5-rpiboot-directory-tree-v1alpha1.schema.json" }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "fixture_id", "failure_class", "mutation", "original_digest", "test_input_digest", "expected_outcome", "hardware_observed"],
+      "properties": {
+        "schema_version": { "const": "kaiba.provisioning.rpi5-acceptance-fixture/v1alpha1" },
+        "fixture_id": { "type": "string" },
+        "failure_class": { "type": "string" },
+        "mutation": { "type": "string" },
+        "original_digest": { "$ref": "#/$defs/digest" },
+        "test_input_digest": { "$ref": "#/$defs/digest" },
+        "expected_outcome": { "type": "string" },
+        "hardware_observed": { "const": false }
+      }
+    }
+  }
+}

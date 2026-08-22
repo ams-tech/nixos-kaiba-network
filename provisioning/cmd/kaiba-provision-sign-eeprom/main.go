@@ -176,6 +176,10 @@ func run(
 		err = signEEPROM(ctx, planDirectory, outputDirectory, deps)
 	case "finalize":
 		err = finalizeEEPROM(ctx, planDirectory, signedDirectory, outputDirectory, deps)
+	case "sign-owned-recovery":
+		err = signOwnedRecovery(ctx, planDirectory, outputDirectory, deps)
+	case "finalize-owned-recovery":
+		err = finalizeOwnedRecovery(ctx, planDirectory, signedDirectory, outputDirectory, deps)
 	default:
 		panic("unreachable command")
 	}
@@ -187,10 +191,10 @@ func run(
 }
 
 func parseArguments(args []string) (command, planDirectory, signedDirectory, outputDirectory string, err error) {
-	if len(args) == 5 && args[0] == "sign" && args[1] == "--plan" && validCLIPath(args[2]) && args[3] == "--output" && validCLIPath(args[4]) {
+	if len(args) == 5 && (args[0] == "sign" || args[0] == "sign-owned-recovery") && args[1] == "--plan" && validCLIPath(args[2]) && args[3] == "--output" && validCLIPath(args[4]) {
 		return args[0], args[2], "", args[4], nil
 	}
-	if len(args) == 7 && args[0] == "finalize" && args[1] == "--plan" && validCLIPath(args[2]) && args[3] == "--signed" && validCLIPath(args[4]) && args[5] == "--output" && validCLIPath(args[6]) {
+	if len(args) == 7 && (args[0] == "finalize" || args[0] == "finalize-owned-recovery") && args[1] == "--plan" && validCLIPath(args[2]) && args[3] == "--signed" && validCLIPath(args[4]) && args[5] == "--output" && validCLIPath(args[6]) {
 		return args[0], args[2], args[4], args[6], nil
 	}
 	return "", "", "", "", errors.New("invalid command arguments")
@@ -203,4 +207,6 @@ func validCLIPath(path string) bool {
 func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "usage: kaiba-provision-sign-eeprom sign --plan ABSOLUTE_PLAN_DIR --output ABSOLUTE_OUTPUT_DIR")
 	fmt.Fprintln(output, "       kaiba-provision-sign-eeprom finalize --plan ABSOLUTE_PLAN_DIR --signed ABSOLUTE_SIGNED_DIR --output ABSOLUTE_OUTPUT_DIR")
+	fmt.Fprintln(output, "       kaiba-provision-sign-eeprom sign-owned-recovery --plan ABSOLUTE_PLAN_DIR --output ABSOLUTE_OUTPUT_DIR")
+	fmt.Fprintln(output, "       kaiba-provision-sign-eeprom finalize-owned-recovery --plan ABSOLUTE_PLAN_DIR --signed ABSOLUTE_SIGNED_DIR --output ABSOLUTE_OUTPUT_DIR")
 }

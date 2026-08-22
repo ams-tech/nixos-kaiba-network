@@ -332,6 +332,12 @@ expiry; it does not retroactively broaden the cohort signing grant.
   result, and offline finalizer foundation for the pinned `-f` workflow and
   synthetic fixtures. This completed item is a contract/tooling foundation,
   not the production EEPROM deliverable below.
+- [x] Implement the separately authorized owned-device recovery plan and
+  result, one-new-request pinned `-fr` adapter, offline replay finalizer, and
+  canonical fresh/owned RPIBOOT bundle-set builder. The negative recovery and
+  root-integrity trees are deterministic test inputs and explicitly record
+  `hardware_observed=false`; this software foundation is not a live-token
+  signature or board observation.
 
 The repository now defines a v1alpha2 signed-release contract that requires
 the exact 18-role Raspberry Pi 5 artifact set and its cohort release-intent
@@ -368,16 +374,17 @@ This proves public source, digest, and capability contracts only. Actual
 hardware emission of the property remains a cold-boot gate, and the signed
 EEPROM deliverable above remains incomplete.
 
-The new public fresh-board EEPROM foundation narrows the updater to `-f`,
-derives and checks the three EEPROM signing preimages, carries the cohort
-release-intent digest through plan and result, and can revalidate the public
-outputs offline. Its present evidence is synthetic/offline only. It does not
-establish a production `pieeprom.bin`, invoke the owned-device recovery
-counter-signing path, build the required recovery/commit directory trees,
-write EEPROM or target media, enter a hardware lane, change OTP, or observe a
-board. Its `recovery_mode` is an unsigned copy of the pinned fresh-board
-recovery payload; `rpi5.owned_recovery_bootcode` remains a separately
-authorized input for future recovery signing.
+The public EEPROM foundation narrows fresh signing to `-f` and owned recovery
+to a separately authorized `-fr` plan. Owned recovery makes exactly one new
+gate request, reuses the three independently verified fresh-EEPROM signatures,
+and requires the replayed EEPROM image and update metadata to remain
+byte-identical. The canonical bundle-set finalizer creates exact fresh commit,
+fresh and owned readback, owned recovery, unauthorized-recovery, and
+root-integrity fixture trees. It binds every path, mode, size, and digest and
+keeps `program_pubkey=1` confined to the fresh commit tree. Its current
+evidence remains synthetic/offline: it does not establish production token
+outputs, write EEPROM or target media, enter a hardware lane, change OTP, or
+observe a board.
 
 - [x] Implement the non-mutating normal-boot signing slice: immutable v1alpha2
   public plan and result, fixed approval-gated adapter, canonical `boot.sig`,
@@ -386,10 +393,13 @@ authorized input for future recovery signing.
 - [ ] Produce and verify the detached signature for the exact normal
   release-candidate `boot.img` with the reviewed live development token and
   retain its gate receipt as private operational evidence.
-- [ ] Produce the fresh-board commit bundle for a hash-zero BCM2712 board. Its
-  recovery program must follow the vendor's fresh-board signing rules.
-- [ ] Produce the separately customer-counter-signed owned-device readback and
-  recovery bundles before the ownership commit.
+- [ ] Produce the production fresh-board commit bundle for a hash-zero BCM2712
+  board from reviewed live-token outputs. The software builder now enforces
+  the vendor's fresh-board signing rules and exact tree layout.
+- [ ] Produce the production customer-counter-signed owned-device readback and
+  recovery bundles before the ownership commit. The separate plan, one-request
+  adapter, replay finalizer, and bundle layouts are implemented; live signing
+  evidence is still required.
 - [ ] Produce narrow, deterministic test artifacts for altered image, altered
   signature, wrong key, unsigned and alternate boot sources, unauthorized
   recovery, and persistent-root tampering. Do not treat one generic marker as
@@ -409,6 +419,9 @@ authorized input for future recovery signing.
   capability.
 - [ ] Store the final artifacts at immutable content-addressed paths and record
   the exact source revision and tool versions.
+
+See [owned recovery and RPIBOOT bundles] for the implemented public workflow,
+the exact six-directory set, and its software-evidence boundary.
 
 ### Exit criteria
 
@@ -950,6 +963,7 @@ path must continue to reject `enrollment_ready`.
 [release-intent contract]: ../provisioning/internal/provisioning/releaseintent/release_intent.go
 [signed-boot lineage contract]: ../provisioning/internal/provisioning/signedboot/types.go
 [EEPROM signing foundation]: ../provisioning/internal/provisioning/eepromsigning/types.go
+[owned recovery and RPIBOOT bundles]: raspberry-pi-5-rpiboot-bundles.md
 [lane-guard plan contract]: ../provisioning/internal/provisioning/laneguard/contracts.go
 [control-plane terminal workflow]: ../provisioning/internal/provisioning/controlplane/workflow.go
 [physical Pi 5 adapter]: ../provisioning/internal/provisioning/physicalrpi5/adapter.go

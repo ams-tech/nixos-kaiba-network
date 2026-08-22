@@ -46,6 +46,7 @@ type hsmCallback func(context.Context, []byte) (string, error)
 type updateInvocation struct {
 	WorkDir         string
 	SourceDateEpoch uint64
+	SignRecovery    bool
 	Config          runtimeConfig
 }
 
@@ -241,7 +242,7 @@ func productionUpdater(ctx context.Context, invocation updateInvocation, callbac
 		serverDone <- servePrivateSession(sessionContext, listener, callback)
 	}()
 
-	arguments := updaterArguments(invocation.Config)
+	arguments := updaterArguments(invocation.Config, invocation.SignRecovery)
 	command := exec.CommandContext(ctx, invocation.Config.UpdaterExecutablePath, arguments...)
 	command.Dir = invocation.WorkDir
 	command.Env = updaterEnvironment(invocation.Config, invocation.SourceDateEpoch, temporaryDirectory, socketPath)
@@ -320,9 +321,13 @@ func writeSessionResponse(output io.Writer, response sessionResponse) error {
 	return encoder.Encode(response)
 }
 
-func updaterArguments(config runtimeConfig) []string {
+func updaterArguments(config runtimeConfig, signRecovery bool) []string {
+	mode := "-f"
+	if signRecovery {
+		mode = "-fr"
+	}
 	return []string{
-		"-f",
+		mode,
 		"-c", "boot.conf",
 		"-i", "pieeprom.original.bin",
 		"-o", "pieeprom.bin",

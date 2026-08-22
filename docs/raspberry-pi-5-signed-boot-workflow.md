@@ -423,12 +423,11 @@ derived files, and admits only that verified public snapshot.
 This is a synthetic/offline foundation only. Current repository evidence does
 not establish that a reviewed production input was signed with a live approved
 token, and an output named `pieeprom.bin` from a synthetic fixture is not the
-production signed-EEPROM deliverable. The fresh-board plan deliberately copies
-the pinned unsigned recovery payload; it does not customer-counter-sign owned
-recovery. It also does not produce the fresh commit or owned recovery bundles,
-write EEPROM or target media, enter RPIBOOT, change OTP, or report any hardware
-result. The separately authorized `rpi5.owned_recovery_bootcode` input remains
-for a later recovery-signing workflow.
+production signed-EEPROM deliverable. The separate
+[owned recovery and RPIBOOT bundle workflow] now provides the one-new-request
+`-fr` path, offline replay, and canonical fresh/owned/test trees. Those public
+outputs do not write EEPROM or target media, enter RPIBOOT, change OTP, or
+report a hardware result.
 
 ## Safety status
 
@@ -436,10 +435,12 @@ Completing this workflow proves that the selected `boot.img` verifies under
 the reviewed public key and that the v1alpha2 public records carry one valid
 release-intent lineage. It does not prove a live YubiKey ceremony unless the
 root-managed receipt and operator evidence are reviewed. The repository's
-v1alpha2 exact 18-role signed-release manifest and canonical RPIBOOT
-directory-tree contracts do not change that boundary: this workflow does not
-produce a production signed EEPROM, signed recovery/commit bundles, an
+v1alpha2 exact 18-role signed-release manifest and canonical RPIBOOT bundle-set
+contracts do not change that boundary: this workflow does not produce
+live-token signed EEPROM/recovery outputs or an
 assembled complete signed release with every role resolved to immutable bytes,
 target-media cold readback, per-device execution authorization, or secure-boot
 enforcement on hardware. Those remain prerequisites before any one-time
 setting may be changed.
+
+[owned recovery and RPIBOOT bundle workflow]: raspberry-pi-5-rpiboot-bundles.md

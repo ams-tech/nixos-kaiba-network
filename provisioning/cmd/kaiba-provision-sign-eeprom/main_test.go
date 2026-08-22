@@ -23,6 +23,16 @@ func TestParseArgumentsIsClosedAndRequiresAbsolutePaths(t *testing.T) {
 	}); err != nil || command != "finalize" || plan != "/public/plan" || signed != "/public/signed" || output != "/public/final" {
 		t.Fatalf("parse finalize = %q %q %q %q, %v", command, plan, signed, output, err)
 	}
+	if command, plan, signed, output, err := parseArguments([]string{
+		"sign-owned-recovery", "--plan", "/public/owned-plan", "--output", "/public/owned-signed",
+	}); err != nil || command != "sign-owned-recovery" || plan != "/public/owned-plan" || signed != "" || output != "/public/owned-signed" {
+		t.Fatalf("parse sign-owned-recovery = %q %q %q %q, %v", command, plan, signed, output, err)
+	}
+	if command, plan, signed, output, err := parseArguments([]string{
+		"finalize-owned-recovery", "--plan", "/public/owned-plan", "--signed", "/public/owned-signed", "--output", "/public/owned-final",
+	}); err != nil || command != "finalize-owned-recovery" || plan != "/public/owned-plan" || signed != "/public/owned-signed" || output != "/public/owned-final" {
+		t.Fatalf("parse finalize-owned-recovery = %q %q %q %q, %v", command, plan, signed, output, err)
+	}
 	for _, arguments := range [][]string{
 		{"sign", "--plan", "relative", "--output", "/public/signed"},
 		{"sign", "--output", "/public/signed", "--plan", "/public/plan"},

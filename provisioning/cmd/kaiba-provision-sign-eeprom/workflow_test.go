@@ -339,13 +339,17 @@ func TestUpdaterCommandIsClosedAndEnvironmentIsScrubbed(t *testing.T) {
 		"-f", "-c", "boot.conf", "-i", "pieeprom.original.bin", "-o", "pieeprom.bin",
 		"-p", "public.pem", "-H", config.WrapperExecutablePath,
 	}
-	if got := updaterArguments(config); !reflect.DeepEqual(got, wantArgs) {
+	if got := updaterArguments(config, false); !reflect.DeepEqual(got, wantArgs) {
 		t.Fatalf("updater arguments = %v, want %v", got, wantArgs)
 	}
-	for _, argument := range updaterArguments(config) {
+	for _, argument := range updaterArguments(config, false) {
 		if argument == "-r" || argument == "-fr" {
-			t.Fatalf("updater arguments enable recovery signing: %v", updaterArguments(config))
+			t.Fatalf("updater arguments enable recovery signing: %v", updaterArguments(config, false))
 		}
+	}
+	owned := updaterArguments(config, true)
+	if len(owned) == 0 || owned[0] != "-fr" {
+		t.Fatalf("owned-recovery updater arguments = %v", owned)
 	}
 	wantEnvironment := []string{
 		"LANG=C", "LC_ALL=C", "TZ=UTC", "PATH=/fixed/tools:/fixed/runtime",

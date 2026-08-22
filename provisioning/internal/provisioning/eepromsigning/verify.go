@@ -54,6 +54,19 @@ func NewSigningInputs(bootcode, bootsys, bootConfig []byte) ([]SigningInput, err
 	}, nil
 }
 
+// NewOwnedRecoverySigningInput derives the only new signing input admitted by
+// the owned-device recovery workflow. The other three -fr callbacks must reuse
+// signatures already verified in the fresh-board EEPROM result.
+func NewOwnedRecoverySigningInput(recovery []byte) (SigningInput, error) {
+	preimage, err := FirmwareSigningPreimage(recovery)
+	if err != nil {
+		return SigningInput{}, fmt.Errorf("owned recovery signing input: %w", err)
+	}
+	return SigningInput{
+		Role: RoleOwnedRecovery, Digest: bundle.Sum(preimage), SizeBytes: uint64(len(preimage)),
+	}, nil
+}
+
 // CustomerPublicKeyBinary emits Raspberry Pi's irreversible 264-byte N,e
 // representation (little-endian 2048-bit modulus followed by little-endian
 // uint64 exponent).
