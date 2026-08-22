@@ -26,6 +26,13 @@
         "evidence": []
       },
       {
+        "id": "rpi5-production-media-contract",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Complete software-only production-media contract binds the signed release, exact GPT/FAT/root/verity layout, plan-specialized writer, independent verifier, and canonical receipts without making hardware, cold-power, or security-enforcement claims.",
+        "evidence": []
+      },
+      {
         "id": "nixos-module-evaluation",
         "system": "aarch64-linux",
         "status": "not-observed",
@@ -107,6 +114,13 @@
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Synthetic capsule-bound regular-file fixture validates FAT/GPT layout, staged extents, reopened readback, complete partition digests, dm-verity, and fail-closed tamper rejection without making hardware or enforcement claims.",
+        "evidence": []
+      },
+      {
+        "id": "rpi5-production-media-contract",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Complete software-only production-media contract binds the signed release, exact GPT/FAT/root/verity layout, plan-specialized writer, independent verifier, and canonical receipts without making hardware, cold-power, or security-enforcement claims.",
         "evidence": []
       },
       {

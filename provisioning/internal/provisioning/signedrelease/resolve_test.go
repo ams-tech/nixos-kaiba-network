@@ -298,7 +298,7 @@ func newResolveFixture(t *testing.T) resolveFixture {
 	adapterPath := writeFixtureFile(t, root, "platform-adapter", []byte("immutable platform adapter"))
 	rootHashText := strings.TrimPrefix(string(rootIntegrityDigest), "sha256:")
 	rootIntegrityPath := writeFixtureFile(t, root, "root-integrity.json", []byte(fmt.Sprintf(
-		`{"schema":"provisioning.kaiba.network/rpi5-boot-integrity/v1alpha1","algorithm":"sha256","data_block_size":4096,"hash_block_size":4096,"no_superblock":false,"root_hash":"%s","data_device":"/dev/nvme0n1p2","hash_device":"/dev/nvme0n1p3"}`,
+		`{"schema":"provisioning.kaiba.network/rpi5-boot-integrity/v1alpha1","algorithm":"sha256","data_block_size":4096,"hash_block_size":4096,"no_superblock":false,"root_hash":"%s","data_device":"PARTUUID=bdd5be20-f7ea-56e7-ae90-4465ae950596","hash_device":"PARTUUID=62616022-71fb-5036-8cc4-b7949cc6e52c"}`,
 		rootHashText,
 	)))
 	rootDataPath := writeFixtureFile(t, root, "root-data.img", rootData)
@@ -348,7 +348,7 @@ func writeUnsignedFixture(t *testing.T, root string, boot, rootData, rootHash []
 			RootData:     unsignedArtifact{Path: "nvme/root-data.img", Digest: bundle.Sum(rootData)},
 			RootHashTree: unsignedArtifact{Path: "nvme/root-hash.img", Digest: bundle.Sum(rootHash)},
 		},
-		Verity:              unsignedVerity{Algorithm: "sha256", DataBlockSize: 4096, HashBlockSize: 4096, UUID: "12345678-1234-1234-1234-123456789abc", DataDevice: "/dev/nvme0n1p2", HashDevice: "/dev/nvme0n1p3", Mapper: "/dev/mapper/root"},
+		Verity:              unsignedVerity{Algorithm: "sha256", DataBlockSize: 4096, HashBlockSize: 4096, UUID: "12345678-1234-1234-1234-123456789abc", DataDevice: "PARTUUID=bdd5be20-f7ea-56e7-ae90-4465ae950596", HashDevice: "PARTUUID=62616022-71fb-5036-8cc4-b7949cc6e52c", Mapper: "/dev/mapper/root"},
 		RootIntegrityDigest: rootIntegrityDigest, SigningStatus: "unsigned",
 	}
 	without, _ := json.Marshal(value)

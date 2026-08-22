@@ -248,10 +248,53 @@ let
     };
   };
 
-  # The media stager is intentionally not part of serviceSuite or any station
-  # image.  It can overwrite an explicitly approved block device, so operators
-  # must opt into this dedicated closure and its narrow CLI.  It carries no Pi
-  # OTP, EEPROM, RPIBOOT, GPIO, or lane-guard implementation.
+  # Secret-free serializers and validators remain generic. Production writers
+  # and verifiers are emitted only by mkRpi5ProductionMedia, which linker-pins
+  # one immutable plan, source set, signed release, and verifier toolchain.
+  mediaContractTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-media-contract";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-media-contract" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaMediaContractTool = {
+      blockDeviceAccess = false;
+      mutationCapable = false;
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-media-contract";
+      description = "Canonical Raspberry Pi 5 media-plan and receipt validator";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  unfusedRuntimeRecordTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-unfused-runtime-record";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-unfused-runtime-record" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaUnfusedRuntimeRecordTool = {
+      authority = "serialization_fixture_only";
+      blockDeviceAccess = false;
+      hardwareObservationClaim = false;
+      mutationCapable = false;
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-unfused-runtime-record";
+      description = "Plan-correlated serializer for unfused runtime UART records";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  # Legacy mixed fixture/device prototype retained only for the old synthetic
+  # fixture contract. It is deliberately not exported by the provisioning
+  # flake; production callers must use mkRpi5ProductionMedia's device-only,
+  # plan-specialized stager.
   mediaStager = pkgs.buildGoModule {
     pname = "kaiba-provision-media-stager";
     inherit version;
@@ -260,6 +303,7 @@ let
     vendorHash = null;
     doCheck = false;
     passthru.kaibaMediaStager = {
+      authority = "legacy_fixture_prototype";
       blockDeviceWriteCapable = true;
       oneTimeSettingCapable = false;
       otpCapable = false;
@@ -702,6 +746,17 @@ let
   };
   inherit (signedReleaseFactories) mkRpi5VerifiedSignedRelease;
 
+  productionMediaFactories = import ./media-staging.nix {
+    inherit
+      lib
+      mediaContractTool
+      moduleRoot
+      pkgs
+      version
+      ;
+  };
+  inherit (productionMediaFactories) mkRpi5ProductionMedia;
+
   signedBootFactories = import ./signed-boot.nix {
     inherit lib pkgs signedBootTool;
   };
@@ -1115,6 +1170,28 @@ let
           "$out/share/kaiba/schemas/device-profile-v1alpha1.schema.json"
         ln -s ${goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-device-media-layout-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-device-media-layout-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-binding-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-binding-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-cold-power-observation-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-cold-power-observation-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-device-preflight-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-device-preflight-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-fixture-result-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-fixture-result-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-stage-receipt-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-stage-receipt-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-staging-plan-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-staging-plan-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-staging-receipt-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-staging-receipt-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-verification-receipt-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-verification-receipt-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-verification-report-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-verification-report-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-unfused-runtime-facts-v1alpha1.schema.json \
+          "$out/share/kaiba/schemas/rpi5-unfused-runtime-facts-v1alpha1.schema.json"
         ln -s ${rpi5ProbeBundle}/bundle "$out/share/kaiba/rpi5-probe-bundle"
         ln -s ${rpi5ProbeBundle}/manifest.json "$out/share/kaiba/rpi5-probe-bundle-manifest.json"
       '';
@@ -1142,6 +1219,7 @@ in
     integratedRehearsal
     laneGuard
     liveStation
+    mediaContractTool
     mediaStager
     eepromSigningTool
     eepromToolRuntime
@@ -1151,6 +1229,7 @@ in
     mkRpi5EEPROMReleaseSigningInputs
     mkRpi5EEPROMSigningPlan
     mkRpi5PhysicalLaneGuard
+    mkRpi5ProductionMedia
     mkRpi5MediaStagingFixture
     mkRpi5OwnedRecoverySigningPlan
     mkRpi5VerifiedRPIBootBundles
@@ -1174,6 +1253,7 @@ in
     stationPages
     unfusedCompat
     unfusedEvidence
+    unfusedRuntimeRecordTool
     serviceSuite
     signerFoundation
     signingClientFoundation

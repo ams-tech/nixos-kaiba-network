@@ -109,6 +109,11 @@ assert lib.assertMsg (
   prototype.target.unsignedArtifacts == prototype.unsignedArtifacts
   && unsignedContract.sourceRevision == metadata.sourceRevision
   && unsignedContract.expectedCustomerKeyHash == metadata.expectedCustomerKeyHash
+  && prototype.target.rootDataPartitionGUID == unsignedContract.rootDataPartitionGUID
+  && prototype.target.rootHashPartitionGUID == unsignedContract.rootHashPartitionGUID
+  && unsignedContract.dataDevice == "PARTUUID=${unsignedContract.rootDataPartitionGUID}"
+  && unsignedContract.hashDevice == "PARTUUID=${unsignedContract.rootHashPartitionGUID}"
+  && unsignedContract.rootDataPartitionGUID != unsignedContract.rootHashPartitionGUID
   && unsignedContract.schemaVersion == "provisioning.kaiba.network/unsigned-artifact-set/v1alpha1"
   && unsignedContract.signingStatus == "unsigned"
 ) "the exposed prototype unsigned output differs from the target artifact set";

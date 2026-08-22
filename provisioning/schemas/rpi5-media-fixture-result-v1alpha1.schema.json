@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-media-fixture-result-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 media fixture result v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "evidence_mode",
+    "plan_digest",
+    "target_path",
+    "full_media_digest",
+    "bytes_written",
+    "reopened_target",
+    "block_device_access",
+    "cold_power_cycle_observed",
+    "hardware_observed",
+    "security_enforced",
+    "mutation_eligible",
+    "one_time_settings_changed",
+    "result_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-media-fixture-result/v1alpha1"
+    },
+    "status": { "const": "fixture_staged_and_reopened" },
+    "evidence_mode": { "const": "regular_file_fixture" },
+    "plan_digest": { "$ref": "#/definitions/digest" },
+    "target_path": { "$ref": "#/definitions/fixture_path" },
+    "full_media_digest": { "$ref": "#/definitions/digest" },
+    "bytes_written": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "reopened_target": { "const": true },
+    "block_device_access": { "const": false },
+    "cold_power_cycle_observed": { "const": false },
+    "hardware_observed": { "const": false },
+    "security_enforced": { "const": false },
+    "mutation_eligible": { "const": false },
+    "one_time_settings_changed": { "const": false },
+    "result_digest": { "$ref": "#/definitions/digest" }
+  },
+  "definitions": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "fixture_path": {
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^/(?!dev(?:/|$))(?!.*//)(?!.*(?:/\\.\\.?)(?:/|$))[^/\\u0000]+(?:/[^/\\u0000]+)*$"
+    }
+  }
+}

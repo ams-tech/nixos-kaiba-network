@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-media-staging-receipt-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 final media staging receipt v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "transaction_id",
+    "plan_digest",
+    "stage_receipt_digest",
+    "verification_receipt_digest",
+    "cold_power_observation_digest",
+    "signed_release_manifest_digest",
+    "layout_digest",
+    "target",
+    "full_media_digest",
+    "cold_readback_verified",
+    "capture_authenticated",
+    "freshness_established",
+    "hardware_observed",
+    "security_enforced",
+    "mutation_eligible",
+    "one_time_settings_changed",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-media-staging-receipt/v1alpha1"
+    },
+    "status": { "const": "media_staging_verified" },
+    "transaction_id": { "$ref": "#/definitions/identifier" },
+    "plan_digest": { "$ref": "#/definitions/digest" },
+    "stage_receipt_digest": { "$ref": "#/definitions/digest" },
+    "verification_receipt_digest": { "$ref": "#/definitions/digest" },
+    "cold_power_observation_digest": { "$ref": "#/definitions/digest" },
+    "signed_release_manifest_digest": { "$ref": "#/definitions/digest" },
+    "layout_digest": { "$ref": "#/definitions/digest" },
+    "target": { "$ref": "#/definitions/target_binding" },
+    "full_media_digest": { "$ref": "#/definitions/digest" },
+    "cold_readback_verified": { "const": true },
+    "capture_authenticated": { "const": false },
+    "freshness_established": { "const": false },
+    "hardware_observed": { "const": false },
+    "security_enforced": { "const": false },
+    "mutation_eligible": { "const": false },
+    "one_time_settings_changed": { "const": false },
+    "receipt_digest": { "$ref": "#/definitions/digest" }
+  },
+  "definitions": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "target_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "by_id_path",
+        "model",
+        "serial",
+        "wwid",
+        "size_bytes",
+        "logical_sector_size_bytes",
+        "physical_sector_size_bytes"
+      ],
+      "properties": {
+        "by_id_path": { "$ref": "#/definitions/by_id_path" },
+        "model": { "$ref": "#/definitions/printable_255" },
+        "serial": { "$ref": "#/definitions/printable_255" },
+        "wwid": { "$ref": "#/definitions/printable_255" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 8388608,
+          "maximum": 9223372036854775807,
+          "multipleOf": 512
+        },
+        "logical_sector_size_bytes": { "const": 512 },
+        "physical_sector_size_bytes": {
+          "enum": [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
+        }
+      }
+    },
+    "by_id_path": {
+      "type": "string",
+      "pattern": "^/dev/disk/by-id/[^/ \\t\\r\\n]+$",
+      "not": {
+        "anyOf": [
+          { "enum": ["/dev/disk/by-id/.", "/dev/disk/by-id/.."] },
+          { "pattern": "-part[0-9]+$" }
+        ]
+      }
+    },
+    "printable_255": {
+      "type": "string",
+      "pattern": "^(?:[!-~]|[!-~][ -~]{0,253}[!-~])$"
+    }
+  }
+}

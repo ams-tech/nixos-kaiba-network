@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-unfused-runtime-facts-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 unfused runtime facts v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "transaction_id",
+    "release_id",
+    "signed_release_manifest_digest",
+    "media_binding_digest",
+    "boot_image_digest",
+    "boot_signature_digest",
+    "root_data_digest",
+    "root_hash_tree_digest",
+    "verity_root_hash",
+    "data_partuuid",
+    "hash_partuuid",
+    "mapper",
+    "boot_ramdisk",
+    "root_read_only",
+    "enrollment_ready",
+    "customer_key_otp"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-unfused-runtime-facts/v1alpha1"
+    },
+    "transaction_id": { "$ref": "#/definitions/identifier" },
+    "release_id": { "$ref": "#/definitions/identifier" },
+    "signed_release_manifest_digest": { "$ref": "#/definitions/digest" },
+    "media_binding_digest": { "$ref": "#/definitions/digest" },
+    "boot_image_digest": { "$ref": "#/definitions/digest" },
+    "boot_signature_digest": { "$ref": "#/definitions/digest" },
+    "root_data_digest": { "$ref": "#/definitions/digest" },
+    "root_hash_tree_digest": { "$ref": "#/definitions/digest" },
+    "verity_root_hash": { "$ref": "#/definitions/digest" },
+    "data_partuuid": { "$ref": "#/definitions/partuuid" },
+    "hash_partuuid": { "$ref": "#/definitions/partuuid" },
+    "mapper": { "const": "/dev/mapper/root" },
+    "boot_ramdisk": { "const": true },
+    "root_read_only": { "const": true },
+    "enrollment_ready": { "const": false },
+    "customer_key_otp": { "const": false }
+  },
+  "definitions": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "partuuid": {
+      "type": "string",
+      "pattern": "^PARTUUID=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "PARTUUID=00000000-0000-0000-0000-000000000000"
+      }
+    }
+  }
+}

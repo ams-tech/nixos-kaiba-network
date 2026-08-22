@@ -94,8 +94,8 @@
           "type": "string",
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         },
-        "data_device": { "$ref": "#/$defs/nvme_partition" },
-        "hash_device": { "$ref": "#/$defs/nvme_partition" },
+        "data_device": { "$ref": "#/$defs/partuuid_selector" },
+        "hash_device": { "$ref": "#/$defs/partuuid_selector" },
         "mapper": { "const": "/dev/mapper/root" }
       }
     },
@@ -129,9 +129,10 @@
         { "not": { "pattern": "\\.\\." } }
       ]
     },
-    "nvme_partition": {
+    "partuuid_selector": {
       "type": "string",
-      "pattern": "^/dev/nvme[0-9]+n[0-9]+p[0-9]+$"
+      "pattern": "^PARTUUID=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": { "const": "PARTUUID=00000000-0000-0000-0000-000000000000" }
     },
     "version": {
       "type": "string",

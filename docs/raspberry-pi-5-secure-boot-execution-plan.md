@@ -143,18 +143,31 @@ These rules apply to every work item and rehearsal:
 ### Non-fusing prototype checkpoint
 
 The in-progress statuses above reflect implementation, not milestone exit. The
-repository now has a signed four-role capsule verifier, a fixed-extent media
-stager with a regular-file fixture mode, a `mkRpi5MediaStagingFixture` factory,
-offline unfused record correlation, a complete offline signed-release
-assembler, and a runnable software-only orchestrator.
-The media factory constructs an outer FAT containing exactly `config.txt`,
-`boot.img`, and `boot.sig`, plus deterministic GPT fixture metadata and a safe
-initializer/verifier. Its contract runs initialization, the stager's
-`fixture-dry-run`, `fixture-stage`, and `fixture-readback`, and final GPT/FAT and
-dm-verity verification against one regular file. The repository also exposes a
-clean-revision Pi 5 target, unsigned root/boot artifacts, a
-cohort-scoped release intent, a signer-profile-bound v1alpha2 public signing
-plan, and a concrete release review that verifies the artifact digests,
+repository now has a signed four-role capsule verifier, the legacy fixed-extent
+regular-file rehearsal, a `mkRpi5MediaStagingFixture` factory, a complete
+software-only `mkRpi5ProductionMedia` contract, offline unfused record
+serialization, a complete offline signed-release assembler, and a runnable
+software-only orchestrator. The legacy fixture constructs an outer FAT
+containing exactly `config.txt`, `boot.img`, and `boot.sig`, plus deterministic
+GPT fixture metadata and a safe initializer/verifier. Its contract runs
+initialization, the stager's `fixture-dry-run`, `fixture-stage`, and
+`fixture-readback`, and final GPT/FAT and dm-verity verification against one
+regular file.
+
+The production-media factory instead consumes the complete content-addressed
+18-role release. It freezes one exact whole-device identity and prestate, a
+three-partition GPT, the six regions covering every target byte, an exact
+four-file FAT containing `boot.img`, `boot.sig`, `config.txt`, and
+`kaiba-media-binding.json`, root-data and root-hash partitions, zero padding and
+tail, and both GPT copies. It emits a linker-fixed device writer, a separate
+read-only verifier, and canonical stage, verification, manual cold-power, and
+final receipt contracts. The software check independently validates GPT, FAT,
+release/signature lineage, full-media digests, and dm-verity using a regular
+file; it does not perform the physical ceremony.
+
+The repository also exposes a clean-revision Pi 5 target, unsigned root/boot
+artifacts, a cohort-scoped release intent, a signer-profile-bound v1alpha2
+public signing plan, and a concrete release review that verifies the artifact digests,
 release-intent lineage, dm-verity tree, public key, and signer-policy binding
 without signing or hardware access. The orchestrator uses
 the real durable control and audit services, derives the closed seven-operation
@@ -166,15 +179,14 @@ These pieces are packaged in separate capability closures and are described in
 the [non-fusing prototype runbook](non-fusing-secure-boot-prototype.md). A
 synthetic contract now resolves the full release role set, replays both EEPROM
 updater finalizers, and verifies and tampers the resulting content-addressed
-publication. It does not resolve those roles from the reviewed production
-live-token outputs, complete production GPT/FAT binding, prove device staging
-or cold readback, provide authenticated service transport, qualify the physical
-lane, or complete the required failure matrix, and it cannot authorize SB-08. The
-synthetic media fixture's plan and receipts bind only the three staged payload
-extents. The public EEPROM fresh-board plan, adapter, and finalizer likewise
-establish only synthetic/offline file, updater, signature, and lineage
-contracts. Neither foundation makes a cold-power, hardware-write, EEPROM,
-recovery-signing, OTP, or secure-boot-enforcement claim.
+publication. It does not resolve those roles from reviewed live-token outputs,
+prove a physical device write or cold readback, provide authenticated power or
+UART capture, qualify the physical lane, or complete the required failure
+matrix, and it cannot authorize SB-08. The public EEPROM and production-media
+foundations establish software/offline file, updater, signature, lineage,
+layout, writer, verifier, and receipt contracts. None makes a cold-power,
+hardware-observation, EEPROM, recovery-signing, OTP, or secure-boot-enforcement
+claim.
 
 ## Workstream 1: close the qualified baseline
 
@@ -446,41 +458,56 @@ Two independent verification paths agree on every digest and signature.
 
 ## Workstream 4: stage and verify target NVMe
 
-The repository now has a software-only regular-file fixture for the proposed
-three-partition shape. It deterministically constructs and inspects primary and
-backup GPT metadata, the exact three-file outer FAT, the staged extent digests,
-and the dm-verity pair by running the real fixture-mode stager sequence. This is
-a synthetic contract test, not a frozen sacrificial-device layout or staging
-receipt: GPT bytes are not bound by the generic staging plan, no block device or
-power boundary is involved, and no hardware or one-time setting is observed.
-Every SB-04 deliverable below therefore remains separately gated.
+The repository now has both the legacy three-extent regular-file fixture and a
+complete software definition for production media. The production contract
+binds a complete signed release, one exact whole-device identity and prestate,
+every byte of the final GPT/FAT/root/verity layout, the plan-specialized writer,
+the independent verifier, and the canonical receipt chain. Its deterministic
+regular-file build and tamper tests cross no block-device or power boundary and
+observe no hardware or one-time setting. SB-04 therefore remains in progress
+until the unchecked physical gates below are completed.
 
 ### Deliverables
 
-- [ ] Define the exact GPT or fixed-partition layout, device selectors, expected
+- [x] Define the exact GPT or fixed-partition layout, device selectors, expected
   sizes, filesystem roles, and overwrite protections for the sacrificial
   target's NVMe device.
-- [ ] Select the whole NVMe only through an approved `/dev/disk/by-id` path and
-  reconcile its serial, model, capacity, existing partition table, and
+- [x] Require selection of the whole NVMe only through an approved
+  `/dev/disk/by-id` path and reconcile its serial, model, capacity, existing
+  partition table, and
   transaction binding immediately before staging.
 - [x] Implement a staging tool or frozen procedure that refuses ambiguous,
   mounted, unexpected, or system block devices and never accepts a partition
   selector where the whole device is required, or the reverse.
-- [ ] Freeze the exact layout: a boot FAT containing only the approved
-  `boot.img`, `boot.sig`, and explicitly allowed metadata, plus fixed raw
-  root-data and dm-verity hash-tree partitions.
+- [x] Freeze the exact layout: primary and backup GPT, a canonical boot FAT
+  containing exactly `boot.img`, `boot.sig`, `config.txt`, and
+  `kaiba-media-binding.json`, fixed raw root-data and dm-verity hash-tree
+  partitions, their zero padding, and the complete zero tail.
+- [x] Implement a plan-specialized writer with a fixed source closure,
+  full-prestate verification, explicit GPT invalidation/commit ordering,
+  durability barriers, complete reopened readback, and no target override,
+  force, retry, or fixture switch.
+- [x] Implement a separate read-only verifier that checks the complete media
+  digest, GPT CRCs and semantics, canonical FAT bytes and payloads, partition
+  padding and tail, signed-release and signature lineage, and direct
+  `veritysetup verify` over independently resolved partitions.
+- [x] Define canonical stage, independent-verification, manual cold-power, and
+  final staging receipts bound to the transaction, target facts, signed-release
+  manifest, layout, complete-media digest, attachment identities, and prior
+  receipt digests. Manual power evidence remains explicitly unauthenticated and
+  the final receipt makes no hardware or enforcement claim.
 - [ ] Write the approved `boot.img`, `boot.sig`, root-data image, and dm-verity
-  hash image to their fixed destinations.
+  hash image, canonical FAT, and GPT to their fixed destinations on the reviewed
+  sacrificial device.
 - [ ] Remove power, cold-read the staged bytes through an independent path, and
   compare their digests with the approved manifest.
 - [ ] Flush all writes, remove power, re-enumerate the same by-id device, verify
   the GPT and boot-FAT allowlist, read the exact approved byte lengths, recompute
   every SHA-256 digest, and run `veritysetup verify` over the staged root-data
   and hash-tree pair.
-- [ ] Produce a canonical staging receipt bound to the transaction, target,
-  by-id device facts, final signed-release manifest, partition layout, byte
-  lengths, digests, verity result, and cold-readback observation. Approval of
-  the irreversible plan occurs only after this receipt exists.
+- [ ] Produce and independently review the physical instance of the canonical
+  receipt chain, including the manual cold-power observation. The software
+  receipt definitions and finalizer alone do not satisfy this gate.
 - [ ] Boot the same capsule on an unfused board with `boot_ramdisk=1` and prove
   that the kernel, initramfs, dm-verity mapping, and pre-enrollment runtime work.
 - [ ] Confirm that the pre-enrollment runtime contains public trust and policy

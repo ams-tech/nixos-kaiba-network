@@ -119,7 +119,14 @@ let
     ]) "the RPIBOOT bundle set must bind the selected verified component set";
     pkgs.runCommand name
       {
-        nativeBuildInputs = [ pkgs.findutils ];
+        # Keep raw store paths (not only derivation outputs) in the closure.
+        # Interpolating an escaped `toString` below can otherwise discard the
+        # string context of a source-tree file such as the device profile.
+        deviceProfileInput = deviceProfile;
+        nativeBuildInputs = [
+          pkgs.diffutils
+          pkgs.findutils
+        ];
         passthru.kaibaVerifiedSignedRelease = {
           inherit
             deviceProfile
@@ -174,7 +181,7 @@ let
           --owned-recovery ${lib.escapeShellArg (toString verifiedOwnedRecovery)} \
           --owned-replay-plan ${lib.escapeShellArg (toString recoveryProvenance.signingPlan)} \
           --owned-replay-signed ${lib.escapeShellArg (toString recoveryProvenance.signedOutput)} \
-          --device-profile ${lib.escapeShellArg (toString deviceProfile)} \
+          --device-profile "$deviceProfileInput" \
           --platform-adapter ${lib.escapeShellArg (toString platformAdapter)} \
           --root-integrity ${lib.escapeShellArg (toString rootIntegrity)} \
           --fresh-commit-bundle ${lib.escapeShellArg "${toString verifiedRPIBootBundles}/fresh-commit"} \
@@ -185,7 +192,22 @@ let
           --root-integrity-test-bundle ${lib.escapeShellArg "${toString verifiedRPIBootBundles}/root-integrity-test"} \
           --root-data-image ${lib.escapeShellArg "${toString unsignedArtifacts}/nvme/root-data.img"} \
           --root-hash-tree-image ${lib.escapeShellArg "${toString unsignedArtifacts}/nvme/root-hash.img"} \
-          --output "$out"
+          --output "$TMPDIR/release"
+
+        # The multi-user Nix store itself is a sticky group-writable build
+        # boundary, which the operational publisher intentionally rejects.
+        # Publish atomically inside the private build directory first, then
+        # hand the completed immutable tree to Nix as the derivation output.
+        # The published directories are deliberately read-only, so copy the
+        # frozen tree instead of relying on a cross-filesystem rename that
+        # would need to remove its source entries.
+        cp --archive "$TMPDIR/release" "$out"
+        diff --recursive --no-dereference "$TMPDIR/release" "$out"
+        find "$TMPDIR/release" -printf '%P\t%y\t%m\n' | sort \
+          > "$TMPDIR/source-tree-modes"
+        find "$out" -printf '%P\t%y\t%m\n' | sort \
+          > "$TMPDIR/output-tree-modes"
+        cmp "$TMPDIR/source-tree-modes" "$TMPDIR/output-tree-modes"
 
         test "$(find "$out" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)" = \
           $'manifests\nobjects\npublication-digest\npublication.json\nrecords\ntree-records\ntrees'

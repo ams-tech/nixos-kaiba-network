@@ -147,6 +147,37 @@ func TestUnsignedArtifactSetRejectsDuplicateNullAndBadDigest(t *testing.T) {
 	}
 }
 
+func TestUnsignedArtifactSetRequiresDistinctCanonicalPARTUUIDSelectors(t *testing.T) {
+	valid, err := parseUnsignedArtifactSet(validUnsignedArtifactSet(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*unsignedArtifactSet)
+	}{
+		{"kernel enumeration path", func(value *unsignedArtifactSet) { value.Verity.DataDevice = "/dev/nvme0n1p2" }},
+		{"by-partuuid path", func(value *unsignedArtifactSet) {
+			value.Verity.DataDevice = "/dev/disk/by-partuuid/bdd5be20-f7ea-56e7-ae90-4465ae950596"
+		}},
+		{"uppercase guid", func(value *unsignedArtifactSet) {
+			value.Verity.DataDevice = "PARTUUID=BDD5BE20-F7EA-56E7-AE90-4465AE950596"
+		}},
+		{"zero guid", func(value *unsignedArtifactSet) {
+			value.Verity.DataDevice = "PARTUUID=00000000-0000-0000-0000-000000000000"
+		}},
+		{"same partition", func(value *unsignedArtifactSet) { value.Verity.HashDevice = value.Verity.DataDevice }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := valid
+			test.mutate(&candidate)
+			if err := candidate.validate(); err == nil {
+				t.Fatal("unsigned artifact set accepted an unsafe partition selector")
+			}
+		})
+	}
+}
+
 func TestCompareExactDirectoriesBindsModesAndContent(t *testing.T) {
 	root := t.TempDir()
 	left, right := filepath.Join(root, "left"), filepath.Join(root, "right")
@@ -294,7 +325,7 @@ func validUnsignedArtifactSet(t *testing.T) []byte {
 			RootData:     unsignedArtifact{Path: "nvme/root-data.img", Digest: bundle.Sum([]byte("root"))},
 			RootHashTree: unsignedArtifact{Path: "nvme/root-hash.img", Digest: bundle.Sum([]byte("hash"))},
 		},
-		Verity:              unsignedVerity{Algorithm: "sha256", DataBlockSize: 4096, HashBlockSize: 4096, UUID: "12345678-1234-1234-1234-123456789abc", DataDevice: "/dev/nvme0n1p2", HashDevice: "/dev/nvme0n1p3", Mapper: "/dev/mapper/root"},
+		Verity:              unsignedVerity{Algorithm: "sha256", DataBlockSize: 4096, HashBlockSize: 4096, UUID: "12345678-1234-1234-1234-123456789abc", DataDevice: "PARTUUID=bdd5be20-f7ea-56e7-ae90-4465ae950596", HashDevice: "PARTUUID=62616022-71fb-5036-8cc4-b7949cc6e52c", Mapper: "/dev/mapper/root"},
 		RootIntegrityDigest: bundle.Sum([]byte("root hash")), SigningStatus: "unsigned",
 	}
 	without, err := json.Marshal(value)

@@ -1,0 +1,354 @@
+//go:build linux
+
+// Package mediadevice contains the narrow Linux adapter shared by the
+// production media stager and its separately built read-only verifier. It
+// resolves an approved by-id path through the existing system inventory and
+// pins one exact block-device attachment before either caller may use it.
+package mediadevice
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"unsafe"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mediacontract"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mediainventory"
+)
+
+const (
+	blockGetSize64       = uintptr(0x80081272)
+	blockGetDiskSequence = uintptr(0x80081280)
+	defaultBufferBytes   = 1024 * 1024
+	maximumSysfsBytes    = 4096
+)
+
+type Inspector struct {
+	Inventory mediainventory.Inventory
+}
+
+func (inspector Inspector) inventory() mediainventory.Inventory {
+	if inspector.Inventory != nil {
+		return inspector.Inventory
+	}
+	return mediainventory.SystemInventory{}
+}
+
+// InspectApproved proves both the read-only safety inventory and
+// the stronger stable target facts frozen into the signed media plan.
+func (inspector Inspector) InspectApproved(ctx context.Context, plan mediacontract.Plan) (mediainventory.TargetFacts, error) {
+	if err := plan.Validate(); err != nil {
+		return mediainventory.TargetFacts{}, err
+	}
+	inventory := inspector.inventory()
+	facts, err := inventory.Inspect(ctx, plan.Target.ByIDPath, mediainventory.ModeDevice)
+	if err != nil {
+		return mediainventory.TargetFacts{}, fmt.Errorf("inspect approved device: %w", err)
+	}
+	usage, err := inventory.Usage(ctx, facts, mediainventory.ModeDevice)
+	if err != nil {
+		return mediainventory.TargetFacts{}, fmt.Errorf("inspect approved device usage: %w", err)
+	}
+	if err := validateFacts(plan, facts, usage); err != nil {
+		return mediainventory.TargetFacts{}, err
+	}
+	if err := validateSysfsFacts(plan.Target, facts.SysfsPath); err != nil {
+		return mediainventory.TargetFacts{}, err
+	}
+	if err := validateInactiveBlockGraph(facts.SysfsPath); err != nil {
+		return mediainventory.TargetFacts{}, err
+	}
+	return facts, nil
+}
+
+func validateFacts(plan mediacontract.Plan, facts mediainventory.TargetFacts, usage mediainventory.TargetUsage) error {
+	if facts.RequestedPath != plan.Target.ByIDPath || facts.Identity != filepath.Base(plan.Target.ByIDPath) {
+		return errors.New("inventory target path or by-id identity differs from the approved plan")
+	}
+	if facts.ResolvedPath == "" || !filepath.IsAbs(facts.ResolvedPath) || filepath.Clean(facts.ResolvedPath) != facts.ResolvedPath || (facts.ResolvedPath != "/dev" && !strings.HasPrefix(facts.ResolvedPath, "/dev/")) {
+		return errors.New("inventory resolved target outside the clean /dev namespace")
+	}
+	if facts.Kind != mediainventory.TargetBlockDevice || !facts.WholeDevice || facts.DeviceNumber == 0 || facts.DiskSequence == 0 || facts.BootID == "" || facts.SysfsPath == "" {
+		return errors.New("inventory target is not one identified whole block-device attachment")
+	}
+	if facts.SizeBytes != plan.Target.SizeBytes {
+		return fmt.Errorf("inventory target size is %d, expected %d", facts.SizeBytes, plan.Target.SizeBytes)
+	}
+	if usage.Mounted || usage.System || usage.Root || usage.Swap {
+		return fmt.Errorf("approved target is in use: mounted=%t system=%t root=%t swap=%t", usage.Mounted, usage.System, usage.Root, usage.Swap)
+	}
+	return nil
+}
+
+func validateSysfsFacts(target mediacontract.TargetBinding, sysfsPath string) error {
+	if sysfsPath == "" || !filepath.IsAbs(sysfsPath) || filepath.Clean(sysfsPath) != sysfsPath || !strings.HasPrefix(sysfsPath, "/sys/") {
+		return errors.New("target sysfs identity is not a clean absolute path below /sys")
+	}
+	model, err := readSysfsValue(filepath.Join(sysfsPath, "device", "model"))
+	if err != nil {
+		return fmt.Errorf("read target model: %w", err)
+	}
+	serial, err := readSysfsValue(filepath.Join(sysfsPath, "device", "serial"))
+	if err != nil {
+		return fmt.Errorf("read target serial: %w", err)
+	}
+	wwid, err := readSysfsValue(filepath.Join(sysfsPath, "wwid"))
+	if err != nil {
+		return fmt.Errorf("read target WWID: %w", err)
+	}
+	logical, err := readSysfsUint(filepath.Join(sysfsPath, "queue", "logical_block_size"))
+	if err != nil {
+		return fmt.Errorf("read target logical sector size: %w", err)
+	}
+	physical, err := readSysfsUint(filepath.Join(sysfsPath, "queue", "physical_block_size"))
+	if err != nil {
+		return fmt.Errorf("read target physical sector size: %w", err)
+	}
+	if model != target.Model || serial != target.Serial || wwid != target.WWID || logical != target.LogicalSectorSizeBytes || physical != target.PhysicalSectorSizeBytes {
+		return errors.New("live model, serial, WWID, or sector sizes differ from the approved target")
+	}
+	return nil
+}
+
+func readSysfsValue(path string) (string, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return "", errors.New("construct sysfs attribute handle")
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maximumSysfsBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > maximumSysfsBytes {
+		return "", errors.New("sysfs attribute exceeds fixed bound")
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" || strings.ContainsRune(value, '\x00') {
+		return "", errors.New("sysfs attribute is empty or contains NUL")
+	}
+	return value, nil
+}
+
+func readSysfsUint(path string) (uint64, error) {
+	value, err := readSysfsValue(path)
+	if err != nil {
+		return 0, err
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || parsed == 0 {
+		return 0, errors.New("sysfs attribute is not one positive canonical integer")
+	}
+	if strconv.FormatUint(parsed, 10) != value {
+		return 0, errors.New("sysfs integer is not canonical decimal")
+	}
+	return parsed, nil
+}
+
+// validateInactiveBlockGraph rejects device-mapper, MD, crypto, loop, or
+// other live consumers which may not currently appear in mountinfo or swaps.
+// The whole target and every extant partition must have no holders, and the
+// approved whole device may not itself be a composite over slave devices.
+func validateInactiveBlockGraph(sysfsPath string) error {
+	for _, relationship := range []string{"holders", "slaves"} {
+		entries, err := readDirectoryNoFollow(filepath.Join(sysfsPath, relationship))
+		if err != nil {
+			return fmt.Errorf("inspect target %s graph: %w", relationship, err)
+		}
+		if len(entries) != 0 {
+			return fmt.Errorf("target has active sysfs %s dependencies", relationship)
+		}
+	}
+	entries, err := readDirectoryNoFollow(sysfsPath)
+	if err != nil {
+		return fmt.Errorf("inspect target sysfs children: %w", err)
+	}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("inspect target sysfs child %q: %w", entry.Name(), err)
+		}
+		if !info.IsDir() {
+			continue
+		}
+		child := filepath.Join(sysfsPath, entry.Name())
+		partition, err := os.Lstat(filepath.Join(child, "partition"))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect target partition %q: %w", entry.Name(), err)
+		}
+		if !partition.Mode().IsRegular() {
+			return fmt.Errorf("target partition marker %q is not a regular sysfs attribute", entry.Name())
+		}
+		holders, err := readDirectoryNoFollow(filepath.Join(child, "holders"))
+		if err != nil {
+			return fmt.Errorf("inspect target partition %q holders: %w", entry.Name(), err)
+		}
+		if len(holders) != 0 {
+			return fmt.Errorf("target partition %q has active sysfs holders", entry.Name())
+		}
+	}
+	return nil
+}
+
+func readDirectoryNoFollow(path string) ([]os.DirEntry, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	directory := os.NewFile(uintptr(fd), path)
+	if directory == nil {
+		_ = syscall.Close(fd)
+		return nil, errors.New("construct sysfs directory handle")
+	}
+	entries, readErr := directory.ReadDir(-1)
+	closeErr := directory.Close()
+	return entries, errors.Join(readErr, closeErr)
+}
+
+// SameAttachment requires the entire inventory record, including Linux's
+// boot-local disk sequence, to remain fixed across a single staging phase.
+func SameAttachment(initial, current mediainventory.TargetFacts) error {
+	if current != initial {
+		return errors.New("block-device attachment identity changed during the operation")
+	}
+	return nil
+}
+
+func (inspector Inspector) ReinspectSame(ctx context.Context, plan mediacontract.Plan, initial mediainventory.TargetFacts) (mediainventory.TargetFacts, error) {
+	current, err := inspector.InspectApproved(ctx, plan)
+	if err != nil {
+		return mediainventory.TargetFacts{}, err
+	}
+	if err := SameAttachment(initial, current); err != nil {
+		return mediainventory.TargetFacts{}, err
+	}
+	return current, nil
+}
+
+func OpenLocked(facts mediainventory.TargetFacts, writable bool) (*os.File, error) {
+	flags := syscall.O_RDONLY | syscall.O_CLOEXEC | syscall.O_NOFOLLOW | syscall.O_EXCL
+	if writable {
+		flags = syscall.O_RDWR | syscall.O_CLOEXEC | syscall.O_NOFOLLOW | syscall.O_EXCL
+	}
+	fd, err := syscall.Open(facts.ResolvedPath, flags, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open pinned block device: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), facts.ResolvedPath)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return nil, errors.New("construct pinned block-device handle")
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock pinned block device exclusively: %w", err)
+	}
+	if err := ValidateOpened(file, facts); err != nil {
+		_ = CloseLocked(file)
+		return nil, err
+	}
+	return file, nil
+}
+
+func CloseLocked(file *os.File) error {
+	if file == nil {
+		return nil
+	}
+	unlockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	closeErr := file.Close()
+	return errors.Join(unlockErr, closeErr)
+}
+
+func ValidateOpened(file *os.File, facts mediainventory.TargetFacts) error {
+	if file == nil {
+		return errors.New("block-device handle is nil")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat pinned block device: %w", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice != 0 || uint64(stat.Rdev) != facts.DeviceNumber {
+		return errors.New("opened target is not the inventoried block device")
+	}
+	resolved, err := filepath.EvalSymlinks(facts.RequestedPath)
+	if err != nil || resolved != facts.ResolvedPath {
+		return errors.New("approved by-id alias no longer resolves to the pinned device")
+	}
+	alias, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("stat re-resolved by-id target: %w", err)
+	}
+	aliasStat, ok := alias.Sys().(*syscall.Stat_t)
+	if !ok || alias.Mode()&os.ModeDevice == 0 || alias.Mode()&os.ModeCharDevice != 0 || aliasStat.Rdev != stat.Rdev {
+		return errors.New("approved by-id alias no longer identifies the pinned device number")
+	}
+	size, err := ioctlUint64(file, blockGetSize64)
+	if err != nil {
+		return fmt.Errorf("read pinned block-device size: %w", err)
+	}
+	sequence, err := ioctlUint64(file, blockGetDiskSequence)
+	if err != nil {
+		return fmt.Errorf("read pinned block-device disk sequence: %w", err)
+	}
+	if size != facts.SizeBytes || sequence == 0 || sequence != facts.DiskSequence {
+		return errors.New("pinned block-device capacity or attachment sequence changed")
+	}
+	return nil
+}
+
+func ioctlUint64(file *os.File, operation uintptr) (uint64, error) {
+	var value uint64
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), operation, uintptr(unsafe.Pointer(&value)))
+	if errno != 0 {
+		return 0, errno
+	}
+	return value, nil
+}
+
+func HashRange(ctx context.Context, reader io.ReaderAt, offset, size uint64) (mediacontract.Digest, error) {
+	if reader == nil || offset > uint64(^uint64(0)>>1) || size > uint64(^uint64(0)>>1) || offset+size < offset || offset+size > uint64(^uint64(0)>>1) {
+		return "", errors.New("hash range exceeds supported file offsets")
+	}
+	hash := sha256.New()
+	buffer := make([]byte, defaultBufferBytes)
+	position, remaining := offset, size
+	for remaining > 0 {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		chunk := uint64(len(buffer))
+		if chunk > remaining {
+			chunk = remaining
+		}
+		n, err := reader.ReadAt(buffer[:int(chunk)], int64(position))
+		if n > 0 {
+			_, _ = hash.Write(buffer[:n])
+			position += uint64(n)
+			remaining -= uint64(n)
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		if n == 0 || (errors.Is(err, io.EOF) && remaining != 0) {
+			return "", io.ErrUnexpectedEOF
+		}
+	}
+	return mediacontract.Digest("sha256:" + hex.EncodeToString(hash.Sum(nil))), nil
+}

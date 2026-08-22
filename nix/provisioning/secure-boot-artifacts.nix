@@ -7,13 +7,13 @@
   bootCommandLinePath ? "cmdline.txt",
   bootImageSizeMiB ? 96,
   bootOrderPolicy ? "nvme-only",
-  dataDevice ? "/dev/nvme0n1p2",
   expectedCustomerKeyHash,
   firmwareAllowlist,
   firmwareTree,
-  hashDevice ? "/dev/nvme0n1p3",
   name ? "kaiba-rpi5-secure-boot-unsigned-artifacts",
   rootImage,
+  rootDataPartitionGUID,
+  rootHashPartitionGUID,
   sourceRevision,
 }:
 
@@ -24,14 +24,22 @@ assert lib.assertMsg (
   builtins.match "[0-9a-f]{64}" expectedCustomerKeyHash != null
 ) "expectedCustomerKeyHash must be one lowercase SHA-256 digest without a prefix";
 assert lib.assertMsg (
-  builtins.match "/dev/nvme[0-9]+n[0-9]+p[0-9]+" dataDevice != null
-) "dataDevice must identify one fixed NVMe partition";
+  builtins.isString rootDataPartitionGUID
+  &&
+    builtins.match "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" rootDataPartitionGUID
+    != null
+  && rootDataPartitionGUID != "00000000-0000-0000-0000-000000000000"
+) "rootDataPartitionGUID must be one canonical non-zero lowercase GPT partition GUID";
 assert lib.assertMsg (
-  builtins.match "/dev/nvme[0-9]+n[0-9]+p[0-9]+" hashDevice != null
-) "hashDevice must identify one fixed NVMe partition";
+  builtins.isString rootHashPartitionGUID
+  &&
+    builtins.match "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" rootHashPartitionGUID
+    != null
+  && rootHashPartitionGUID != "00000000-0000-0000-0000-000000000000"
+) "rootHashPartitionGUID must be one canonical non-zero lowercase GPT partition GUID";
 assert lib.assertMsg (
-  dataDevice != hashDevice
-) "dataDevice and hashDevice must be distinct partitions";
+  rootDataPartitionGUID != rootHashPartitionGUID
+) "rootDataPartitionGUID and rootHashPartitionGUID must be distinct";
 assert lib.assertMsg (
   builtins.isList firmwareAllowlist
   && firmwareAllowlist != [ ]
@@ -66,6 +74,12 @@ assert lib.assertMsg (
 ) "sourceRevision must be one canonical lowercase 40- or 64-hex Git revision";
 
 let
+  # These selectors are chosen before the boot image and signed-release
+  # digests exist.  SB-04 must copy the exact GUID values into GPT instead of
+  # deriving them from a downstream signed-release digest (which would create
+  # a digest cycle).
+  dataDevice = "PARTUUID=${rootDataPartitionGUID}";
+  hashDevice = "PARTUUID=${rootHashPartitionGUID}";
   generatedBootFiles = [ "kaiba-root-integrity.json" ];
   finalBootAllowlist = lib.sort builtins.lessThan (
     lib.unique (firmwareAllowlist ++ generatedBootFiles)
@@ -90,6 +104,8 @@ pkgs.runCommand name
         expectedCustomerKeyHash
         firmwareAllowlist
         hashDevice
+        rootDataPartitionGUID
+        rootHashPartitionGUID
         sourceRevision
         ;
       blockDeviceWriteCapable = false;
@@ -302,11 +318,11 @@ pkgs.runCommand name
         root_integrity_digest: $root_hash,
         signing_status: "unsigned"
       }' > "$TMPDIR/manifest-without-bundle-digest.json"
-    jq --compact-output --sort-keys . \
-      "$TMPDIR/manifest-without-bundle-digest.json" > "$TMPDIR/canonical-manifest"
+    canonical_manifest="$(jq --compact-output --sort-keys . \
+      "$TMPDIR/manifest-without-bundle-digest.json")"
     bundle_digest="$({
       printf '%s\0' 'kaiba.rpi5.unsigned-artifacts.v1'
-      cat "$TMPDIR/canonical-manifest"
+      printf '%s' "$canonical_manifest"
     } | sha256sum | cut -d ' ' -f 1)"
     jq --arg bundle_digest "sha256:$bundle_digest" \
       '. + {bundle_digest: $bundle_digest}' \

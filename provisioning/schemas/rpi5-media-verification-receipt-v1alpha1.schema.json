@@ -1,0 +1,217 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-media-verification-receipt-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 media verification receipt v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "verification_mode",
+    "transaction_id",
+    "plan_digest",
+    "stage_receipt_digest",
+    "signed_release_manifest_digest",
+    "layout_digest",
+    "target",
+    "attachment_boot_id",
+    "attachment_sequence",
+    "full_media_digest",
+    "regions",
+    "gpt_verified",
+    "fat_verified",
+    "partition_digests_verified",
+    "dm_verity_verified",
+    "boot_signature_verified",
+    "release_lineage_verified",
+    "reopened_target",
+    "cold_power_cycle_observed",
+    "one_time_settings_changed",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-media-verification-receipt/v1alpha1"
+    },
+    "status": { "const": "full_media_verified" },
+    "verification_mode": {
+      "enum": ["independent_read_only_device", "regular_file_fixture"]
+    },
+    "transaction_id": { "$ref": "#/definitions/identifier" },
+    "plan_digest": { "$ref": "#/definitions/digest" },
+    "stage_receipt_digest": { "$ref": "#/definitions/digest" },
+    "signed_release_manifest_digest": { "$ref": "#/definitions/digest" },
+    "layout_digest": { "$ref": "#/definitions/digest" },
+    "target": { "$ref": "#/definitions/target_binding" },
+    "attachment_boot_id": {
+      "type": "string",
+      "maxLength": 36
+    },
+    "attachment_sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "full_media_digest": { "$ref": "#/definitions/digest" },
+    "regions": { "$ref": "#/definitions/verified_regions" },
+    "gpt_verified": { "const": true },
+    "fat_verified": { "const": true },
+    "partition_digests_verified": { "const": true },
+    "dm_verity_verified": { "const": true },
+    "boot_signature_verified": { "const": true },
+    "release_lineage_verified": { "const": true },
+    "reopened_target": { "const": true },
+    "cold_power_cycle_observed": { "const": false },
+    "one_time_settings_changed": { "const": false },
+    "receipt_digest": { "$ref": "#/definitions/digest" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verification_mode": {
+            "const": "independent_read_only_device"
+          }
+        },
+        "required": ["verification_mode"]
+      },
+      "then": {
+        "properties": {
+          "attachment_boot_id": { "$ref": "#/definitions/guid" },
+          "attachment_sequence": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 18446744073709551615
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "attachment_boot_id": { "const": "" },
+          "attachment_sequence": { "const": 0 }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "guid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": { "const": "00000000-0000-0000-0000-000000000000" }
+    },
+    "region_verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "digest", "verified"],
+      "properties": {
+        "role": {
+          "enum": [
+            "primary-gpt",
+            "boot-filesystem",
+            "root-data",
+            "root-hash",
+            "tail-zero",
+            "backup-gpt"
+          ]
+        },
+        "digest": { "$ref": "#/definitions/digest" },
+        "verified": { "const": true }
+      }
+    },
+    "verified_regions": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": [
+        {
+          "allOf": [
+            { "$ref": "#/definitions/region_verification" },
+            { "properties": { "role": { "const": "primary-gpt" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/definitions/region_verification" },
+            { "properties": { "role": { "const": "boot-filesystem" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/definitions/region_verification" },
+            { "properties": { "role": { "const": "root-data" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/definitions/region_verification" },
+            { "properties": { "role": { "const": "root-hash" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/definitions/region_verification" },
+            { "properties": { "role": { "const": "tail-zero" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/definitions/region_verification" },
+            { "properties": { "role": { "const": "backup-gpt" } } }
+          ]
+        }
+      ],
+      "additionalItems": false
+    },
+    "target_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "by_id_path",
+        "model",
+        "serial",
+        "wwid",
+        "size_bytes",
+        "logical_sector_size_bytes",
+        "physical_sector_size_bytes"
+      ],
+      "properties": {
+        "by_id_path": { "$ref": "#/definitions/by_id_path" },
+        "model": { "$ref": "#/definitions/printable_255" },
+        "serial": { "$ref": "#/definitions/printable_255" },
+        "wwid": { "$ref": "#/definitions/printable_255" },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 8388608,
+          "maximum": 9223372036854775807,
+          "multipleOf": 512
+        },
+        "logical_sector_size_bytes": { "const": 512 },
+        "physical_sector_size_bytes": {
+          "enum": [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
+        }
+      }
+    },
+    "by_id_path": {
+      "type": "string",
+      "pattern": "^/dev/disk/by-id/[^/ \\t\\r\\n]+$",
+      "not": {
+        "anyOf": [
+          { "enum": ["/dev/disk/by-id/.", "/dev/disk/by-id/.."] },
+          { "pattern": "-part[0-9]+$" }
+        ]
+      }
+    },
+    "printable_255": {
+      "type": "string",
+      "pattern": "^(?:[!-~]|[!-~][ -~]{0,253}[!-~])$"
+    }
+  }
+}

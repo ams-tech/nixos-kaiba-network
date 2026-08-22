@@ -1,0 +1,581 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-device-media-layout-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 device media layout v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "sector_size_bytes",
+    "alignment_bytes",
+    "disk_guid",
+    "first_usable_lba",
+    "last_usable_lba",
+    "payloads",
+    "sources",
+    "regions",
+    "partitions",
+    "fat",
+    "verity",
+    "layout_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-device-media-layout/v1alpha1"
+    },
+    "sector_size_bytes": { "const": 512 },
+    "alignment_bytes": { "const": 1048576 },
+    "disk_guid": { "$ref": "#/definitions/guid" },
+    "first_usable_lba": { "const": 34 },
+    "last_usable_lba": {
+      "type": "integer",
+      "minimum": 34,
+      "maximum": 18446744073709551615
+    },
+    "payloads": { "$ref": "#/definitions/payload_bindings" },
+    "sources": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": [
+        {
+          "allOf": [
+            { "$ref": "#/definitions/source_binding" },
+            { "properties": { "role": { "const": "primary-gpt" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/definitions/source_binding" },
+            { "properties": { "role": { "const": "boot-filesystem" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/definitions/source_binding" },
+            { "properties": { "role": { "const": "root-data" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/definitions/source_binding" },
+            { "properties": { "role": { "const": "root-hash" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/definitions/source_binding" },
+            { "properties": { "role": { "const": "backup-gpt" } } }
+          ]
+        }
+      ],
+      "additionalItems": false
+    },
+    "regions": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": [
+        { "$ref": "#/definitions/region_primary_gpt" },
+        { "$ref": "#/definitions/region_boot_filesystem" },
+        { "$ref": "#/definitions/region_root_data" },
+        { "$ref": "#/definitions/region_root_hash" },
+        { "$ref": "#/definitions/region_tail_zero" },
+        { "$ref": "#/definitions/region_backup_gpt" }
+      ],
+      "additionalItems": false
+    },
+    "partitions": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": [
+        { "$ref": "#/definitions/partition_boot" },
+        { "$ref": "#/definitions/partition_root_data" },
+        { "$ref": "#/definitions/partition_root_hash" }
+      ],
+      "additionalItems": false
+    },
+    "fat": { "$ref": "#/definitions/fat_contract" },
+    "verity": { "$ref": "#/definitions/verity_contract" },
+    "layout_digest": { "$ref": "#/definitions/digest" }
+  },
+  "definitions": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "guid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": { "const": "00000000-0000-0000-0000-000000000000" }
+    },
+    "positive_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "artifact_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "size_bytes"],
+      "properties": {
+        "digest": { "$ref": "#/definitions/digest" },
+        "size_bytes": { "$ref": "#/definitions/positive_size" }
+      }
+    },
+    "payload_bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "boot_image",
+        "boot_signature",
+        "root_data",
+        "root_hash_tree",
+        "root_integrity",
+        "media_binding",
+        "outer_boot_fat",
+        "primary_gpt",
+        "backup_gpt"
+      ],
+      "properties": {
+        "boot_image": { "$ref": "#/definitions/artifact_binding" },
+        "boot_signature": { "$ref": "#/definitions/artifact_binding" },
+        "root_data": { "$ref": "#/definitions/artifact_binding" },
+        "root_hash_tree": { "$ref": "#/definitions/artifact_binding" },
+        "root_integrity": { "$ref": "#/definitions/artifact_binding" },
+        "media_binding": {
+          "allOf": [
+            { "$ref": "#/definitions/artifact_binding" },
+            { "properties": { "size_bytes": { "maximum": 65536 } } }
+          ]
+        },
+        "outer_boot_fat": { "$ref": "#/definitions/artifact_binding" },
+        "primary_gpt": {
+          "allOf": [
+            { "$ref": "#/definitions/artifact_binding" },
+            { "properties": { "size_bytes": { "const": 1048576 } } }
+          ]
+        },
+        "backup_gpt": {
+          "allOf": [
+            { "$ref": "#/definitions/artifact_binding" },
+            { "properties": { "size_bytes": { "const": 1048576 } } }
+          ]
+        }
+      }
+    },
+    "source_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "digest", "size_bytes"],
+      "properties": {
+        "role": {
+          "enum": [
+            "primary-gpt",
+            "boot-filesystem",
+            "root-data",
+            "root-hash",
+            "backup-gpt"
+          ]
+        },
+        "digest": { "$ref": "#/definitions/digest" },
+        "size_bytes": { "$ref": "#/definitions/positive_size" }
+      }
+    },
+    "media_region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "content_kind",
+        "source_role",
+        "offset_bytes",
+        "size_bytes",
+        "source_size_bytes",
+        "source_digest",
+        "content_digest"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "primary-gpt",
+            "boot-filesystem",
+            "root-data",
+            "root-hash",
+            "tail-zero",
+            "backup-gpt"
+          ]
+        },
+        "content_kind": {
+          "enum": ["exact-file", "file-zero-padded", "zero"]
+        },
+        "source_role": {
+          "enum": [
+            "primary-gpt",
+            "boot-filesystem",
+            "root-data",
+            "root-hash",
+            "zero",
+            "backup-gpt"
+          ]
+        },
+        "offset_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807,
+          "multipleOf": 512
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807,
+          "multipleOf": 512
+        },
+        "source_size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "source_digest": { "$ref": "#/definitions/digest" },
+        "content_digest": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "region_primary_gpt": {
+      "allOf": [
+        { "$ref": "#/definitions/media_region" },
+        {
+          "properties": {
+            "role": { "const": "primary-gpt" },
+            "content_kind": { "const": "exact-file" },
+            "source_role": { "const": "primary-gpt" },
+            "offset_bytes": { "const": 0 },
+            "size_bytes": { "const": 1048576 },
+            "source_size_bytes": { "const": 1048576 }
+          }
+        }
+      ]
+    },
+    "region_boot_filesystem": {
+      "allOf": [
+        { "$ref": "#/definitions/media_region" },
+        {
+          "properties": {
+            "role": { "const": "boot-filesystem" },
+            "content_kind": { "const": "exact-file" },
+            "source_role": { "const": "boot-filesystem" },
+            "offset_bytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 9223372036854775807,
+              "multipleOf": 1048576
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 9223372036854775807,
+              "multipleOf": 1048576
+            },
+            "source_size_bytes": { "$ref": "#/definitions/positive_size" }
+          }
+        }
+      ]
+    },
+    "region_root_data": {
+      "allOf": [
+        { "$ref": "#/definitions/media_region" },
+        {
+          "properties": {
+            "role": { "const": "root-data" },
+            "content_kind": { "const": "file-zero-padded" },
+            "source_role": { "const": "root-data" },
+            "offset_bytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 9223372036854775807,
+              "multipleOf": 1048576
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 9223372036854775807,
+              "multipleOf": 1048576
+            },
+            "source_size_bytes": {
+              "type": "integer",
+              "minimum": 4096,
+              "maximum": 9223372036854775807,
+              "multipleOf": 4096
+            }
+          }
+        }
+      ]
+    },
+    "region_root_hash": {
+      "allOf": [
+        { "$ref": "#/definitions/media_region" },
+        {
+          "properties": {
+            "role": { "const": "root-hash" },
+            "content_kind": { "const": "file-zero-padded" },
+            "source_role": { "const": "root-hash" },
+            "offset_bytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 9223372036854775807,
+              "multipleOf": 1048576
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 9223372036854775807,
+              "multipleOf": 1048576
+            },
+            "source_size_bytes": {
+              "type": "integer",
+              "minimum": 4096,
+              "maximum": 9223372036854775807,
+              "multipleOf": 4096
+            }
+          }
+        }
+      ]
+    },
+    "region_tail_zero": {
+      "allOf": [
+        { "$ref": "#/definitions/media_region" },
+        {
+          "properties": {
+            "role": { "const": "tail-zero" },
+            "content_kind": { "const": "zero" },
+            "source_role": { "const": "zero" },
+            "source_size_bytes": { "const": 0 },
+            "source_digest": {
+              "const": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          }
+        }
+      ]
+    },
+    "region_backup_gpt": {
+      "allOf": [
+        { "$ref": "#/definitions/media_region" },
+        {
+          "properties": {
+            "role": { "const": "backup-gpt" },
+            "content_kind": { "const": "exact-file" },
+            "source_role": { "const": "backup-gpt" },
+            "size_bytes": { "const": 1048576 },
+            "source_size_bytes": { "const": 1048576 }
+          }
+        }
+      ]
+    },
+    "gpt_partition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "role",
+        "name",
+        "type_guid",
+        "unique_guid",
+        "attributes",
+        "offset_bytes",
+        "size_bytes",
+        "used_size_bytes",
+        "used_digest",
+        "partition_digest"
+      ],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "role": {
+          "enum": ["boot-filesystem", "root-data", "root-hash"]
+        },
+        "name": {
+          "enum": ["kaiba-boot", "kaiba-root", "kaiba-root-verity"]
+        },
+        "type_guid": { "$ref": "#/definitions/guid" },
+        "unique_guid": { "$ref": "#/definitions/guid" },
+        "attributes": { "const": 0 },
+        "offset_bytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 9223372036854775807,
+          "multipleOf": 1048576
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 9223372036854775807,
+          "multipleOf": 1048576
+        },
+        "used_size_bytes": { "$ref": "#/definitions/positive_size" },
+        "used_digest": { "$ref": "#/definitions/digest" },
+        "partition_digest": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "partition_boot": {
+      "allOf": [
+        { "$ref": "#/definitions/gpt_partition" },
+        {
+          "properties": {
+            "number": { "const": 1 },
+            "role": { "const": "boot-filesystem" },
+            "name": { "const": "kaiba-boot" },
+            "type_guid": {
+              "const": "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+            }
+          }
+        }
+      ]
+    },
+    "partition_root_data": {
+      "allOf": [
+        { "$ref": "#/definitions/gpt_partition" },
+        {
+          "properties": {
+            "number": { "const": 2 },
+            "role": { "const": "root-data" },
+            "name": { "const": "kaiba-root" },
+            "type_guid": {
+              "const": "b921b045-1df0-41c3-af44-4c6f280d3fae"
+            },
+            "used_size_bytes": {
+              "type": "integer",
+              "minimum": 4096,
+              "maximum": 9223372036854775807,
+              "multipleOf": 4096
+            }
+          }
+        }
+      ]
+    },
+    "partition_root_hash": {
+      "allOf": [
+        { "$ref": "#/definitions/gpt_partition" },
+        {
+          "properties": {
+            "number": { "const": 3 },
+            "role": { "const": "root-hash" },
+            "name": { "const": "kaiba-root-verity" },
+            "type_guid": {
+              "const": "df3300ce-d69f-4c92-978c-9bfb0f38d820"
+            },
+            "used_size_bytes": {
+              "type": "integer",
+              "minimum": 4096,
+              "maximum": 9223372036854775807,
+              "multipleOf": 4096
+            }
+          }
+        }
+      ]
+    },
+    "fat_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest", "size_bytes"],
+      "properties": {
+        "path": {
+          "enum": [
+            "boot.img",
+            "boot.sig",
+            "config.txt",
+            "kaiba-media-binding.json"
+          ]
+        },
+        "digest": { "$ref": "#/definitions/digest" },
+        "size_bytes": { "$ref": "#/definitions/positive_size" }
+      }
+    },
+    "fat_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filesystem", "label", "volume_id", "allowlist"],
+      "properties": {
+        "filesystem": { "const": "fat32" },
+        "label": { "const": "KAIBA_BOOT" },
+        "volume_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}$"
+        },
+        "allowlist": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": [
+            {
+              "allOf": [
+                { "$ref": "#/definitions/fat_file" },
+                { "properties": { "path": { "const": "boot.img" } } }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/definitions/fat_file" },
+                { "properties": { "path": { "const": "boot.sig" } } }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/definitions/fat_file" },
+                {
+                  "properties": {
+                    "path": { "const": "config.txt" },
+                    "digest": {
+                      "const": "sha256:c4318a93991476d98c3f14b096578c3e0da836e2a755a86043b535073e8b4f45"
+                    },
+                    "size_bytes": { "const": 15 }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/definitions/fat_file" },
+                {
+                  "properties": {
+                    "path": { "const": "kaiba-media-binding.json" },
+                    "size_bytes": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65536
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "additionalItems": false
+        }
+      }
+    },
+    "verity_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "root_hash",
+        "data_block_size_bytes",
+        "hash_block_size_bytes",
+        "data_partition_guid",
+        "hash_partition_guid",
+        "mapper"
+      ],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "root_hash": { "$ref": "#/definitions/digest" },
+        "data_block_size_bytes": { "const": 4096 },
+        "hash_block_size_bytes": { "const": 4096 },
+        "data_partition_guid": { "$ref": "#/definitions/guid" },
+        "hash_partition_guid": { "$ref": "#/definitions/guid" },
+        "mapper": { "const": "/dev/mapper/root" }
+      }
+    }
+  }
+}

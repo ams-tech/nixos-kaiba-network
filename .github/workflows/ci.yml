@@ -53,6 +53,7 @@ jobs:
             .#checks.x86_64-linux.ci-workflow \
             .#checks.x86_64-linux.module-eval \
             .#checks.x86_64-linux.rpi5-provisioning-image-eval \
+            .#checks.x86_64-linux.rpi5-production-media-staging \
             .#checks.x86_64-linux.rpi5-qualification-ceremony \
             .#checks.x86_64-linux.rpi5-secure-boot-target-eval \
             .#checks.x86_64-linux.unit \
@@ -101,6 +102,7 @@ jobs:
             ./nix/dns#packages.aarch64-linux.kaiba-agent \
             ./nix/dns#packages.aarch64-linux.kaiba-controller \
             ./nix/dns#packages.aarch64-linux.kaiba-publisher \
+            ./nix/provisioning#checks.aarch64-linux.production-media-staging \
             ./nix/provisioning#checks.aarch64-linux.unit \
             ./nix/provisioning#checks.aarch64-linux.rpi5-probe-bundle \
             ./nix/provisioning#checks.aarch64-linux.rpiboot-metadata-stdout \

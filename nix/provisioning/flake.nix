@@ -121,6 +121,10 @@
         mkRpi5MediaStagingFixture =
           { system, ... }@args:
           (packagesFor system).mkRpi5MediaStagingFixture (builtins.removeAttrs args [ "system" ]);
+
+        mkRpi5ProductionMedia =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5ProductionMedia (builtins.removeAttrs args [ "system" ]);
       };
 
       packages = forAllSystems (
@@ -135,7 +139,7 @@
           kaiba-provision-control = built.control;
           kaiba-provision-integrated-rehearsal = built.integratedRehearsal;
           kaiba-provision-lane-guard = built.laneGuard;
-          kaiba-provision-media-stager = built.mediaStager;
+          kaiba-provision-media-contract = built.mediaContractTool;
           kaiba-provision = built.provision;
           kaiba-provision-rehearsal = built.rehearsal;
           kaiba-provision-signer-foundation = built.signerFoundation;
@@ -150,6 +154,7 @@
           kaiba-provision-station-pages = built.stationPages;
           kaiba-provision-unfused-compat = built.unfusedCompat;
           kaiba-provision-unfused-evidence = built.unfusedEvidence;
+          kaiba-provision-unfused-runtime-record = built.unfusedRuntimeRecordTool;
           provisioning-suite = built.suite;
           provisioning-services = built.serviceSuite;
           provisioning-test-result = provisioning.provisioningTestResult;
@@ -180,6 +185,7 @@
           rpiboot-metadata-stdout = provisioning.rpibootMetadataStdoutCompatibility;
           secure-boot-artifacts = provisioning.secureBootArtifactContract;
           media-staging-fixture = provisioning.mediaStagingFixtureContract;
+          production-media-staging = provisioning.productionMediaStagingContract;
           signed-release-manifest = provisioning.signedReleaseManifestContract;
           signed-boot-plan = provisioning.signedBootPlanContract;
           unfused-capsule = provisioning.unfusedCapsuleContract;

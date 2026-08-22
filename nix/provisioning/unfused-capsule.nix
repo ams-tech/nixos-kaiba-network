@@ -249,11 +249,11 @@ let
           and (.bundle_digest | test("^sha256:[0-9a-f]{64}$"))
         ' "$unsigned_manifest" > /dev/null
 
-        jq --compact-output --sort-keys 'del(.bundle_digest)' \
-          "$unsigned_manifest" > "$TMPDIR/canonical-unsigned-manifest"
+        canonical_unsigned_manifest="$(jq --compact-output --sort-keys \
+          'del(.bundle_digest)' "$unsigned_manifest")"
         expected_unsigned_bundle_digest="sha256:$({
           printf '%s\0' 'kaiba.rpi5.unsigned-artifacts.v1'
-          cat "$TMPDIR/canonical-unsigned-manifest"
+          printf '%s' "$canonical_unsigned_manifest"
         } | sha256sum | cut -d ' ' -f 1)"
         test "$(jq -r .bundle_digest "$unsigned_manifest")" = \
           "$expected_unsigned_bundle_digest"

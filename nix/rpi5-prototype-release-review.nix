@@ -233,8 +233,8 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
         and .artifacts.root_data.path == "nvme/root-data.img"
         and .artifacts.root_hash_tree.path == "nvme/root-hash.img"
         and .verity.algorithm == "sha256"
-        and .verity.data_device == "/dev/nvme0n1p2"
-        and .verity.hash_device == "/dev/nvme0n1p3"
+        and .verity.data_device == "PARTUUID=${unsignedContract.rootDataPartitionGUID}"
+        and .verity.hash_device == "PARTUUID=${unsignedContract.rootHashPartitionGUID}"
         and .verity.mapper == "/dev/mapper/root"
       ' "$unsigned/manifest.json" > /dev/null
 
@@ -255,11 +255,11 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
       "$(jq -r .artifacts.root_hash_tree.digest "$unsigned/manifest.json")" \
       "$unsigned/nvme/root-hash.img"
 
-    jq --compact-output --sort-keys 'del(.bundle_digest)' \
-      "$unsigned/manifest.json" > "$TMPDIR/canonical-manifest"
+    canonical_manifest="$(jq --compact-output --sort-keys \
+      'del(.bundle_digest)' "$unsigned/manifest.json")"
     expected_bundle_digest="sha256:$({
       printf '%s\0' 'kaiba.rpi5.unsigned-artifacts.v1'
-      cat "$TMPDIR/canonical-manifest"
+      printf '%s' "$canonical_manifest"
     } | sha256sum | cut -d ' ' -f 1)"
     test "$(jq -r .bundle_digest "$unsigned/manifest.json")" = \
       "$expected_bundle_digest"
@@ -277,10 +277,14 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
     grep -F \
       "root=/dev/mapper/root rootfstype=ext4 rd.systemd.verity=1 roothash=$root_hash" \
       "$TMPDIR/cmdline.txt" > /dev/null
-    grep -F 'systemd.verity_root_data=/dev/nvme0n1p2' \
+    grep -F 'systemd.verity_root_data=PARTUUID=${unsignedContract.rootDataPartitionGUID}' \
       "$TMPDIR/cmdline.txt" > /dev/null
-    grep -F 'systemd.verity_root_hash=/dev/nvme0n1p3' \
+    grep -F 'systemd.verity_root_hash=PARTUUID=${unsignedContract.rootHashPartitionGUID}' \
       "$TMPDIR/cmdline.txt" > /dev/null
+    if grep -F '/dev/nvme' "$TMPDIR/cmdline.txt" > /dev/null; then
+      echo 'signed boot command line contains an enumeration-dependent NVMe path' >&2
+      exit 1
+    fi
     mtype -i "$unsigned/unsigned/boot.img" ::kaiba-root-integrity.json \
       > "$TMPDIR/root-integrity.json"
     jq -e \
@@ -288,8 +292,8 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
       '
         .schema == "provisioning.kaiba.network/rpi5-boot-integrity/v1alpha1"
         and .root_hash == $root_hash
-        and .data_device == "/dev/nvme0n1p2"
-        and .hash_device == "/dev/nvme0n1p3"
+        and .data_device == "PARTUUID=${unsignedContract.rootDataPartitionGUID}"
+        and .hash_device == "PARTUUID=${unsignedContract.rootHashPartitionGUID}"
         and .no_superblock == false
       ' "$TMPDIR/root-integrity.json" > /dev/null
 

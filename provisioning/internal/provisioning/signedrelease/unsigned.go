@@ -17,7 +17,7 @@ var (
 	sourceRevisionPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 	versionPattern        = regexp.MustCompile(`^[ -~]{1,128}$`)
 	uuidPattern           = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	nvmePattern           = regexp.MustCompile(`^/dev/nvme[0-9]+n[0-9]+p[0-9]+$`)
+	partUUIDPattern       = regexp.MustCompile(`^PARTUUID=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 type unsignedArtifact struct {
@@ -153,11 +153,15 @@ func (m unsignedArtifactSet) validate() error {
 	}
 	if m.Verity.Algorithm != "sha256" || m.Verity.DataBlockSize != 4096 || m.Verity.HashBlockSize != 4096 ||
 		m.Verity.Mapper != "/dev/mapper/root" || !uuidPattern.MatchString(m.Verity.UUID) ||
-		!nvmePattern.MatchString(m.Verity.DataDevice) || !nvmePattern.MatchString(m.Verity.HashDevice) ||
+		!canonicalPARTUUID(m.Verity.DataDevice) || !canonicalPARTUUID(m.Verity.HashDevice) ||
 		m.Verity.DataDevice == m.Verity.HashDevice {
 		return errors.New("unsigned dm-verity parameters are not canonical")
 	}
 	return nil
+}
+
+func canonicalPARTUUID(value string) bool {
+	return partUUIDPattern.MatchString(value) && value != "PARTUUID=00000000-0000-0000-0000-000000000000"
 }
 
 type rootIntegrity struct {

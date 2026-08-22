@@ -89,8 +89,8 @@
           expectedCustomerKeyHash,
           bootImageSizeMiB ? 96,
           bootOrderPolicy ? "nvme-only",
-          dataDevice ? "/dev/nvme0n1p2",
-          hashDevice ? "/dev/nvme0n1p3",
+          rootDataPartitionGUID ? "bdd5be20-f7ea-56e7-ae90-4465ae950596",
+          rootHashPartitionGUID ? "62616022-71fb-5036-8cc4-b7949cc6e52c",
           sourceRevision ? defaultTargetSourceRevision,
         }:
         let
@@ -185,12 +185,12 @@
               bootCommandLinePath
               bootImageSizeMiB
               bootOrderPolicy
-              dataDevice
               expectedCustomerKeyHash
               firmwareAllowlist
               firmwareTree
-              hashDevice
               rootImage
+              rootDataPartitionGUID
+              rootHashPartitionGUID
               sourceRevision
               ;
           };
@@ -202,6 +202,8 @@
             firmwareTree
             nixosSystem
             rootImage
+            rootDataPartitionGUID
+            rootHashPartitionGUID
             unsignedArtifacts
             ;
           system = targetConfig.system.build.toplevel;
@@ -325,7 +327,7 @@
             kaiba-provision-control
             kaiba-provision-integrated-rehearsal
             kaiba-provision-lane-guard
-            kaiba-provision-media-stager
+            kaiba-provision-media-contract
             kaiba-provision
             kaiba-provision-rehearsal
             kaiba-provision-signer-foundation
@@ -339,6 +341,7 @@
             kaiba-provision-station-pages
             kaiba-provision-unfused-compat
             kaiba-provision-unfused-evidence
+            kaiba-provision-unfused-runtime-record
             provisioning-test-result
             kaiba-provision-yubikey-wrapper-foundation
             ;
@@ -410,6 +413,7 @@
           rpiboot-metadata-stdout = provisioning.checks.${system}.rpiboot-metadata-stdout;
           rpi5-unfused-capsule = provisioning.checks.${system}.unfused-capsule;
           rpi5-media-staging-fixture = provisioning.checks.${system}.media-staging-fixture;
+          rpi5-production-media-staging = provisioning.checks.${system}.production-media-staging;
           rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
           secure-boot-artifacts = provisioning.checks.${system}.secure-boot-artifacts;
           rpi5-signed-release-manifest = provisioning.checks.${system}.signed-release-manifest;

@@ -1,46 +1,22 @@
 package mediastager
 
 import (
-	"context"
 	"fmt"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mediainventory"
 )
 
-type TargetKind string
+type TargetKind = mediainventory.TargetKind
 
 const (
-	TargetBlockDevice TargetKind = "block_device"
-	TargetRegularFile TargetKind = "regular_file"
+	TargetBlockDevice = mediainventory.TargetBlockDevice
+	TargetRegularFile = mediainventory.TargetRegularFile
 )
 
-type TargetFacts struct {
-	RequestedPath string
-	ResolvedPath  string
-	Identity      string
-	SizeBytes     uint64
-	Kind          TargetKind
-	WholeDevice   bool
-	DeviceNumber  uint64
-	// DiskSequence is Linux's boot-local identity for this disk attachment.
-	// It is only compared within one Inspect/open operation, never persisted.
-	DiskSequence uint64
-	FileDevice   uint64
-	Inode        uint64
-	SysfsPath    string
-}
-
-type TargetUsage struct {
-	Mounted     bool
-	System      bool
-	Root        bool
-	Swap        bool
-	MountPoints []string
-	SwapSources []string
-}
-
-type Inventory interface {
-	Inspect(context.Context, string, Mode) (TargetFacts, error)
-	Usage(context.Context, TargetFacts, Mode) (TargetUsage, error)
-}
+type TargetFacts = mediainventory.TargetFacts
+type TargetUsage = mediainventory.TargetUsage
+type Inventory = mediainventory.Inventory
+type SystemInventory = mediainventory.SystemInventory
 
 func validateSameTargetFacts(initial, current TargetFacts) error {
 	if current != initial {
@@ -67,10 +43,7 @@ func validateTargetFacts(plan Plan, mode Mode, facts TargetFacts, usage TargetUs
 		return fmt.Errorf("%w: fixture target is not one verified regular file", ErrUnsafeTarget)
 	}
 	if usage.Mounted || usage.System || usage.Root || usage.Swap {
-		return fmt.Errorf(
-			"%w: mounted=%t system=%t root=%t swap=%t",
-			ErrUnsafeTarget, usage.Mounted, usage.System, usage.Root, usage.Swap,
-		)
+		return fmt.Errorf("%w: mounted=%t system=%t root=%t swap=%t", ErrUnsafeTarget, usage.Mounted, usage.System, usage.Root, usage.Swap)
 	}
 	return nil
 }

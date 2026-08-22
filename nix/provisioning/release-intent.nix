@@ -248,11 +248,11 @@ let
         )"
         printf '%s\n' "$unsigned_artifact_set_digest" \
           | grep -Eq '^sha256:[0-9a-f]{64}$'
-        jq --sort-keys --compact-output 'del(.bundle_digest)' \
-          "$unsignedArtifactsInput/manifest.json" > "$TMPDIR/unsigned-manifest-canonical.json"
+        unsigned_manifest_canonical="$(jq --sort-keys --compact-output \
+          'del(.bundle_digest)' "$unsignedArtifactsInput/manifest.json")"
         actual_unsigned_artifact_set_digest="sha256:$({
           printf '%s\0' 'kaiba.rpi5.unsigned-artifacts.v1'
-          cat "$TMPDIR/unsigned-manifest-canonical.json"
+          printf '%s' "$unsigned_manifest_canonical"
         } | sha256sum | cut -d ' ' -f 1)"
         test "$actual_unsigned_artifact_set_digest" = "$unsigned_artifact_set_digest"
 
