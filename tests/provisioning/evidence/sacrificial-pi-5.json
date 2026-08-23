@@ -1,8 +1,8 @@
 {
   "schema_version": "provisioning.kaiba.network/rpi5-hardware-qualification/v1alpha1",
-  "source_revision": "5f6484158506a3be26ba7789564e7080eaa622bd",
+  "source_revision": "2a05636a5fac3c8b41d72b6f2f7c01cbd6e280f9",
   "station_system": "aarch64-linux",
-  "nix_system_closure_digest": "sha256:3e72001d074e0fe93f14106c894c7abe41ad2ff09f45f24c4dd17bd9bd97181e",
+  "nix_system_closure_digest": "sha256:8be4441d3a38da798932d8775261283c3ed435008a15fb7f19be8b1d30d83c77",
   "profile": {
     "id": "raspberry-pi-5-model-b-v1alpha1",
     "status": "experimental",
@@ -26,8 +26,8 @@
   "probes": [
     {
       "sequence": 1,
-      "evidence_digest": "sha256:5101071c7bec08555b6992aa533cdfd70c3dd4fb83eda45dd3bcd682d6027556",
-      "target_fingerprint": "sha256:4d7642855f4dd2354dd8216746179de23d0f21cb99e48d68f6956f33a0aa81d1",
+      "evidence_digest": "sha256:0ae79e6106c84acae606fc2808c54d2e147667f0db3254eceb470ae05d668780",
+      "target_fingerprint": "sha256:e7e61cab9b971a61207fcb17b15971c208d2374d14d62c9506e3b1717fb576dd",
       "board_revision": {
         "raw": "a04171",
         "new_style": true,
@@ -56,8 +56,8 @@
     },
     {
       "sequence": 2,
-      "evidence_digest": "sha256:5101071c7bec08555b6992aa533cdfd70c3dd4fb83eda45dd3bcd682d6027556",
-      "target_fingerprint": "sha256:4d7642855f4dd2354dd8216746179de23d0f21cb99e48d68f6956f33a0aa81d1",
+      "evidence_digest": "sha256:0ae79e6106c84acae606fc2808c54d2e147667f0db3254eceb470ae05d668780",
+      "target_fingerprint": "sha256:e7e61cab9b971a61207fcb17b15971c208d2374d14d62c9506e3b1717fb576dd",
       "board_revision": {
         "raw": "a04171",
         "new_style": true,
