@@ -47,8 +47,8 @@ jobs:
         with:
           enable_kvm: false
           extra_nix_config: |
-            extra-substituters = https://nixos-raspberrypi.cachix.org
-            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
+            extra-substituters = https://nixos-raspberrypi.cachix.org https://nixos-kaiba-network.cachix.org
+            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
           github_access_token: ${{ github.token }}
 
       - name: Build the provisioning station SD image

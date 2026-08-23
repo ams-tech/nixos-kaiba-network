@@ -30,9 +30,18 @@ jobs:
         with:
           enable_kvm: false
           extra_nix_config: |
-            extra-substituters = https://nixos-raspberrypi.cachix.org
-            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
+            extra-substituters = https://nixos-raspberrypi.cachix.org https://nixos-kaiba-network.cachix.org
+            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
           github_access_token: ${{ github.token }}
+
+      - name: Publish reusable outputs to the project binary cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: nixos-kaiba-network
+          authToken: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipAddingSubstituter: true
+          skipPush: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || secrets.CACHIX_AUTH_TOKEN == '' }}
 
       - name: Check formatting
         run: nix --accept-flake-config fmt -- --ci
@@ -92,9 +101,18 @@ jobs:
         with:
           enable_kvm: false
           extra_nix_config: |
-            extra-substituters = https://nixos-raspberrypi.cachix.org
-            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
+            extra-substituters = https://nixos-raspberrypi.cachix.org https://nixos-kaiba-network.cachix.org
+            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
           github_access_token: ${{ github.token }}
+
+      - name: Publish reusable outputs to the project binary cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: nixos-kaiba-network
+          authToken: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipAddingSubstituter: true
+          skipPush: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || secrets.CACHIX_AUTH_TOKEN == '' }}
 
       - name: Build and test all production binaries
         run: |
@@ -162,8 +180,8 @@ jobs:
         with:
           enable_kvm: false
           extra_nix_config: |
-            extra-substituters = https://nixos-raspberrypi.cachix.org
-            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
+            extra-substituters = https://nixos-raspberrypi.cachix.org https://nixos-kaiba-network.cachix.org
+            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
           github_access_token: ${{ github.token }}
 
       - name: Build the provisioning station SD image
@@ -201,8 +219,20 @@ jobs:
         uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
         with:
           enable_kvm: true
-          extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+          extra_nix_config: |
+            extra-substituters = https://nixos-kaiba-network.cachix.org
+            extra-trusted-public-keys = nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
+            system-features = nixos-test benchmark big-parallel kvm
           github_access_token: ${{ github.token }}
+
+      - name: Publish reusable outputs to the project binary cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: nixos-kaiba-network
+          authToken: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          skipAddingSubstituter: true
+          skipPush: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || secrets.CACHIX_AUTH_TOKEN == '' }}
 
       - name: Report virtualization mode
         run: |
