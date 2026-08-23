@@ -174,6 +174,41 @@ tag on native ARM64, verifies the compressed archive, and publishes the image
 and its SHA-256 checksum in a GitHub release. See the [image release
 procedure](docs/raspberry-pi-5-provisioning-image.md#release-the-image).
 
+### Nix binary cache
+
+The Nix-building jobs use the public `nixos-kaiba-network` Cachix cache. Pull
+access is public. Pull requests, manual runs, the provisioning-image job, and
+the release workflow are read-only; only reusable package and check outputs
+from a protected `main` push may be published. This keeps image archives out of
+the project cache and prevents an untrusted workflow trigger from receiving a
+write token. The workflows pin the verified cache signing key
+`nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=`.
+
+Before enabling this workflow configuration, a repository administrator must:
+
+1. Create a public cache named `nixos-kaiba-network` at
+   [Cachix](https://app.cachix.org/). Confirm that its
+   [public metadata](https://app.cachix.org/api/v1/cache/nixos-kaiba-network)
+   identifies `ams-tech` as the owner and reports the pinned signing key before
+   enabling the workflows; release builds trust substitutions signed for this
+   cache.
+2. Keep `cache.nixos.org` as an upstream cache and add the public
+   `nixos-raspberrypi` Cachix cache as another upstream. Cachix then avoids
+   using the project quota for paths already available from either source.
+3. Generate a per-cache write token and store it only as the upstream
+   repository's `CACHIX_AUTH_TOKEN` Actions secret. With GitHub CLI installed,
+   the following command prompts for the value without writing it to the
+   repository:
+
+   ```console
+   gh secret set CACHIX_AUTH_TOKEN --repo ams-tech/nixos-kaiba-network
+   ```
+
+If the secret is absent, every job remains read-only. Never put the token in a
+flake, workflow literal, cache output, build argument, or log. If organization
+Actions policy uses an explicit allowlist, it must also permit the pinned
+`cachix/cachix-action` used by the CI workflow.
+
 The Pages simulation and loopback station use the same HTML, CSS, controller,
 and transport code. Their synthetic workflow walks the Raspberry Pi 5
 secure-boot ceremony from station admission and deferred-baseline closure

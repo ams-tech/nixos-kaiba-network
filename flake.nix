@@ -411,11 +411,15 @@
               {
                 nativeBuildInputs = [
                   pkgs.actionlint
+                  pkgs.python3
                   pkgs.shellcheck
                 ];
               }
               ''
                 actionlint \
+                  ${./.github/workflows/ci.yml} \
+                  ${./.github/workflows/release.yml}
+                python3 ${./tests/ci/workflow_cache_policy.py} \
                   ${./.github/workflows/ci.yml} \
                   ${./.github/workflows/release.yml}
                 mkdir -p "$out"

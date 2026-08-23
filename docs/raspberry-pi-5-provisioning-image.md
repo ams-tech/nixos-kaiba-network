@@ -56,6 +56,13 @@ only for the controlled sacrificial-device ceremony.
 Commit every intended source and lock-file change before producing the image.
 The root flake pins the Raspberry Pi fork and advertises its public Cachix
 cache; `--accept-flake-config` opts into that cache for the command being run.
+CI additionally pulls reusable project outputs from the public
+`nixos-kaiba-network` cache documented in the repository
+[continuous-integration guide](../README.md#nix-binary-cache), using the
+verified public signing key pinned in the workflows. A local builder may opt
+into that project cache with `cachix use nixos-kaiba-network`; it is an
+optimization and does not change the image derivation, but it does trust that
+cache's signer for substituted project outputs.
 On a multi-user Nix installation, only a trusted Nix user can accept restricted
 substituter and signing-key settings. If Nix reports that it ignored either
 setting, have the administrator add this exact cache URL and key to the daemon
