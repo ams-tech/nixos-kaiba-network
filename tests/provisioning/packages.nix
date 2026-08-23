@@ -4286,6 +4286,15 @@ let
           ./cmd/kaiba-provision-media-verifier \
           ./cmd/kaiba-provision-unfused-runtime-record
 
+        # The evidence publisher uses Linux descriptor-relative APIs. Compile
+        # its tests for arm64 in the x86 fast-check job so architecture-specific
+        # portability regressions fail before native ARM image construction
+        # fans out.
+        GOOS=linux GOARCH=arm64 go test -c \
+          -o "$TMPDIR/evidencefile-linux-arm64.test" \
+          ./internal/provisioning/evidencefile
+        test -s "$TMPDIR/evidencefile-linux-arm64.test"
+
         go list -deps ./cmd/kaiba-provision-media-device-verifier \
           > "$TMPDIR/device-verifier-deps"
         if grep -E '/internal/provisioning/(mediawriter|mediastager)$' \

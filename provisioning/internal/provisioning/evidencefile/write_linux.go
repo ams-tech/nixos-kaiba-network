@@ -24,7 +24,7 @@ const directoryOpenFlags = syscall.O_RDONLY | syscall.O_CLOEXEC | syscall.O_NOFO
 const (
 	atEmptyPath       = 0x1000
 	atSymlinkFollow   = 0x400
-	atSymlinkNoFollow = 0x100
+	oPath             = 0x200000 // Linux O_PATH, absent from some syscall versions.
 	oTmpfile          = 0x400000 | syscall.O_DIRECTORY
 )
 
@@ -343,25 +343,20 @@ func requireTrustedDirectoryPath(path string, expected os.FileInfo) error {
 }
 
 func requireAbsentAt(parent *os.File, name string) error {
-	namePointer, err := syscall.BytePtrFromString(name)
+	fd, err := syscall.Openat(
+		int(parent.Fd()),
+		name,
+		oPath|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
+		0,
+	)
+	if errors.Is(err, syscall.ENOENT) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("inspect evidence output: %w", err)
 	}
-	var stat syscall.Stat_t
-	_, _, errno := syscall.Syscall6(
-		syscall.SYS_NEWFSTATAT,
-		parent.Fd(),
-		uintptr(unsafe.Pointer(namePointer)),
-		uintptr(unsafe.Pointer(&stat)),
-		uintptr(atSymlinkNoFollow),
-		0,
-		0,
-	)
-	if errno == syscall.ENOENT {
-		return nil
-	}
-	if errno != 0 {
-		return fmt.Errorf("inspect evidence output: %w", errno)
+	if err := syscall.Close(fd); err != nil {
+		return fmt.Errorf("close evidence output inspection handle: %w", err)
 	}
 	return errors.New("evidence output already exists")
 }
