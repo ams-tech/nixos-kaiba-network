@@ -411,6 +411,7 @@
               {
                 nativeBuildInputs = [
                   pkgs.actionlint
+                  pkgs.gitMinimal
                   pkgs.python3
                   pkgs.shellcheck
                 ];
@@ -422,6 +423,18 @@
                 python3 ${./tests/ci/workflow_cache_policy.py} \
                   ${./.github/workflows/ci.yml} \
                   ${./.github/workflows/release.yml}
+                python3 ${./tests/ci/release_workflow_policy.py} \
+                  ${./.github/workflows/release.yml} \
+                  ${./scripts/ci/verify_remote_release_tag.sh}
+                shellcheck \
+                  ${./scripts/ci/verify_remote_release_tag.sh} \
+                  ${./scripts/ci/verify_release_tag.sh} \
+                  ${./tests/ci/verify_remote_release_tag_test.sh} \
+                  ${./tests/ci/verify_release_tag_test.sh}
+                bash ${./tests/ci/verify_release_tag_test.sh} \
+                  ${./scripts/ci/verify_release_tag.sh}
+                bash ${./tests/ci/verify_remote_release_tag_test.sh} \
+                  ${./scripts/ci/verify_remote_release_tag.sh}
                 mkdir -p "$out"
                 touch "$out/passed"
               '';

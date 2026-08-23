@@ -42,6 +42,12 @@ jobs:
             exit 1
           fi
 
+      - name: Verify the annotated release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REVISION: ${{ github.sha }}
+        run: bash scripts/ci/verify_release_tag.sh "$RELEASE_TAG" "$SOURCE_REVISION" origin/main
+
       - name: Install Nix
         uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
         with:
@@ -102,6 +108,12 @@ jobs:
       actions: read
       contents: write
     steps:
+      - name: Check out the release verification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - name: Download the verified release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -153,13 +165,8 @@ jobs:
           first-boot smoke test before using the station."
 
           verify_remote_tag() {
-            local remote_revision
-            remote_revision="$(gh api "repos/$GH_REPO/commits/tags/$RELEASE_TAG" --jq .sha)"
-            if [[ ! "$remote_revision" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || \
-              [[ "$remote_revision" != "$SOURCE_REVISION" ]]; then
-              echo "::error title=Release tag moved::$RELEASE_TAG no longer resolves to $SOURCE_REVISION."
-              exit 1
-            fi
+            bash scripts/ci/verify_remote_release_tag.sh \
+              "$GH_REPO" "$RELEASE_TAG" "$SOURCE_REVISION"
           }
 
           verify_remote_tag
