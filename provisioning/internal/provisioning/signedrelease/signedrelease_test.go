@@ -178,19 +178,16 @@ func TestUnsignedArtifactSetRequiresDistinctCanonicalPARTUUIDSelectors(t *testin
 	}
 }
 
-func TestUnsignedArtifactSetAcceptsCurrentAndHistoricalBootPolicies(t *testing.T) {
-	current, err := parseUnsignedArtifactSet(validUnsignedArtifactSet(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestUnsignedArtifactSetParsesCurrentAndHistoricalBootPolicies(t *testing.T) {
 	for _, policy := range []string{currentBootOrderPolicy, historicalBootOrderPolicy} {
-		candidate := current
-		candidate.BootOrderPolicy = policy
-		if err := candidate.validate(); err != nil {
+		if _, err := parseUnsignedArtifactSet(validUnsignedArtifactSetWithBootPolicy(t, policy)); err != nil {
 			t.Fatalf("boot policy %q rejected: %v", policy, err)
 		}
 	}
-	candidate := current
+	candidate, err := parseUnsignedArtifactSet(validUnsignedArtifactSet(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	candidate.BootOrderPolicy = "unreviewed"
 	if err := candidate.validate(); err == nil {
 		t.Fatal("unreviewed boot policy was accepted")
@@ -366,10 +363,14 @@ func syntheticResolvedRelease(t *testing.T) ResolvedRelease {
 }
 
 func validUnsignedArtifactSet(t *testing.T) []byte {
+	return validUnsignedArtifactSetWithBootPolicy(t, currentBootOrderPolicy)
+}
+
+func validUnsignedArtifactSetWithBootPolicy(t *testing.T, bootOrderPolicy string) []byte {
 	t.Helper()
 	value := unsignedArtifactSet{
 		Schema: unsignedArtifactSchema, SourceRevision: strings.Repeat("a", 40), ExpectedCustomerKeyHash: bundle.Sum([]byte("key")),
-		BootOrderPolicy: currentBootOrderPolicy, BootCommandLinePath: "nixos/default/cmdline.txt",
+		BootOrderPolicy: bootOrderPolicy, BootCommandLinePath: "nixos/default/cmdline.txt",
 		FirmwareAllowlist:  []string{"config.txt", "kaiba-root-integrity.json", "nixos/default/bcm2712-rpi-5-b.dtb", "nixos/default/cmdline.txt", "nixos/default/initrd", "nixos/default/kernel.img"},
 		BootImageSizeBytes: 32 * 1024 * 1024, PersistentMutableState: "tmpfs-only", RollbackPolicy: "unimplemented-block-enrollment-ready",
 		DebugPolicy: "videocore-jtag-unlocked-development", EEPROMWriteProtectionPolicy: "unlocked-development",

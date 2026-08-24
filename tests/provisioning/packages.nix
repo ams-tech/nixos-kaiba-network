@@ -2000,7 +2000,7 @@ let
     }
     {
       id = "rpi5-development-posture";
-      description = "The approved sacrificial Pi 5 development posture is schema-valid and artifact/configuration-bound: BOOT_ORDER=0xf216 selects NVMe, SD, TFTP, then restart; BOOT_UART=1 and ENABLE_SELF_UPDATE=0 are explicit. Policy leaves VideoCore JTAG and EEPROM write protection unlocked, and recovery is prebuilt but cannot execute before customer ownership. This software-only check makes no live hardware or enforcement claim. These settings are not production-ready; production boot/debug/write-protection values remain undecided, rollback is unimplemented, and enrollment is blocked.";
+      description = "The approved sacrificial Pi 5 development posture is schema-valid and artifact/configuration-bound: BOOT_ORDER=0xf216 selects NVMe, SD, TFTP, then restart; BOOT_UART=1 and ENABLE_SELF_UPDATE=0 are explicit. Policy leaves VideoCore JTAG and EEPROM write protection unlocked, requires recovery to be prebuilt before customer ownership, and forbids its execution until ownership. This software-only check makes no live hardware or enforcement claim. These settings are not production-ready; production boot/debug/write-protection values remain undecided, rollback is unimplemented, and enrollment is blocked.";
       evidence = [ developmentPostureEvidencePath ];
     }
     {
@@ -3109,10 +3109,10 @@ let
         export LC_ALL=C
 
         cd ${built.goSource}
-        readonly focused_test_pattern='^(TestFinalizeVerifiesCompleteCrossBundleLineage|TestResolveRejectsBootPolicyAndSignedEEPROMConfigMismatch|TestResolveRejectsTreesOutsideCanonicalRPIBootBundleSet|TestResolveRequiresOwnedRecoveryUpdaterReplay|TestRetainedPublicationParentDetectsPathReplacement|TestTreePayloadLimitAccommodatesProductionRootImages|TestVerifyPublicationRejectsTamperingAndAdditions)$'
+        readonly focused_test_pattern='^(TestFinalizeVerifiesCompleteCrossBundleLineage|TestResolveRejectsBootPolicyAndSignedEEPROMConfigMismatch|TestResolveRejectsHistoricalBootPolicyForNewFinalization|TestResolveRejectsTreesOutsideCanonicalRPIBootBundleSet|TestResolveRequiresOwnedRecoveryUpdaterReplay|TestRetainedPublicationParentDetectsPathReplacement|TestTreePayloadLimitAccommodatesProductionRootImages|TestVerifyPublicationRejectsTamperingAndAdditions)$'
         go test ./internal/provisioning/signedrelease \
           -list "$focused_test_pattern" > "$TMPDIR/focused-tests.txt"
-        test "$(grep -Ec "$focused_test_pattern" "$TMPDIR/focused-tests.txt")" -eq 7
+        test "$(grep -Ec "$focused_test_pattern" "$TMPDIR/focused-tests.txt")" -eq 8
         KAIBA_SIGNED_RELEASE_TEST_PUBLICATION="$TMPDIR/publication.json" \
           go test ./internal/provisioning/signedrelease \
             -run "$focused_test_pattern" \

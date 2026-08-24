@@ -101,12 +101,15 @@ assert lib.assertMsg (
 ) "the prototype release metadata is not bound to the repository signing profile";
 assert lib.assertMsg (
   targetPolicy.schema == "provisioning.kaiba.network/target-policy/v1alpha1"
+  && targetPolicy.development_posture_id == developmentPosture.posture_id
   && targetPolicy.source_revision == metadata.sourceRevision
   && targetPolicy.expected_customer_key_hash == "sha256:${metadata.expectedCustomerKeyHash}"
   && targetPolicy.persistent_root == "dm-verity"
   && targetPolicy.mutable_state == "tmpfs-only"
   && targetPolicy.rollback_gate == "unimplemented"
   && targetPolicy.enrollment_ready == false
+  && targetPolicy.videocore_jtag == developmentPosture.videocore_jtag.policy
+  && targetPolicy.eeprom_write_protection == developmentPosture.eeprom_write_protection.policy
 ) "the prototype target policy is not bound to the release inputs or safe development posture";
 assert lib.assertMsg (
   prototype.target.unsignedArtifacts == prototype.unsignedArtifacts

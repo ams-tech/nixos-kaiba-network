@@ -124,6 +124,21 @@ func TestResolveRejectsBootPolicyAndSignedEEPROMConfigMismatch(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsHistoricalBootPolicyForNewFinalization(t *testing.T) {
+	fixture := newResolveFixtureWithBootPolicy(
+		t,
+		historicalBootOrderPolicy,
+		[]byte(historicalEEPROMBootConfig),
+	)
+	options := Options{EEPROMReplayVerifier: EEPROMReplayVerifierFunc(func(context.Context, string, string, string) error {
+		return nil
+	})}
+	if _, err := Resolve(context.Background(), fixture.inputs, options); err == nil ||
+		!strings.Contains(err.Error(), "not authorized for new signed-release finalization") {
+		t.Fatalf("Resolve() error = %v, want historical boot-policy rejection", err)
+	}
+}
+
 type resolveFixture struct{ inputs Inputs }
 
 func newResolveFixture(t *testing.T) resolveFixture {
