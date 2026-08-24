@@ -83,6 +83,9 @@ func TestHappyPathModelsCompleteSecureBootTransaction(t *testing.T) {
 	if len(state.Probes) != 2 || len(state.Comparison) != 9 {
 		t.Fatalf("observations: probes=%d comparison=%d", len(state.Probes), len(state.Comparison))
 	}
+	if state.Target == nil || state.Target.ProfileStatus != "stable" {
+		t.Fatalf("target profile status = %#v, want stable", state.Target)
+	}
 	for _, comparison := range state.Comparison {
 		want := "match"
 		if comparison.Field == "eeprom_hash" {

@@ -257,7 +257,7 @@ func runFirstProbe(state *State) {
 		state.Target = observation
 		state.Probes = append(state.Probes, assessedProbe(1, observation, "fail", "indeterminate", false,
 			Finding{Code: "device_class_mismatch", Message: "Decoded model code does not identify a Raspberry Pi 5 Model B."}))
-		stop(state, "Incompatible device class", "The target is outside the experimental Pi 5 Model B profile.")
+		stop(state, "Incompatible device class", "The target is outside the stable Pi 5 Model B profile.")
 	case ScenarioBaselineFailure:
 		observation := syntheticTarget()
 		observation.CustomerKeyHash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -729,7 +729,7 @@ func syntheticTarget() *TargetSummary {
 		Synthetic:           true,
 		Model:               "Raspberry Pi 5 Model B",
 		ProfileID:           "raspberry-pi-5-model-b-v1alpha1",
-		ProfileStatus:       "experimental",
+		ProfileStatus:       "stable",
 		Adapter:             "raspberrypi.rpi5.otp-metadata/v1alpha1",
 		Fingerprint:         "sha256:78600d0f50dc838dfb97414d04e8c08efe7771837a620f8503ec465b8628b6c1",
 		UserSerial:          "a7eb274c",

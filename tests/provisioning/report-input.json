@@ -8,7 +8,7 @@
         "id": "device-profile-schema",
         "system": "aarch64-linux",
         "status": "not-observed",
-        "description": "Experimental Raspberry Pi 5 device-profile conformance with the strict v1alpha1 schema.",
+        "description": "Stable Raspberry Pi 5 device-profile conformance with the strict v1alpha1 schema.",
         "evidence": []
       },
       {
@@ -106,7 +106,7 @@
         "id": "device-profile-schema",
         "system": "x86_64-linux",
         "status": "passed",
-        "description": "Experimental Raspberry Pi 5 device-profile conformance with the strict v1alpha1 schema.",
+        "description": "Stable Raspberry Pi 5 device-profile conformance with the strict v1alpha1 schema.",
         "evidence": []
       },
       {

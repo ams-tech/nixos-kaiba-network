@@ -13,9 +13,9 @@ irreversible path as deterministic display states, but it is not a provisioning
 authority. It does not invoke `kaiba-provision`, enumerate USB devices, upload
 recovery firmware, authenticate or attest a target, contact an external signer
 or control service, handle device secrets, program OTP, update EEPROM, boot a
-target, or reconcile inventory. The demo and the experimental live
-[Raspberry Pi 5 probe](raspberry-pi-5-provisioning-probe.md) intentionally have
-separate privilege boundaries.
+target, or reconcile inventory. The demo and the hardware-qualified, read-only
+live [Raspberry Pi 5 probe](raspberry-pi-5-provisioning-probe.md) intentionally
+have separate privilege boundaries.
 
 The modeled happy path is:
 

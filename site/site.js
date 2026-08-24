@@ -145,9 +145,9 @@
           : `Automated probe verification is partial; ${passed} of ${total} checks passed.`;
     const hardwareText =
       hardware === "pending"
-        ? "Physical Pi 5 qualification is pending and is not run in CI; the profile remains experimental."
+        ? "Physical Pi 5 qualification is pending for this report and is not run in CI; mutation remains disabled."
         : hardware === "passed"
-          ? "The separate manual physical Pi 5 qualification passed."
+          ? "The separate manual physical Pi 5 qualification passed; the profile is stable for read-only classification, not mutation."
           : "The separate manual physical Pi 5 qualification failed.";
     provisioningSummary.textContent = `${automatedText} ${hardwareText}`;
   };

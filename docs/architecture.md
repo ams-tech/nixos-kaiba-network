@@ -127,8 +127,9 @@ not maintain an authoritative active-credential inventory.
 The [provisioning station design](provisioning-station.md) defines the dedicated
 execution environment, control-service boundaries, station and lane fencing,
 secret handling, recovery, and acceptance criteria for that future path. It is
-also design documentation rather than an implemented station. The experimental
-[Raspberry Pi 5 provisioning probe](raspberry-pi-5-provisioning-probe.md)
+also design documentation rather than an implemented station. The
+hardware-qualified, read-only [Raspberry Pi 5 provisioning
+probe](raspberry-pi-5-provisioning-probe.md)
 implements only target observation and partial baseline evaluation: it has no
 transaction coordinator, mutation authority, key handling, enrollment, or
 activation path.

@@ -3,7 +3,7 @@
   "kind": "DeviceClassProfile",
   "metadata": {
     "id": "raspberry-pi-5-model-b-v1alpha1",
-    "status": "experimental"
+    "status": "stable"
   },
   "spec": {
     "adapter": {
