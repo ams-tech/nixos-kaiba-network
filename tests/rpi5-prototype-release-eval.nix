@@ -6,6 +6,9 @@
 }:
 
 let
+  developmentPosture = builtins.fromJSON (
+    builtins.readFile ../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
+  );
   metadata = prototype.metadata;
   signingContract = signingProfile.signing.kaibaSigning;
   planContract = prototype.signingPlan.kaibaBootSigningPlan;
@@ -109,6 +112,7 @@ assert lib.assertMsg (
   prototype.target.unsignedArtifacts == prototype.unsignedArtifacts
   && unsignedContract.sourceRevision == metadata.sourceRevision
   && unsignedContract.expectedCustomerKeyHash == metadata.expectedCustomerKeyHash
+  && unsignedContract.bootOrderPolicy == developmentPosture.boot_order.policy
   && prototype.target.rootDataPartitionGUID == unsignedContract.rootDataPartitionGUID
   && prototype.target.rootHashPartitionGUID == unsignedContract.rootHashPartitionGUID
   && unsignedContract.dataDevice == "PARTUUID=${unsignedContract.rootDataPartitionGUID}"
@@ -146,6 +150,9 @@ assert lib.assertMsg (
   && eepromPlanContract.schemaVersion == "kaiba.provisioning.rpi5-eeprom-signing-plan/v1alpha1"
   && eepromPlanContract.updaterMode == "fresh-board"
   && eepromPlanContract.updaterFlags == [ "-f" ]
+  &&
+    builtins.readFile eepromPlanContract.bootConfig
+    == "[all]\nBOOT_UART=${toString developmentPosture.boot_uart.value}\nBOOT_ORDER=${developmentPosture.boot_order.value}\nENABLE_SELF_UPDATE=${toString developmentPosture.self_update.value}\n"
 ) "the exposed prototype EEPROM signing plan differs from the reviewed public release inputs";
 assert lib.assertMsg (
   reviewContract.planID == metadata.planID

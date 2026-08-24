@@ -11,7 +11,13 @@ import (
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
 )
 
-const unsignedArtifactSchema = "provisioning.kaiba.network/unsigned-artifact-set/v1alpha1"
+const (
+	unsignedArtifactSchema     = "provisioning.kaiba.network/unsigned-artifact-set/v1alpha1"
+	currentBootOrderPolicy     = "nvme-sd-tftp-restart-development"
+	historicalBootOrderPolicy  = "nvme-only"
+	currentEEPROMBootConfig    = "[all]\nBOOT_UART=1\nBOOT_ORDER=0xf216\nENABLE_SELF_UPDATE=0\n"
+	historicalEEPROMBootConfig = "[all]\nBOOT_UART=1\nBOOT_ORDER=0xf6\nENABLE_SELF_UPDATE=0\n"
+)
 
 var (
 	sourceRevisionPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
@@ -106,8 +112,9 @@ func (m unsignedArtifactSet) validate() error {
 			return fmt.Errorf("unsigned %s: %w", name, err)
 		}
 	}
-	if m.BootOrderPolicy != "nvme-only" || m.BootCommandLinePath != "nixos/default/cmdline.txt" {
-		return errors.New("unsigned artifact set does not use the fixed NVMe-only boot policy")
+	if (m.BootOrderPolicy != historicalBootOrderPolicy && m.BootOrderPolicy != currentBootOrderPolicy) ||
+		m.BootCommandLinePath != "nixos/default/cmdline.txt" {
+		return errors.New("unsigned artifact set does not use a recognized boot policy and fixed command-line path")
 	}
 	wantAllowlist := []string{
 		"config.txt", "kaiba-root-integrity.json", "nixos/default/bcm2712-rpi-5-b.dtb",
@@ -156,6 +163,22 @@ func (m unsignedArtifactSet) validate() error {
 		!canonicalPARTUUID(m.Verity.DataDevice) || !canonicalPARTUUID(m.Verity.HashDevice) ||
 		m.Verity.DataDevice == m.Verity.HashDevice {
 		return errors.New("unsigned dm-verity parameters are not canonical")
+	}
+	return nil
+}
+
+func (m unsignedArtifactSet) validateEEPROMBootConfig(config []byte) error {
+	var expected string
+	switch m.BootOrderPolicy {
+	case currentBootOrderPolicy:
+		expected = currentEEPROMBootConfig
+	case historicalBootOrderPolicy:
+		expected = historicalEEPROMBootConfig
+	default:
+		return fmt.Errorf("unsigned artifact set uses unrecognized boot_order_policy %q", m.BootOrderPolicy)
+	}
+	if string(config) != expected {
+		return fmt.Errorf("unsigned boot_order_policy %q does not match the exact signed EEPROM boot.conf", m.BootOrderPolicy)
 	}
 	return nil
 }

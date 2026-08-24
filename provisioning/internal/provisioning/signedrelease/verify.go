@@ -127,6 +127,9 @@ func Resolve(ctx context.Context, inputs Inputs, options Options) (ResolvedRelea
 	if err != nil {
 		return ResolvedRelease{}, err
 	}
+	if err := unsigned.validateEEPROMBootConfig(eepromFiles["boot.conf"].contents); err != nil {
+		return ResolvedRelease{}, err
+	}
 
 	ownedFiles, err := readExactDirectory(inputs.OwnedRecoveryDirectory, ownedRecoveryLimits)
 	if err != nil {

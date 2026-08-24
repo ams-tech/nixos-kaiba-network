@@ -178,6 +178,60 @@ func TestUnsignedArtifactSetRequiresDistinctCanonicalPARTUUIDSelectors(t *testin
 	}
 }
 
+func TestUnsignedArtifactSetAcceptsCurrentAndHistoricalBootPolicies(t *testing.T) {
+	current, err := parseUnsignedArtifactSet(validUnsignedArtifactSet(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, policy := range []string{currentBootOrderPolicy, historicalBootOrderPolicy} {
+		candidate := current
+		candidate.BootOrderPolicy = policy
+		if err := candidate.validate(); err != nil {
+			t.Fatalf("boot policy %q rejected: %v", policy, err)
+		}
+	}
+	candidate := current
+	candidate.BootOrderPolicy = "unreviewed"
+	if err := candidate.validate(); err == nil {
+		t.Fatal("unreviewed boot policy was accepted")
+	}
+}
+
+func TestUnsignedArtifactSetBindsBootPoliciesToExactEEPROMConfigs(t *testing.T) {
+	current, err := parseUnsignedArtifactSet(validUnsignedArtifactSet(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		policy  string
+		config  string
+		wantErr bool
+	}{
+		{"current exact pair", currentBootOrderPolicy, currentEEPROMBootConfig, false},
+		{"historical exact pair", historicalBootOrderPolicy, historicalEEPROMBootConfig, false},
+		{"current policy with historical config", currentBootOrderPolicy, historicalEEPROMBootConfig, true},
+		{"historical policy with current config", historicalBootOrderPolicy, currentEEPROMBootConfig, true},
+		{"missing section header", currentBootOrderPolicy, "BOOT_UART=1\nBOOT_ORDER=0xf216\nENABLE_SELF_UPDATE=0\n", true},
+		{"reordered lines", currentBootOrderPolicy, "[all]\nBOOT_ORDER=0xf216\nBOOT_UART=1\nENABLE_SELF_UPDATE=0\n", true},
+		{"changed UART", currentBootOrderPolicy, "[all]\nBOOT_UART=0\nBOOT_ORDER=0xf216\nENABLE_SELF_UPDATE=0\n", true},
+		{"changed self update", currentBootOrderPolicy, "[all]\nBOOT_UART=1\nBOOT_ORDER=0xf216\nENABLE_SELF_UPDATE=1\n", true},
+		{"extra comment", currentBootOrderPolicy, currentEEPROMBootConfig + "# drift\n", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := current
+			candidate.BootOrderPolicy = test.policy
+			err := candidate.validateEEPROMBootConfig([]byte(test.config))
+			if test.wantErr && err == nil {
+				t.Fatal("boot policy accepted mismatched EEPROM config")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("exact boot policy/config pair rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestCompareExactDirectoriesBindsModesAndContent(t *testing.T) {
 	root := t.TempDir()
 	left, right := filepath.Join(root, "left"), filepath.Join(root, "right")
@@ -315,7 +369,7 @@ func validUnsignedArtifactSet(t *testing.T) []byte {
 	t.Helper()
 	value := unsignedArtifactSet{
 		Schema: unsignedArtifactSchema, SourceRevision: strings.Repeat("a", 40), ExpectedCustomerKeyHash: bundle.Sum([]byte("key")),
-		BootOrderPolicy: "nvme-only", BootCommandLinePath: "nixos/default/cmdline.txt",
+		BootOrderPolicy: currentBootOrderPolicy, BootCommandLinePath: "nixos/default/cmdline.txt",
 		FirmwareAllowlist:  []string{"config.txt", "kaiba-root-integrity.json", "nixos/default/bcm2712-rpi-5-b.dtb", "nixos/default/cmdline.txt", "nixos/default/initrd", "nixos/default/kernel.img"},
 		BootImageSizeBytes: 32 * 1024 * 1024, PersistentMutableState: "tmpfs-only", RollbackPolicy: "unimplemented-block-enrollment-ready",
 		DebugPolicy: "videocore-jtag-unlocked-development", EEPROMWriteProtectionPolicy: "unlocked-development",

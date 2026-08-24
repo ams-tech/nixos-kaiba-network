@@ -17,6 +17,48 @@ The existing metadata-only probe and browser demo retain their current safety
 boundaries. The fresh-board profile is not changed to accept an owned key hash,
 and the public transition graph is never a fallback for the live station.
 
+## Approved one-unit development posture
+
+For the single sacrificial target, the approved EEPROM configuration uses
+`BOOT_ORDER=0xf216`. Raspberry Pi processes this value from right to left, so
+the target tries NVMe (`6`), then SD (`1`), then network/TFTP (`2`), and then
+restarts the sequence (`f`). `ENABLE_SELF_UPDATE=0` disables automatic
+bootloader self-update scanning, but it does not disable a separately
+authorized RPIBOOT update or make an unlocked EEPROM immutable.
+
+VideoCore JTAG and EEPROM hardware write protection remain unlocked. The
+fresh-board EEPROM/key change is exactly one transaction-bound RPIBOOT commit,
+using an exact expected prestate and signed EEPROM, followed by authoritative
+readback. A timeout, lost response, or other uncertainty never authorizes a
+retry. Owned recovery is limited to a prebuilt, independently verified,
+customer-key-signed RPIBOOT bundle with narrowly bounded capabilities. The
+bundle must be ready before ownership, but it must not execute until the board
+is owned by the customer key. The persistent root is read-only and dm-verity
+protected; permitted mutable state is tmpfs-only. Anti-rollback is
+unimplemented, so the unit stops at `security_applied` and cannot enter
+enrollment.
+
+Boot-media hardware identity is deliberately outside this policy. NVMe model,
+serial, WWID, and `/dev/disk/by-id` are neither boot-trust inputs nor persistent
+plan or evidence fields. The station's versioned, typed hardware configuration
+supplies one linker-fixed raw whole-device or `/dev/disk/by-path` selector only
+as local operational configuration. The checked-in sacrificial-development
+configuration selects `/dev/nvme0n1`; neither that selector nor its
+configuration ID enters canonical plans, receipts, or evidence. The media tools
+still reject partitions, mounts, root/system/swap devices, holders, and slaves;
+check exact per-run capacity and a 512-byte logical sector for layout
+compatibility; and pin the opened attachment within each operation. They do not
+appraise initial contents or establish media identity. Offline signed-artifact
+verification remains a software foundation; live signed-system boot observation
+and enforcement occur later in the hardware campaign.
+
+The development boot order and unlocked VideoCore JTAG are **not
+production-ready**. Their production values are undecided and require separate
+review and qualification before provisioning any production device. The
+existing `BOOT_UART=1` is an unreviewed development setting and production
+blocker, not an approved production value. The unlocked EEPROM write-protection
+posture and other deferred policies likewise remain production blockers.
+
 ## Deployment topology
 
 ```text
@@ -146,15 +188,21 @@ live-token ceremony evidence must still be completed before an ownership
 commit.
 
 The production-media factory derives a plan-specialized device stager and an
-independent verifier from that verified release and one exact target. They can
+independent verifier from that verified release and exact per-run layout
+geometry. It consumes the selector through the typed hardware configuration
+and fixes it outside its canonical plan, receipts, and evidence. The tools can
 write and cold-read the manifest-bound boot, root-data, and root-hash bytes, but
-the repository has not recorded that physical campaign. The lane guard and
-loopback UI still do not stage media themselves.
+that cold readback proves expected contents on a fresh attachment, not
+continuity of one physical medium. The repository has not recorded that
+physical campaign or a live signed boot. The lane guard and loopback UI still
+do not stage media themselves.
 
 ## Nix entry points
 
 The public construction boundaries are:
 
+- provisioning-leaf `lib.hardwareConfigurations`, the versioned typed catalog
+  of station-local hardware wiring used by capability-specialized factories;
 - root `lib.mkRpi5SecureBootTarget`, which evaluates the Pi target and exposes
   `firmwareTree`, `rootImage`, and `unsignedArtifacts`;
 - provisioning-leaf `lib.mkDevelopmentYubiKeySigning`, which requires the
@@ -187,10 +235,14 @@ the explicitly sacrificial development prototype. It records the development
 token serial, reviewed public key, customer-key hash, and signer-policy digest
 under [`provisioning/signers/development-prototype`](../provisioning/signers/development-prototype/README.md).
 That exception contains no credential or signing authority and is not approved
-for production. Production signer metadata, EEPROM digests, physical
-USB/UART/GPIO selectors, TLS credentials, approvals, grants, and recovery
-bundles remain external deployment inputs. Generic signer and lane-guard
-packages still fail closed until constructed through their factories.
+for production. A separate checked-in public-only hardware configuration under
+[`provisioning/config/hardware`](../provisioning/config/hardware/) selects the
+sacrificial station's target-media path; that path is operational wiring and is
+not copied into plans, receipts, or evidence. Production target-media hardware
+configurations, signer metadata, EEPROM digests, physical USB/UART/GPIO
+selectors, TLS credentials, approvals, grants, and recovery bundles remain
+external deployment inputs. Generic signer and lane-guard packages still fail
+closed until constructed through their factories.
 
 ## Station and control-plane state
 
@@ -312,15 +364,18 @@ guard must observe target disappearance and the configured cold interval.
    fixed station and lane.
 3. Run the existing two-pass fresh qualification with complete target power
    removal and normal-boot confirmation between observations.
-4. Close every deferred baseline check: storage, remaining OTP rows, EEPROM
-   contents and policy, inventory history, firmware authenticity, and debug or
-   alternate paths.
+4. Close every deferred baseline check: obtain explicit destructive-use
+   authorization for the selected storage without appraising its contents or
+   binding a storage identity, and close the remaining OTP rows, EEPROM contents
+   and policy, inventory history, firmware authenticity, and debug or alternate
+   paths.
 5. Resolve and verify the complete signed bundle. Perform offline signature
    checks and an unfused `boot_ramdisk=1` compatibility boot.
 6. Through the separate reviewed, plan-specialized NVMe stager, write the exact
    approved boot, root-data, and root-hash artifacts to their fixed partitions;
    cold-read them through the independent verifier and compare their complete
-   manifest-bound layout and digests.
+   manifest-bound layout and digests on a fresh attachment. Treat this as
+   content evidence only, not storage identity or live signed-boot evidence.
 7. Approve the exact target, current fence epoch, plan, expected key hash, and
    ordered operation set. The development exception permits one person to use
    separate named operator and approver sessions; this is forbidden for a
@@ -335,7 +390,11 @@ guard must observe target disappearance and the configured cold interval.
    Absence of that property is a preflight failure for this milestone.
 11. Run the separately signed owned-device readback, prove authorized recovery,
     reject stock recovery, rerun owned readback, and test altered, unsigned,
-    wrong-key, alternate-media, and dm-verity-tampered inputs.
+    wrong-key, alternate-media, and dm-verity-tampered inputs. Isolate SD and
+    network/TFTP in turn, testing each with unsigned and wrong-key images plus
+    an older correctly development-key-signed image. Unsigned and wrong-key
+    candidates must not execute; a correctly signed older candidate may
+    execute and must demonstrate that enrollment remains blocked.
 12. Reconcile the terminal audit record and record `security_applied` with the
     explicit development release classification.
 
@@ -369,5 +428,6 @@ production claim:
 - encrypted persistent mutable state and its recovery design;
 - separate human operator and approver enforcement;
 - production boot-root backup, rotation, incident, and cohort strategy;
-- final JTAG, boot-order, and EEPROM write-protection qualification; and
+- final JTAG, `BOOT_UART`, boot-order, self-update, recovery, and EEPROM
+  write-protection qualification; and
 - multi-lane scaling.

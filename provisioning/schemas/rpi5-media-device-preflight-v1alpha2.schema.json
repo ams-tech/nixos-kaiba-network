@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-media-device-preflight-v1alpha2.schema.json",
+  "title": "Kaiba Raspberry Pi 5 media device preflight v1alpha2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "evidence_mode",
+    "plan_digest",
+    "target",
+    "attachment_boot_id",
+    "attachment_sequence",
+    "target_whole_device",
+    "target_geometry_verified",
+    "sources_verified",
+    "target_usage_clear",
+    "target_locked",
+    "write_performed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-media-device-preflight/v1alpha2"
+    },
+    "status": { "const": "validated_no_write" },
+    "evidence_mode": { "const": "device_preflight" },
+    "plan_digest": { "$ref": "#/definitions/digest" },
+    "target": { "$ref": "#/definitions/target_binding" },
+    "attachment_boot_id": { "$ref": "#/definitions/guid" },
+    "attachment_sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "target_whole_device": { "const": true },
+    "target_geometry_verified": { "const": true },
+    "sources_verified": { "const": true },
+    "target_usage_clear": { "const": true },
+    "target_locked": { "const": true },
+    "write_performed": { "const": false }
+  },
+  "definitions": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "guid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": { "const": "00000000-0000-0000-0000-000000000000" }
+    },
+    "target_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "size_bytes",
+        "logical_sector_size_bytes"
+      ],
+      "properties": {
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 8388608,
+          "maximum": 9223372036854775807,
+          "multipleOf": 512
+        },
+        "logical_sector_size_bytes": { "const": 512 }
+      }
+    }
+  }
+}

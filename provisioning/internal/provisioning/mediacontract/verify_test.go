@@ -380,9 +380,8 @@ func buildFullMediaFixture(t *testing.T) fullMediaFixture {
 		SchemaVersion:       PlanSchemaVersion,
 		TransactionID:       transactionID,
 		Release:             release,
-		Target:              TargetBinding{ByIDPath: "/dev/disk/by-id/nvme-kaiba-full-media", Model: "KAIBA-NVME", Serial: "SERIAL-FULL", WWID: "eui.2222222222222222", SizeBytes: targetSize, LogicalSectorSizeBytes: 512, PhysicalSectorSizeBytes: 4096},
+		Target:              TargetBinding{SizeBytes: targetSize, LogicalSectorSizeBytes: 512},
 		Layout:              layout,
-		InitialMediaDigest:  testDigest("reviewed prestate"),
 		ExpectedMediaDigest: sumBytes(media),
 	}
 	plan, err = plan.WithDerivedDigest()

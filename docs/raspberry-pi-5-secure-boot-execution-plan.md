@@ -104,6 +104,56 @@ RPIBOOT-to-normal-boot lane transition. In particular, the EEPROM foundation
 is not a production signed EEPROM, owned-recovery signature, hardware write,
 or OTP result.
 
+## Approved sacrificial-development posture
+
+The following policy is approved only for the one sacrificial development
+unit. It is not a production profile and does not resolve any of the deferred
+exact-board checks:
+
+- `BOOT_ORDER=0xf216`, interpreted from right to left, tries NVMe (`6`), then
+  SD (`1`), then network/TFTP (`2`), and finally restarts the sequence (`f`);
+- `ENABLE_SELF_UPDATE=0` disables automatic bootloader self-update scanning,
+  but does not disable an explicitly authorized RPIBOOT update or otherwise
+  make an unlocked EEPROM immutable;
+- VideoCore JTAG and EEPROM hardware write protection remain unlocked;
+- the initial EEPROM/key operation is one transaction-bound, one-shot
+  fresh-board RPIBOOT commit with an exact expected prestate and signed EEPROM;
+  an uncertain outcome is reconciled by readback and is never retried;
+- the recovery bundle is built and independently verified before ownership,
+  but execution is forbidden until the board is owned by the customer key;
+  owned-device recovery then uses only that narrowly bounded,
+  customer-key-signed RPIBOOT bundle;
+- the persistent root is read-only and dm-verity protected, while permitted
+  mutable state is tmpfs-only; and
+- monotonic anti-rollback is unimplemented, so the terminal state remains
+  `security_applied` and every path to `enrollment_ready` stays blocked.
+
+Boot-media hardware identity is not part of this posture. NVMe model, serial,
+WWID, and `/dev/disk/by-id` are neither boot-trust inputs nor persistent plan or
+evidence fields. A versioned, typed hardware configuration supplies the
+station-local selector; the checked-in sacrificial-development configuration
+selects `/dev/nvme0n1`, but neither that selector nor its configuration ID enters
+canonical plans, receipts, or evidence. The media writer retains only runtime
+overwrite-safety and layout-compatibility checks. Offline signature and
+release-lineage verification remain software foundations; observing and
+enforcing a live signed-system boot is a later hardware gate.
+
+The development boot order and unlocked VideoCore JTAG posture are **not
+production-ready**. Their production values are undecided and require a new
+review and qualification before any production device is provisioned. The
+existing `BOOT_UART=1` configuration is likewise an unreviewed development
+setting and production blocker, not an approved production value. EEPROM
+write protection, recovery, and the remaining production policies also require
+their separate production decisions and post-finalization tests.
+
+Because both fallback sources are enabled, the physical acceptance campaign
+must isolate SD and network/TFTP in turn and test each with unsigned and
+wrong-key images plus an older correctly development-key-signed image. The
+unsigned and wrong-key candidates must not execute. Native secure boot may
+accept the correctly signed older candidate; that case must prove the
+anti-rollback limitation is recorded and that enrollment remains blocked,
+rather than being misreported as a secure-boot rejection.
+
 ## Safety invariants
 
 These rules apply to every work item and rehearsal:
@@ -160,15 +210,21 @@ initialization, the stager's `fixture-dry-run`, `fixture-stage`, and
 regular file.
 
 The production-media factory instead consumes the complete content-addressed
-18-role release. It freezes one exact whole-device identity and prestate, a
-three-partition GPT, the six regions covering every target byte, an exact
+18-role release. Its v1alpha2 contract freezes only the runtime-observed exact
+capacity and required 512-byte logical sector size for layout compatibility,
+plus a three-partition GPT, the six regions covering every target byte, an exact
 four-file FAT containing `boot.img`, `boot.sig`, `config.txt`, and
 `kaiba-media-binding.json`, root-data and root-hash partitions, zero padding and
-tail, and both GPT copies. It emits a linker-fixed device writer, a separate
-read-only verifier, and canonical stage, verification, manual cold-power, and
-final receipt contracts. The software check independently validates GPT, FAT,
-release/signature lineage, full-media digests, and dm-verity using a regular
-file; it does not perform the physical ceremony.
+tail, and both GPT copies. A station-local raw whole-device or
+`/dev/disk/by-path` selector comes from the typed hardware configuration and is
+absent from the canonical plan, receipts, and evidence; model, serial, WWID,
+`/dev/disk/by-id`, physical sector size, and initial contents are not bound. The
+factory emits a
+plan-specialized device writer, a separate read-only verifier, and canonical
+stage, verification, manual cold-power, and final receipt contracts. The
+software check independently validates GPT, FAT, offline release/signature
+lineage, full-media digests, and dm-verity using a regular file; it does not
+perform the physical ceremony or observe signed boot enforcement.
 
 The repository also exposes a clean-revision Pi 5 target, unsigned root/boot
 artifacts, a cohort-scoped release intent, a signer-profile-bound v1alpha2
@@ -208,13 +264,15 @@ claim.
   pending or the physical foundation as wholly unqualified.
 - [ ] Close, for the exact candidate board, every deferred check in the device
   profile:
-  - attached-storage contents and prior protected material;
+  - explicit destructive-use authorization for the selected storage; existing
+    contents are not appraised or bound and storage hardware identity is not a
+    trust input;
   - remaining customer OTP and device-private-key rows;
   - installed EEPROM contents and effective write-protection posture;
   - EEPROM and recovery-firmware authenticity;
   - inventory ownership and prior-transaction history; and
   - non-VideoCore debug and alternate execution paths.
-- [ ] Record the approved development posture for JTAG, boot order, EEPROM
+- [x] Record the approved development posture for JTAG, boot order, EEPROM
   updates, EEPROM write protection, recovery, self-update, root integrity, and
   rollback.
 - [ ] Obtain green x86_64 and native AArch64 checks for the final pre-ceremony
@@ -463,52 +521,60 @@ Two independent verification paths agree on every digest and signature.
 ## Workstream 4: stage and verify target NVMe
 
 The repository now has both the legacy three-extent regular-file fixture and a
-complete software definition for production media. The production contract
-binds a complete signed release, one exact whole-device identity and prestate,
-every byte of the final GPT/FAT/root/verity layout, the plan-specialized writer,
-the independent verifier, and the canonical receipt chain. Its deterministic
-regular-file build and tamper tests cross no block-device or power boundary and
-observe no hardware or one-time setting. SB-04 therefore remains in progress
-until the unchecked physical gates below are completed.
+complete software definition for production media. The production v1alpha2
+contract binds a complete signed release, per-run capacity and 512-byte logical
+sector geometry, every byte of the final GPT/FAT/root/verity layout, the
+plan-specialized writer, the independent verifier, and the canonical receipt
+chain. It does not bind or verify storage model, serial, WWID, persistent path,
+physical sector size, or initial contents. Its deterministic regular-file build
+and tamper tests cross no block-device or power boundary and observe no hardware
+or one-time setting. SB-04 therefore remains in progress until the unchecked
+physical gates below are completed.
 
 ### Deliverables
 
-- [x] Define the exact GPT or fixed-partition layout, device selectors, expected
-  sizes, filesystem roles, and overwrite protections for the sacrificial
-  target's NVMe device.
-- [x] Require selection of the whole NVMe only through an approved
-  `/dev/disk/by-id` path and reconcile its serial, model, capacity, existing
-  partition table, and
-  transaction binding immediately before staging.
-- [x] Implement a staging tool or frozen procedure that refuses ambiguous,
-  mounted, unexpected, or system block devices and never accepts a partition
-  selector where the whole device is required, or the reverse.
+- [x] Define the exact GPT or fixed-partition layout, runtime geometry,
+  filesystem roles, and overwrite protections for the sacrificial target's NVMe
+  device.
+- [x] Source the station-local selector from a versioned, typed hardware
+  configuration while keeping its selector and configuration ID out of the
+  canonical plan, receipts, and evidence. Permit only a configured immediate
+  raw whole-device node or `/dev/disk/by-path` selector; reject
+  `/dev/disk/by-id` and never collect or reconcile model, serial, or WWID.
+- [x] Implement a staging tool or frozen procedure that requires explicit
+  destructive authorization; rejects a partition, mounted, root, system, or
+  swap device plus holders and slaves; verifies the exact runtime capacity and
+  512-byte logical sector geometry; and pins `(boot_id, diskseq)`, `dev_t`,
+  sysfs resolution, and the open file descriptor within each operation.
 - [x] Freeze the exact layout: primary and backup GPT, a canonical boot FAT
   containing exactly `boot.img`, `boot.sig`, `config.txt`, and
   `kaiba-media-binding.json`, fixed raw root-data and dm-verity hash-tree
   partitions, their zero padding, and the complete zero tail.
 - [x] Implement a plan-specialized writer with a fixed source closure,
-  full-prestate verification, explicit GPT invalidation/commit ordering,
-  durability barriers, complete reopened readback, and no target override,
-  force, retry, or fixture switch.
+  explicit GPT invalidation/commit ordering, durability barriers, complete
+  reopened readback, and no runtime target override, force, retry, or fixture
+  switch. It neither appraises nor binds initial media contents.
 - [x] Implement a separate read-only verifier that checks the complete media
   digest, GPT CRCs and semantics, canonical FAT bytes and payloads, partition
   padding and tail, signed-release and signature lineage, and direct
   `veritysetup verify` over independently resolved partitions.
 - [x] Define canonical stage, independent-verification, manual cold-power, and
-  final staging receipts bound to the transaction, target facts, signed-release
-  manifest, layout, complete-media digest, attachment identities, and prior
-  receipt digests. Manual power evidence remains explicitly unauthenticated and
-  the final receipt makes no hardware or enforcement claim.
+  final staging receipts bound to the transaction, runtime geometry,
+  signed-release manifest, layout, complete-media digest, transient attachment
+  epochs, and prior receipt digests. They contain no storage selector or
+  hardware identifier. Manual power evidence remains explicitly unauthenticated
+  and the final receipt makes no hardware or enforcement claim.
 - [ ] Write the approved `boot.img`, `boot.sig`, root-data image, and dm-verity
-  hash image, canonical FAT, and GPT to their fixed destinations on the reviewed
-  sacrificial device.
+  hash image, canonical FAT, and GPT to their fixed destinations on the
+  explicitly authorized, runtime-safety-checked whole device.
 - [ ] Remove power, cold-read the staged bytes through an independent path, and
   compare their digests with the approved manifest.
-- [ ] Flush all writes, remove power, re-enumerate the same by-id device, verify
-  the GPT and boot-FAT allowlist, read the exact approved byte lengths, recompute
-  every SHA-256 digest, and run `veritysetup verify` over the staged root-data
-  and hash-tree pair.
+- [ ] Flush all writes, remove power, obtain a fresh attachment through the
+  selector from the typed hardware configuration, verify the GPT and boot-FAT
+  allowlist, read the exact approved byte lengths, recompute every SHA-256
+  digest, and run `veritysetup verify` over the staged root-data and hash-tree
+  pair. Record that this proves expected bytes on the selected fresh
+  attachment, not continuity of one physical medium.
 - [ ] Produce and independently review the physical instance of the canonical
   receipt chain, including the manual cold-power observation. The software
   receipt definitions and finalizer alone do not satisfy this gate.
@@ -520,9 +586,11 @@ until the unchecked physical gates below are completed.
 
 ### Exit criteria
 
-The exact signed capsule has passed the unfused compatibility boot, and the
-powered-off NVMe contains exactly the manifest-bound bytes expected by the
-post-fuse target.
+The exact signed capsule has passed the unfused compatibility boot, and a
+freshly attached, operationally selected NVMe contains exactly the
+manifest-bound bytes expected by the post-fuse target. This exit criterion does
+not establish NVMe hardware identity. Live signed-system boot observation and
+enforcement remain later hardware gates.
 
 ## Workstream 5: enforce the complete transaction
 
@@ -747,6 +815,9 @@ without an OTP-capable commit bundle.
   remaining lease, and control or audit outage;
 - altered manifest, artifact bytes, bundle path, expected key hash, EEPROM
   digest, boot-image digest, operation order, or plan digest;
+- isolated SD and network/TFTP fallback attempts using unsigned, wrong-key,
+  and older correctly development-key-signed images, with an explicit check
+  that the correctly signed rollback case cannot enable enrollment;
 - failure before, during, and after the modeled first OTP write; and
 - reconciliation after every distinguishable and indistinguishable outcome.
 
@@ -775,8 +846,10 @@ The frozen revision must add and pass:
   directory-tree manifests;
 - complete release fixtures plus wrong-key, altered-byte, altered-signature,
   missing-role, extra-role, and digest-corruption tests;
-- loopback block-image tests for device-selection rejection, exact GPT and FAT
-  contents, cold-readback digest comparison, and `veritysetup verify`;
+- loopback block-image tests for unsafe-selector and in-use-device rejection,
+  exact GPT and FAT contents, cold-readback digest comparison, and
+  `veritysetup verify`, including proof that no media hardware identity enters
+  a canonical plan or receipt;
 - golden-vector and mutate-every-field tests for release intent, artifacts,
   operations, plans, approvals, intents, and staging receipts;
 - exact-campaign truncation, insertion, duplication, and reordering tests at
@@ -810,7 +883,8 @@ It must contain:
   signed manifest, and independent verification record;
 - the development signer identity and expected customer-key hash;
 - the expected EEPROM and boot-image digests;
-- the exact NVMe staging and cold-readback evidence;
+- the exact NVMe staging and cold-readback content evidence, explicitly without
+  a persistent media selector or hardware identifier;
 - the canonical complete operation plan and per-operation digests;
 - approval, claim, fence, expiry, and durable intent requirements;
 - exact operator prompts and expected observations at every physical boundary;
@@ -840,7 +914,8 @@ guard:
   board permits.
 - [ ] The exact target capsule passed the unfused `boot_ramdisk=1`
   compatibility test.
-- [ ] NVMe cold-readback digests match the manifest.
+- [ ] NVMe cold-readback digests match the manifest on a fresh attachment; this
+  is content evidence, not proof of physical-medium identity or live boot.
 - [ ] The complete plan is canonical, policy-complete, approved, audit-bound,
   target-bound, lane-bound, and fence-bound.
 - [ ] The RPIBOOT/normal-boot selector and normally-off power lane passed
@@ -874,7 +949,9 @@ only.
    close every deferred baseline check.
 4. Verify the cohort release intent, its signing-receipt lineage, the complete
    v1alpha2 signed manifest, and all artifact bytes and signatures.
-5. Stage NVMe, remove power, and reconcile the cold-readback digests.
+5. Stage the explicitly authorized, runtime-safety-checked NVMe, remove power,
+   and reconcile the cold-readback digests on a fresh attachment. Do not infer
+   physical-medium identity from this result.
 6. Complete the unfused compatibility boot and return the same target to the
    approved fresh prestate.
 7. Approve the complete ordered plan for the exact transaction, target, current
@@ -895,6 +972,10 @@ only.
     not execute, and repeat the owned-device readback afterward.
 15. Exercise every required altered, unsigned, wrong-key, recovery, alternate
     media, boot-order, and partition-walk candidate with isolated evidence.
+    For both the SD and network/TFTP fallbacks, include unsigned, wrong-key,
+    and older correctly development-key-signed candidates; record the expected
+    signed-image rollback limitation and prove that it cannot enable
+    enrollment.
 16. Demonstrate that persistent-root tampering fails before enrollment services
     or protected material can become available.
 17. Reconcile the complete station journal, central transaction, independent
@@ -941,7 +1022,8 @@ The final secret-free record must include:
   digest;
 - complete manifest and every artifact digest and size;
 - offline signature and unfused compatibility-boot results;
-- NVMe staging and cold-readback evidence;
+- NVMe staging and cold-readback content evidence, with no model, serial, WWID,
+  `/dev/disk/by-id`, or other persistent storage selector;
 - the recomputed release-intent, signed-release-manifest, operation, and plan
   digests plus approval, intent, claim, fence, and audit identifiers;
 - commit metadata with the exact expected `CUSTOMER_KEY_HASH`,
@@ -963,8 +1045,9 @@ The final secret-free record must include:
   `development_asset`, rollback `rollback_unimplemented`, and enrollment false.
 
 The evidence must be canonical, bounded, schema-validated, independently
-manifested, and free of raw target serials, target MAC addresses, private keys,
-PINs, credentials, and arbitrary target output.
+manifested, and free of boot-media model, serial, WWID, or persistent selector
+fields. Public evidence must also remain free of raw board serials, target MAC
+addresses, private keys, PINs, credentials, and arbitrary target output.
 
 Any missing, contradictory, or unverifiable required evidence prevents
 `security_applied` and produces `owned_quarantined` after the OTP boundary.
@@ -1002,8 +1085,8 @@ The sacrificial milestone does not reduce these production requirements:
 - separate human operator and approver enforcement;
 - production HSM custody, tested split-custody backup, cohort strategy, key-loss
   and compromise response, and board-replacement policy;
-- final JTAG, boot-order, recovery, self-update, and EEPROM write-protection
-  policy with post-finalization retests;
+- final JTAG, `BOOT_UART`, boot-order, recovery, self-update, and EEPROM
+  write-protection policy with post-finalization retests;
 - production station build, monitoring, update, incident, revocation, and
   retirement procedures; and
 - multi-lane isolation and scaling only after the single-lane campaign passes.

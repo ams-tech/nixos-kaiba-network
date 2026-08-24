@@ -8,18 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"path/filepath"
 	"regexp"
-	"strings"
 )
 
 const (
-	PlanSchemaVersion                = "kaiba.provisioning.rpi5-media-staging-plan/v1alpha1"
+	PlanSchemaVersion                = "kaiba.provisioning.rpi5-media-staging-plan/v1alpha2"
 	LayoutSchemaVersion              = "kaiba.provisioning.rpi5-device-media-layout/v1alpha1"
-	StageReceiptSchemaVersion        = "kaiba.provisioning.rpi5-media-stage-receipt/v1alpha1"
-	VerificationReceiptSchemaVersion = "kaiba.provisioning.rpi5-media-verification-receipt/v1alpha1"
-	ColdObservationSchemaVersion     = "kaiba.provisioning.rpi5-media-cold-power-observation/v1alpha1"
-	FinalReceiptSchemaVersion        = "kaiba.provisioning.rpi5-media-staging-receipt/v1alpha1"
+	StageReceiptSchemaVersion        = "kaiba.provisioning.rpi5-media-stage-receipt/v1alpha2"
+	VerificationReceiptSchemaVersion = "kaiba.provisioning.rpi5-media-verification-receipt/v1alpha2"
+	ColdObservationSchemaVersion     = "kaiba.provisioning.rpi5-media-cold-power-observation/v1alpha2"
+	FinalReceiptSchemaVersion        = "kaiba.provisioning.rpi5-media-staging-receipt/v1alpha2"
 	VerificationReportSchemaVersion  = "kaiba.provisioning.rpi5-media-verification-report/v1alpha1"
 
 	SectorSizeBytes    = uint64(512)
@@ -28,12 +26,12 @@ const (
 )
 
 const (
-	planDigestDomain         = "kaiba.provisioning.rpi5-media-staging-plan.v1alpha1"
+	planDigestDomain         = "kaiba.provisioning.rpi5-media-staging-plan.v1alpha2"
 	layoutDigestDomain       = "kaiba.provisioning.rpi5-device-media-layout.v1alpha1"
-	stageReceiptDigestDomain = "kaiba.provisioning.rpi5-media-stage-receipt.v1alpha1"
-	verifyReceiptDomain      = "kaiba.provisioning.rpi5-media-verification-receipt.v1alpha1"
-	coldObservationDomain    = "kaiba.provisioning.rpi5-media-cold-power-observation.v1alpha1"
-	finalReceiptDomain       = "kaiba.provisioning.rpi5-media-staging-receipt.v1alpha1"
+	stageReceiptDigestDomain = "kaiba.provisioning.rpi5-media-stage-receipt.v1alpha2"
+	verifyReceiptDomain      = "kaiba.provisioning.rpi5-media-verification-receipt.v1alpha2"
+	coldObservationDomain    = "kaiba.provisioning.rpi5-media-cold-power-observation.v1alpha2"
+	finalReceiptDomain       = "kaiba.provisioning.rpi5-media-staging-receipt.v1alpha2"
 )
 
 type SourceRole string
@@ -84,7 +82,6 @@ var (
 	identifierPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._:-]{0,127}$`)
 	guidPattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	volumeIDPattern   = regexp.MustCompile(`^[0-9a-f]{8}$`)
-	partitionAlias    = regexp.MustCompile(`-part[0-9]+$`)
 )
 
 // ReleaseBinding identifies the already complete, signer-anchored release.
@@ -95,16 +92,12 @@ type ReleaseBinding struct {
 	CapsuleDigest               Digest `json:"capsule_digest"`
 }
 
-// TargetBinding contains stable device facts. Linux disk sequence is
-// intentionally absent: it is attachment-local and belongs in phase receipts.
+// TargetBinding contains only the media geometry required by the canonical
+// layout. Physical-media selection and attachment facts are runtime safety
+// inputs and are deliberately absent from the transaction contract.
 type TargetBinding struct {
-	ByIDPath                string `json:"by_id_path"`
-	Model                   string `json:"model"`
-	Serial                  string `json:"serial"`
-	WWID                    string `json:"wwid"`
-	SizeBytes               uint64 `json:"size_bytes"`
-	LogicalSectorSizeBytes  uint64 `json:"logical_sector_size_bytes"`
-	PhysicalSectorSizeBytes uint64 `json:"physical_sector_size_bytes"`
+	SizeBytes              uint64 `json:"size_bytes"`
+	LogicalSectorSizeBytes uint64 `json:"logical_sector_size_bytes"`
 }
 
 type ArtifactBinding struct {
@@ -197,17 +190,16 @@ type Layout struct {
 	LayoutDigest    Digest          `json:"layout_digest"`
 }
 
-// Plan binds one transaction, one exact whole device, the reviewed prestate,
-// and every byte expected after staging. Runtime source paths are deliberately
-// not part of the contract; a privileged writer must resolve SourceRole values
-// only from its immutable build-time asset set.
+// Plan binds one transaction, the required target geometry, and every byte
+// expected after staging. Runtime target and source paths are deliberately not
+// part of the contract; a privileged writer must resolve them only through its
+// separately approved selector and immutable build-time asset set.
 type Plan struct {
 	SchemaVersion       string         `json:"schema_version"`
 	TransactionID       string         `json:"transaction_id"`
 	Release             ReleaseBinding `json:"release"`
 	Target              TargetBinding  `json:"target"`
 	Layout              Layout         `json:"layout"`
-	InitialMediaDigest  Digest         `json:"initial_media_digest"`
 	ExpectedMediaDigest Digest         `json:"expected_media_digest"`
 	PlanDigest          Digest         `json:"plan_digest"`
 }
@@ -215,18 +207,6 @@ type Plan struct {
 func validateIdentifier(label, value string) error {
 	if !identifierPattern.MatchString(value) {
 		return fmt.Errorf("%s must be a canonical lowercase identifier", label)
-	}
-	return nil
-}
-
-func validatePrintable(label, value string, maximum int) error {
-	if value == "" || len(value) > maximum || strings.TrimSpace(value) != value {
-		return fmt.Errorf("%s must be non-empty printable ASCII no longer than %d bytes", label, maximum)
-	}
-	for _, character := range value {
-		if character < 0x20 || character > 0x7e {
-			return fmt.Errorf("%s must contain printable ASCII", label)
-		}
 	}
 	return nil
 }
@@ -259,28 +239,11 @@ func (release ReleaseBinding) Validate() error {
 }
 
 func (target TargetBinding) Validate() error {
-	const prefix = "/dev/disk/by-id/"
-	if !strings.HasPrefix(target.ByIDPath, prefix) || filepath.Clean(target.ByIDPath) != target.ByIDPath {
-		return errors.New("target by_id_path must be a clean immediate /dev/disk/by-id path")
-	}
-	name := strings.TrimPrefix(target.ByIDPath, prefix)
-	if name == "" || name == "." || strings.Contains(name, "/") || strings.ContainsAny(name, " \t\r\n") || partitionAlias.MatchString(name) {
-		return errors.New("target by_id_path must identify one whole device, not a partition")
-	}
-	for label, value := range map[string]string{"model": target.Model, "serial": target.Serial, "wwid": target.WWID} {
-		if err := validatePrintable(label, value, 255); err != nil {
-			return err
-		}
-	}
 	if target.SizeBytes < 8*AlignmentBytes || target.SizeBytes > math.MaxInt64 || target.SizeBytes%SectorSizeBytes != 0 {
 		return errors.New("target size_bytes must be a sector-aligned supported whole-device capacity")
 	}
 	if target.LogicalSectorSizeBytes != SectorSizeBytes {
 		return fmt.Errorf("target logical_sector_size_bytes must be %d", SectorSizeBytes)
-	}
-	physical := target.PhysicalSectorSizeBytes
-	if physical < target.LogicalSectorSizeBytes || physical > 64*1024 || physical&(physical-1) != 0 {
-		return errors.New("target physical_sector_size_bytes must be a supported power of two")
 	}
 	return nil
 }
@@ -641,9 +604,6 @@ func (plan Plan) validate(requireDigest bool) error {
 	backup := regions[len(regions)-1]
 	if backup.OffsetBytes != plan.Target.SizeBytes-GPTRegionSizeBytes {
 		return errors.New("backup GPT region is not anchored to the exact end of the target")
-	}
-	if err := validateDigest("initial_media_digest", plan.InitialMediaDigest); err != nil {
-		return err
 	}
 	if err := validateDigest("expected_media_digest", plan.ExpectedMediaDigest); err != nil {
 		return err

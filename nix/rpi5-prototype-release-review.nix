@@ -10,6 +10,9 @@
 }:
 
 let
+  developmentPosture = builtins.fromJSON (
+    builtins.readFile ../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
+  );
   signingContract = developmentSigning.signing.kaibaSigning;
   planContract = signingPlan.kaibaBootSigningPlan;
   eepromPlanContract = eepromSigningPlan.kaibaRpi5EEPROMSigningPlan;
@@ -80,6 +83,7 @@ assert lib.assertMsg (
 assert lib.assertMsg (
   unsignedContract.expectedCustomerKeyHash == metadata.expectedCustomerKeyHash
   && unsignedContract.sourceRevision == metadata.sourceRevision
+  && unsignedContract.bootOrderPolicy == developmentPosture.boot_order.policy
   && unsignedContract.signingStatus == "unsigned"
 ) "the prototype unsigned artifact set differs from its reviewed release metadata";
 assert lib.assertMsg (
@@ -205,15 +209,17 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
     cmp "$release_intent/release-intent.json" "$plan/release-intent.json"
     cmp "$release_intent/release-intent.json" "$eeprom_plan/release-intent.json"
     cmp "$reviewed_key" "$eeprom_plan/public.pem"
+    cmp ${../provisioning/config/rpi5-prototype-eeprom/boot.conf} "$eeprom_plan/boot.conf"
 
     jq -e \
       --arg source_revision '${metadata.sourceRevision}' \
       --arg customer_key_hash 'sha256:${metadata.expectedCustomerKeyHash}' \
+      --arg boot_order_policy '${developmentPosture.boot_order.policy}' \
       '
         .schema == "provisioning.kaiba.network/unsigned-artifact-set/v1alpha1"
         and .source_revision == $source_revision
         and .expected_customer_key_hash == $customer_key_hash
-        and .boot_order_policy == "nvme-only"
+        and .boot_order_policy == $boot_order_policy
         and .boot_command_line_path == "nixos/default/cmdline.txt"
         and .boot_image_size_bytes == 100663296
         and .firmware_allowlist == [

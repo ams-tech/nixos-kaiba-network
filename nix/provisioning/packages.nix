@@ -1256,18 +1256,30 @@ let
           "$out/share/kaiba/schemas/rpi5-media-binding-v1alpha1.schema.json"
         ln -s ${goSource}/schemas/rpi5-media-cold-power-observation-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-media-cold-power-observation-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-cold-power-observation-v1alpha2.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-cold-power-observation-v1alpha2.schema.json"
         ln -s ${goSource}/schemas/rpi5-media-device-preflight-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-media-device-preflight-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-device-preflight-v1alpha2.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-device-preflight-v1alpha2.schema.json"
         ln -s ${goSource}/schemas/rpi5-media-fixture-result-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-media-fixture-result-v1alpha1.schema.json"
         ln -s ${goSource}/schemas/rpi5-media-stage-receipt-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-media-stage-receipt-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-stage-receipt-v1alpha2.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-stage-receipt-v1alpha2.schema.json"
         ln -s ${goSource}/schemas/rpi5-media-staging-plan-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-media-staging-plan-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-staging-plan-v1alpha2.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-staging-plan-v1alpha2.schema.json"
         ln -s ${goSource}/schemas/rpi5-media-staging-receipt-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-media-staging-receipt-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-staging-receipt-v1alpha2.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-staging-receipt-v1alpha2.schema.json"
         ln -s ${goSource}/schemas/rpi5-media-verification-receipt-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-media-verification-receipt-v1alpha1.schema.json"
+        ln -s ${goSource}/schemas/rpi5-media-verification-receipt-v1alpha2.schema.json \
+          "$out/share/kaiba/schemas/rpi5-media-verification-receipt-v1alpha2.schema.json"
         ln -s ${goSource}/schemas/rpi5-media-verification-report-v1alpha1.schema.json \
           "$out/share/kaiba/schemas/rpi5-media-verification-report-v1alpha1.schema.json"
         ln -s ${goSource}/schemas/rpi5-unfused-runtime-facts-v1alpha1.schema.json \

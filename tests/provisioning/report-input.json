@@ -12,6 +12,13 @@
         "evidence": []
       },
       {
+        "id": "rpi5-development-posture",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "The approved sacrificial Pi 5 development posture is schema-valid and artifact/configuration-bound: BOOT_ORDER=0xf216 selects NVMe, SD, TFTP, then restart; BOOT_UART=1 and ENABLE_SELF_UPDATE=0 are explicit. Policy leaves VideoCore JTAG and EEPROM write protection unlocked, and recovery is prebuilt but cannot execute before customer ownership. This software-only check makes no live hardware or enforcement claim. These settings are not production-ready; production boot/debug/write-protection values remain undecided, rollback is unimplemented, and enrollment is blocked.",
+        "evidence": []
+      },
+      {
         "id": "go-tests",
         "system": "aarch64-linux",
         "status": "not-observed",
@@ -36,7 +43,7 @@
         "id": "rpi5-production-media-contract",
         "system": "aarch64-linux",
         "status": "not-observed",
-        "description": "Complete software-only production-media contract binds the signed release, exact GPT/FAT/root/verity layout, plan-specialized writer, independent verifier, and canonical receipts without making hardware, cold-power, or security-enforcement claims.",
+        "description": "Software-only v1alpha2 production-media contract sources the operational selector from typed hardware configuration while keeping the selector and configuration ID out of plans, receipts, and evidence; it binds the signed release, exact GPT/FAT/root/verity content, and per-run geometry without media model, serial, or WWID. The linker-fixed writer and verifier retain whole-device, clear-use, and geometry guards; this makes no hardware, cold-power, or live signed-system boot-enforcement claim.",
         "evidence": []
       },
       {
@@ -110,6 +117,13 @@
         "evidence": []
       },
       {
+        "id": "rpi5-development-posture",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "The approved sacrificial Pi 5 development posture is schema-valid and artifact/configuration-bound: BOOT_ORDER=0xf216 selects NVMe, SD, TFTP, then restart; BOOT_UART=1 and ENABLE_SELF_UPDATE=0 are explicit. Policy leaves VideoCore JTAG and EEPROM write protection unlocked, and recovery is prebuilt but cannot execute before customer ownership. This software-only check makes no live hardware or enforcement claim. These settings are not production-ready; production boot/debug/write-protection values remain undecided, rollback is unimplemented, and enrollment is blocked.",
+        "evidence": []
+      },
+      {
         "id": "go-tests",
         "system": "x86_64-linux",
         "status": "passed",
@@ -134,7 +148,7 @@
         "id": "rpi5-production-media-contract",
         "system": "x86_64-linux",
         "status": "passed",
-        "description": "Complete software-only production-media contract binds the signed release, exact GPT/FAT/root/verity layout, plan-specialized writer, independent verifier, and canonical receipts without making hardware, cold-power, or security-enforcement claims.",
+        "description": "Software-only v1alpha2 production-media contract sources the operational selector from typed hardware configuration while keeping the selector and configuration ID out of plans, receipts, and evidence; it binds the signed release, exact GPT/FAT/root/verity content, and per-run geometry without media model, serial, or WWID. The linker-fixed writer and verifier retain whole-device, clear-use, and geometry guards; this makes no hardware, cold-power, or live signed-system boot-enforcement claim.",
         "evidence": []
       },
       {

@@ -13,8 +13,9 @@ import (
 type Mode string
 
 const (
-	ModeDevice  Mode = "device"
-	ModeFixture Mode = "regular_file_fixture"
+	ModeDevice         Mode = "device"
+	ModeSelectedDevice Mode = "selected_device"
+	ModeFixture        Mode = "regular_file_fixture"
 )
 
 var (
@@ -70,6 +71,22 @@ func validateTargetPath(path string, mode Mode) error {
 		name := strings.TrimPrefix(path, prefix)
 		if !strings.HasPrefix(path, prefix) || name == "" || name == "." || strings.Contains(name, "/") || partitionAlias.MatchString(name) {
 			return errors.New("device target must identify one whole-device by-id alias")
+		}
+		return nil
+	}
+	if mode == ModeSelectedDevice {
+		const byPathPrefix = "/dev/disk/by-path/"
+		if strings.HasPrefix(path, byPathPrefix) {
+			name := strings.TrimPrefix(path, byPathPrefix)
+			if name == "" || name == "." || strings.Contains(name, "/") || strings.ContainsAny(name, " \t\r\n") || partitionAlias.MatchString(name) {
+				return errors.New("selected device path must identify one whole-device by-path alias")
+			}
+			return nil
+		}
+		const devicePrefix = "/dev/"
+		name := strings.TrimPrefix(path, devicePrefix)
+		if !strings.HasPrefix(path, devicePrefix) || name == "" || name == "." || strings.Contains(name, "/") || strings.ContainsAny(name, " \t\r\n") {
+			return errors.New("selected device path must be one immediate /dev node or /dev/disk/by-path alias")
 		}
 		return nil
 	}

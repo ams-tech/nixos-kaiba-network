@@ -68,7 +68,7 @@ func TestSysfsReadersAreBoundedCanonicalAndNoFollow(t *testing.T) {
 
 func TestSameAttachmentComparesEveryInventoryFact(t *testing.T) {
 	initial := mediainventory.TargetFacts{
-		RequestedPath: "/dev/disk/by-id/example", ResolvedPath: "/dev/sda", Identity: "example",
+		RequestedPath: "/dev/disk/by-path/platform-example", ResolvedPath: "/dev/sda", Identity: "platform-example",
 		SizeBytes: 1024, Kind: mediainventory.TargetBlockDevice, WholeDevice: true,
 		DeviceNumber: 17, DiskSequence: 23, BootID: "11111111-1111-4111-8111-111111111111", SysfsPath: "/sys/devices/example",
 	}
@@ -84,6 +84,50 @@ func TestSameAttachmentComparesEveryInventoryFact(t *testing.T) {
 	current.SysfsPath += "-replacement"
 	if err := SameAttachment(initial, current); err == nil {
 		t.Fatal("SameAttachment accepted a new sysfs identity")
+	}
+}
+
+func TestReceiptTimeAttachmentCheckRejectsPostHashSelectorRebindWithReusedDeviceNumber(t *testing.T) {
+	beforeHash := mediainventory.TargetFacts{
+		RequestedPath: "/dev/disk/by-path/platform-example", ResolvedPath: "/dev/sda", Identity: "platform-example",
+		SizeBytes: 1024, Kind: mediainventory.TargetBlockDevice, WholeDevice: true,
+		DeviceNumber: 17, DiskSequence: 23, BootID: "11111111-1111-4111-8111-111111111111", SysfsPath: "/sys/devices/example",
+	}
+	selectorAfterHash := beforeHash
+	selectorAfterHash.DiskSequence++
+
+	if selectorAfterHash.DeviceNumber != beforeHash.DeviceNumber {
+		t.Fatal("test setup did not reuse the Linux device number")
+	}
+	if err := SameAttachment(beforeHash, selectorAfterHash); err == nil || !strings.Contains(err.Error(), "attachment identity changed") {
+		t.Fatalf("post-hash selector rebind error = %v", err)
+	}
+}
+
+func TestSelectedTargetFactsEnforceGeometryAndUsageWithoutMediaIdentity(t *testing.T) {
+	const selected = "/dev/disk/by-path/platform-example-nvme-1"
+	plan := mediacontract.Plan{Target: mediacontract.TargetBinding{
+		SizeBytes: 8 * mediacontract.AlignmentBytes, LogicalSectorSizeBytes: mediacontract.SectorSizeBytes,
+	}}
+	facts := mediainventory.TargetFacts{
+		RequestedPath: selected, ResolvedPath: "/dev/nvme0n1", Identity: "station-local-selector",
+		SizeBytes: plan.Target.SizeBytes, Kind: mediainventory.TargetBlockDevice, WholeDevice: true,
+		DeviceNumber: 17, DiskSequence: 23, BootID: "11111111-1111-4111-8111-111111111111", SysfsPath: "/sys/devices/example",
+	}
+	if err := validateFacts(plan, selected, facts, mediainventory.TargetUsage{}); err != nil {
+		t.Fatal(err)
+	}
+	facts.Identity = "different-non-authoritative-label"
+	if err := validateFacts(plan, selected, facts, mediainventory.TargetUsage{}); err != nil {
+		t.Fatalf("non-authoritative inventory label affected approval: %v", err)
+	}
+	facts.SizeBytes += mediacontract.SectorSizeBytes
+	if err := validateFacts(plan, selected, facts, mediainventory.TargetUsage{}); err == nil || !strings.Contains(err.Error(), "target size") {
+		t.Fatalf("exact geometry mismatch error = %v", err)
+	}
+	facts.SizeBytes = plan.Target.SizeBytes
+	if err := validateFacts(plan, selected, facts, mediainventory.TargetUsage{Mounted: true}); err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("mounted target error = %v", err)
 	}
 }
 

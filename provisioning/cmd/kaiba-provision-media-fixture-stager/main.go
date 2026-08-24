@@ -162,13 +162,6 @@ func productionStageAndEncode(ctx context.Context, plan mediacontract.Plan, targ
 			_ = closeLockedRegular(target)
 		}
 	}()
-	prestate, err := mediawriter.HashRange(ctx, target, 0, plan.Target.SizeBytes)
-	if err != nil {
-		return nil, fmt.Errorf("hash complete fixture prestate: %w", err)
-	}
-	if prestate != plan.InitialMediaDigest {
-		return nil, fmt.Errorf("complete fixture prestate digest is %s, expected %s", prestate, plan.InitialMediaDigest)
-	}
 	sources, err := mediawriter.OpenSources(ctx, plan, paths)
 	if err != nil {
 		return nil, err
