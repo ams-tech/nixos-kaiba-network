@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-media-cold-power-observation-v1alpha2.schema.json",
+  "title": "Kaiba Raspberry Pi 5 media cold-power observation v1alpha2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "observation_id",
+    "observation_mode",
+    "transaction_id",
+    "plan_digest",
+    "stage_receipt_digest",
+    "verification_receipt_digest",
+    "target",
+    "before_attachment_boot_id",
+    "before_attachment_sequence",
+    "after_attachment_boot_id",
+    "after_attachment_sequence",
+    "complete_power_removal",
+    "collector_evidence_digest",
+    "capture_authenticated",
+    "freshness_established",
+    "observation_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-media-cold-power-observation/v1alpha2"
+    },
+    "observation_id": { "$ref": "#/definitions/identifier" },
+    "observation_mode": { "const": "manual_operator_confirmation" },
+    "transaction_id": { "$ref": "#/definitions/identifier" },
+    "plan_digest": { "$ref": "#/definitions/digest" },
+    "stage_receipt_digest": { "$ref": "#/definitions/digest" },
+    "verification_receipt_digest": { "$ref": "#/definitions/digest" },
+    "target": { "$ref": "#/definitions/target_binding" },
+    "before_attachment_boot_id": { "$ref": "#/definitions/guid" },
+    "before_attachment_sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "after_attachment_boot_id": { "$ref": "#/definitions/guid" },
+    "after_attachment_sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "complete_power_removal": { "const": true },
+    "collector_evidence_digest": { "$ref": "#/definitions/digest" },
+    "capture_authenticated": { "const": false },
+    "freshness_established": { "const": false },
+    "observation_digest": { "$ref": "#/definitions/digest" }
+  },
+  "definitions": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "guid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": { "const": "00000000-0000-0000-0000-000000000000" }
+    },
+    "target_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "size_bytes",
+        "logical_sector_size_bytes"
+      ],
+      "properties": {
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 8388608,
+          "maximum": 9223372036854775807,
+          "multipleOf": 512
+        },
+        "logical_sector_size_bytes": { "const": 512 }
+      }
+    }
+  }
+}

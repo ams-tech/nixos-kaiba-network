@@ -7,6 +7,9 @@
 
 let
   cfg = config.kaiba.secureBootTarget;
+  developmentPosture = builtins.fromJSON (
+    builtins.readFile ../../../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
+  );
   evidenceDirectory = "/run/kaiba-secure-boot";
   expectedHashPattern = "[0-9a-f]{64}";
   bootEvidence = pkgs.writeShellApplication {
@@ -101,6 +104,14 @@ in
 
   config = lib.mkIf cfg.enable {
     assertions = [
+      {
+        assertion =
+          developmentPosture.approval_status == "approved-development-only"
+          && developmentPosture.production_ready == false
+          && developmentPosture.videocore_jtag.production_blocker
+          && developmentPosture.eeprom_write_protection.production_blocker;
+        message = "the canonical Raspberry Pi 5 posture must remain development-only";
+      }
       {
         assertion = builtins.match expectedHashPattern cfg.expectedCustomerKeyHash != null;
         message = "kaiba.secureBootTarget.expectedCustomerKeyHash must be one lowercase SHA-256 digest";
@@ -226,14 +237,15 @@ in
       systemPackages = [ bootEvidence ];
       etc."kaiba-provisioning/target-policy.json".text = builtins.toJSON {
         schema = "provisioning.kaiba.network/target-policy/v1alpha1";
+        development_posture_id = developmentPosture.posture_id;
         source_revision = cfg.sourceRevision;
         expected_customer_key_hash = "sha256:${cfg.expectedCustomerKeyHash}";
         persistent_root = "dm-verity";
         mutable_state = "tmpfs-only";
         rollback_gate = "unimplemented";
         enrollment_ready = false;
-        videocore_jtag = "unlocked-development";
-        eeprom_write_protection = "unlocked-development";
+        videocore_jtag = developmentPosture.videocore_jtag.policy;
+        eeprom_write_protection = developmentPosture.eeprom_write_protection.policy;
       };
     };
 

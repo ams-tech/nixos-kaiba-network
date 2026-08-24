@@ -3,10 +3,15 @@
   pkgs,
 }:
 
+let
+  developmentPosture = builtins.fromJSON (
+    builtins.readFile ../../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
+  );
+in
 {
   bootCommandLinePath ? "cmdline.txt",
   bootImageSizeMiB ? 96,
-  bootOrderPolicy ? "nvme-only",
+  bootOrderPolicy ? developmentPosture.boot_order.policy,
   expectedCustomerKeyHash,
   firmwareAllowlist,
   firmwareTree,
@@ -66,8 +71,8 @@ assert lib.assertMsg (
   && lib.elem bootCommandLinePath firmwareAllowlist
 ) "bootCommandLinePath must name one canonical regular file in firmwareAllowlist";
 assert lib.assertMsg (
-  builtins.match "[a-z][a-z0-9-]{0,63}" bootOrderPolicy != null
-) "bootOrderPolicy must be a lowercase policy identifier";
+  bootOrderPolicy == developmentPosture.boot_order.policy
+) "bootOrderPolicy must match the approved sacrificial development posture";
 assert lib.assertMsg (
   builtins.isString sourceRevision
   && builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" sourceRevision != null

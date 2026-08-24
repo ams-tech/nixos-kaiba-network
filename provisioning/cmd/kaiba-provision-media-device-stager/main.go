@@ -29,11 +29,12 @@ const (
 	exitUsage    = 2
 	exitInvalid  = 3
 
-	devicePreflightSchemaVersion = "kaiba.provisioning.rpi5-media-device-preflight/v1alpha1"
+	devicePreflightSchemaVersion = "kaiba.provisioning.rpi5-media-device-preflight/v1alpha2"
 )
 
-// Nix must linker-fix all five variables to immutable reviewed store assets.
-// There are deliberately no flag or environment fallbacks.
+// Nix must linker-fix the source and plan variables to immutable reviewed store
+// assets and targetDevicePath to one explicit station-local selector. There are
+// deliberately no flag or environment fallbacks.
 var (
 	primaryGPTPath     string
 	bootFilesystemPath string
@@ -41,6 +42,7 @@ var (
 	rootHashPath       string
 	backupGPTPath      string
 	approvedPlanPath   string
+	targetDevicePath   string
 )
 
 var (
@@ -54,19 +56,19 @@ var (
 )
 
 type devicePreflight struct {
-	SchemaVersion        string                      `json:"schema_version"`
-	Status               string                      `json:"status"`
-	EvidenceMode         string                      `json:"evidence_mode"`
-	PlanDigest           mediacontract.Digest        `json:"plan_digest"`
-	Target               mediacontract.TargetBinding `json:"target"`
-	AttachmentBootID     string                      `json:"attachment_boot_id"`
-	AttachmentSequence   uint64                      `json:"attachment_sequence"`
-	InitialMediaDigest   mediacontract.Digest        `json:"initial_media_digest"`
-	FullPrestateVerified bool                        `json:"full_prestate_verified"`
-	SourcesVerified      bool                        `json:"sources_verified"`
-	TargetUsageClear     bool                        `json:"target_usage_clear"`
-	TargetLocked         bool                        `json:"target_locked"`
-	WritePerformed       bool                        `json:"write_performed"`
+	SchemaVersion          string                      `json:"schema_version"`
+	Status                 string                      `json:"status"`
+	EvidenceMode           string                      `json:"evidence_mode"`
+	PlanDigest             mediacontract.Digest        `json:"plan_digest"`
+	Target                 mediacontract.TargetBinding `json:"target"`
+	AttachmentBootID       string                      `json:"attachment_boot_id"`
+	AttachmentSequence     uint64                      `json:"attachment_sequence"`
+	SourcesVerified        bool                        `json:"sources_verified"`
+	TargetUsageClear       bool                        `json:"target_usage_clear"`
+	TargetWholeDevice      bool                        `json:"target_whole_device"`
+	TargetGeometryVerified bool                        `json:"target_geometry_verified"`
+	TargetLocked           bool                        `json:"target_locked"`
+	WritePerformed         bool                        `json:"write_performed"`
 }
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
@@ -160,7 +162,7 @@ func productionDryRunAndEncode(ctx context.Context, plan mediacontract.Plan) ([]
 		return nil, err
 	}
 	inspector := mediadevice.Inspector{}
-	facts, err := inspector.InspectApproved(ctx, plan)
+	facts, err := inspector.InspectSelected(ctx, plan, targetDevicePath)
 	if err != nil {
 		return nil, err
 	}
@@ -169,19 +171,12 @@ func productionDryRunAndEncode(ctx context.Context, plan mediacontract.Plan) ([]
 		return nil, err
 	}
 	defer mediadevice.CloseLocked(target) //nolint:errcheck
-	prestate, err := mediadevice.HashRange(ctx, target, 0, facts.SizeBytes)
-	if err != nil {
-		return nil, fmt.Errorf("hash complete target prestate: %w", err)
-	}
-	if prestate != plan.InitialMediaDigest {
-		return nil, fmt.Errorf("complete target prestate digest is %s, expected %s", prestate, plan.InitialMediaDigest)
-	}
 	sources, err := mediawriter.OpenSources(ctx, plan, paths)
 	if err != nil {
 		return nil, err
 	}
 	defer sources.Close() //nolint:errcheck
-	current, err := inspector.ReinspectSame(ctx, plan, facts)
+	current, err := inspector.ReinspectSame(ctx, plan, targetDevicePath, facts)
 	if err != nil {
 		return nil, err
 	}
@@ -191,8 +186,8 @@ func productionDryRunAndEncode(ctx context.Context, plan mediacontract.Plan) ([]
 	report := devicePreflight{
 		SchemaVersion: devicePreflightSchemaVersion, Status: "validated_no_write", EvidenceMode: "device_preflight",
 		PlanDigest: plan.PlanDigest, Target: plan.Target, AttachmentBootID: facts.BootID, AttachmentSequence: facts.DiskSequence,
-		InitialMediaDigest: prestate, FullPrestateVerified: true, SourcesVerified: true,
-		TargetUsageClear: true, TargetLocked: true, WritePerformed: false,
+		SourcesVerified: true, TargetUsageClear: true, TargetWholeDevice: true,
+		TargetGeometryVerified: true, TargetLocked: true, WritePerformed: false,
 	}
 	return json.Marshal(report)
 }
@@ -203,7 +198,7 @@ func productionStageAndEncode(ctx context.Context, plan mediacontract.Plan) ([]b
 		return nil, err
 	}
 	inspector := mediadevice.Inspector{}
-	facts, err := inspector.InspectApproved(ctx, plan)
+	facts, err := inspector.InspectSelected(ctx, plan, targetDevicePath)
 	if err != nil {
 		return nil, err
 	}
@@ -217,13 +212,6 @@ func productionStageAndEncode(ctx context.Context, plan mediacontract.Plan) ([]b
 			_ = mediadevice.CloseLocked(target)
 		}
 	}()
-	prestate, err := mediadevice.HashRange(ctx, target, 0, facts.SizeBytes)
-	if err != nil {
-		return nil, fmt.Errorf("hash complete target prestate: %w", err)
-	}
-	if prestate != plan.InitialMediaDigest {
-		return nil, fmt.Errorf("complete target prestate digest is %s, expected %s", prestate, plan.InitialMediaDigest)
-	}
 	sources, err := mediawriter.OpenSources(ctx, plan, paths)
 	if err != nil {
 		return nil, err
@@ -234,7 +222,7 @@ func productionStageAndEncode(ctx context.Context, plan mediacontract.Plan) ([]b
 			_ = sources.Close()
 		}
 	}()
-	current, err := inspector.ReinspectSame(ctx, plan, facts)
+	current, err := inspector.ReinspectSame(ctx, plan, targetDevicePath, facts)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +246,7 @@ func productionStageAndEncode(ctx context.Context, plan mediacontract.Plan) ([]b
 	if err := mediadevice.ValidateOpened(target, current); err != nil {
 		return ambiguous(fmt.Errorf("revalidate staged target: %w", err))
 	}
-	if _, err := inspector.ReinspectSame(ctx, plan, current); err != nil {
+	if _, err := inspector.ReinspectSame(ctx, plan, targetDevicePath, current); err != nil {
 		return ambiguous(fmt.Errorf("reinspect staged target: %w", err))
 	}
 	if err := mediadevice.CloseLocked(target); err != nil {
@@ -272,7 +260,7 @@ func productionStageAndEncode(ctx context.Context, plan mediacontract.Plan) ([]b
 	}
 	sourcesOpen = false
 
-	reopenedFacts, err := inspector.ReinspectSame(ctx, plan, facts)
+	reopenedFacts, err := inspector.ReinspectSame(ctx, plan, targetDevicePath, facts)
 	if err != nil {
 		return ambiguous(fmt.Errorf("reinspect target for same-phase readback: %w", err))
 	}
@@ -290,18 +278,22 @@ func productionStageAndEncode(ctx context.Context, plan mediacontract.Plan) ([]b
 	if err != nil {
 		return ambiguous(fmt.Errorf("hash reopened complete target: %w", err))
 	}
+	receiptFacts, err := inspector.ReinspectSame(ctx, plan, targetDevicePath, reopenedFacts)
+	if err != nil {
+		return ambiguous(fmt.Errorf("reinspect reopened target after final hash: %w", err))
+	}
+	if err := mediadevice.ValidateOpened(readback, receiptFacts); err != nil {
+		return ambiguous(fmt.Errorf("revalidate reopened target after final hash: %w", err))
+	}
 	if observed != plan.ExpectedMediaDigest {
 		return ambiguous(fmt.Errorf("reopened complete target digest is %s, expected %s", observed, plan.ExpectedMediaDigest))
-	}
-	if err := mediadevice.ValidateOpened(readback, reopenedFacts); err != nil {
-		return ambiguous(fmt.Errorf("revalidate reopened target: %w", err))
 	}
 	if err := mediadevice.CloseLocked(readback); err != nil {
 		readbackOpen = false
 		return ambiguous(fmt.Errorf("close reopened target: %w", err))
 	}
 	readbackOpen = false
-	receipt, err := mediacontract.NewStageReceipt(plan, facts.BootID, facts.DiskSequence, observed)
+	receipt, err := mediacontract.NewStageReceipt(plan, receiptFacts.BootID, receiptFacts.DiskSequence, observed)
 	if err != nil {
 		return ambiguous(fmt.Errorf("construct stage receipt: %w", err))
 	}

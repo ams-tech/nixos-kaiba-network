@@ -23,15 +23,13 @@ let
     && !(lib.hasSuffix "/.." value);
   storeBacked =
     value: cleanAbsolute (toString value) && lib.hasPrefix "${builtins.storeDir}/" (toString value);
-  printable = value: builtins.isString value && builtins.match "[ -~]{1,128}" value != null;
-  trimmedPrintable =
+  canonicalSelectedDevice =
     value:
-    printable value
-    && (builtins.match "[!-~]" value != null || builtins.match "[!-~][ -~]*[!-~]" value != null);
-  canonicalByID =
-    value:
-    cleanAbsolute value
-    && builtins.match "/dev/disk/by-id/[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}" value != null
+    builtins.isString value
+    && (
+      builtins.match "/dev/[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}" value != null
+      || builtins.match "/dev/disk/by-path/[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}" value != null
+    )
     && builtins.match ".*-part[0-9]+" value == null;
   canonicalGUID =
     value:
@@ -55,7 +53,7 @@ let
       verifiedSignedRelease,
       transactionID,
       target,
-      initialMediaDigest,
+      hardwareConfiguration,
       bootFilesystemSizeMiB ? 128,
       name ? "kaiba-rpi5-production-media",
     }:
@@ -66,53 +64,50 @@ let
     ) "verifiedSignedRelease must be produced by mkRpi5VerifiedSignedRelease";
     assert lib.assertMsg (canonicalIdentifier transactionID)
       "transactionID must be one canonical lowercase identifier";
-    assert lib.assertMsg (canonicalDigest initialMediaDigest)
-      "initialMediaDigest must use canonical sha256:<64 lowercase hex> form";
-    assert lib.assertMsg (builtins.isAttrs target)
-      "target must be the exact typed physical-media binding";
-    assert lib.assertMsg
-      (
-        builtins.attrNames target == [
-          "byIDPath"
-          "logicalSectorSizeBytes"
-          "model"
-          "physicalSectorSizeBytes"
-          "serial"
-          "sizeBytes"
-          "wwid"
-        ]
-      )
-      "target must contain exactly byIDPath, model, serial, wwid, sizeBytes, logicalSectorSizeBytes, and physicalSectorSizeBytes";
-    assert lib.assertMsg (canonicalByID target.byIDPath)
-      "target.byIDPath must name one canonical whole device below /dev/disk/by-id";
-    assert lib.assertMsg (lib.all trimmedPrintable [
-      target.model
-      target.serial
-      target.wwid
-    ]) "target model, serial, and wwid must be trimmed non-empty printable ASCII";
+    assert lib.assertMsg (builtins.isAttrs hardwareConfiguration)
+      "hardwareConfiguration must be one typed hardware configuration";
+    assert lib.assertMsg (
+      builtins.attrNames hardwareConfiguration == [
+        "configurationID"
+        "schemaVersion"
+        "targetMedia"
+      ]
+    ) "hardwareConfiguration must contain exactly schemaVersion, configurationID, and targetMedia";
+    assert lib.assertMsg (
+      hardwareConfiguration.schemaVersion == "kaiba.provisioning.hardware-configuration/v1alpha1"
+    ) "hardwareConfiguration must use the supported v1alpha1 schema";
+    assert lib.assertMsg (canonicalIdentifier hardwareConfiguration.configurationID)
+      "hardwareConfiguration.configurationID must be one canonical lowercase identifier";
+    assert lib.assertMsg (
+      builtins.isAttrs hardwareConfiguration.targetMedia
+      && builtins.attrNames hardwareConfiguration.targetMedia == [ "devicePath" ]
+    ) "hardwareConfiguration.targetMedia must contain exactly devicePath";
+    assert lib.assertMsg (canonicalSelectedDevice hardwareConfiguration.targetMedia.devicePath)
+      "hardwareConfiguration.targetMedia.devicePath must be one configured raw /dev node or /dev/disk/by-path selector";
+    assert lib.assertMsg (builtins.isAttrs target) "target must be the typed per-run geometry";
+    assert lib.assertMsg (
+      builtins.attrNames target == [
+        "logicalSectorSizeBytes"
+        "sizeBytes"
+      ]
+    ) "target must contain exactly sizeBytes and logicalSectorSizeBytes";
     assert lib.assertMsg (
       builtins.isInt target.sizeBytes
       && target.sizeBytes >= 8 * 1024 * 1024
       && target.sizeBytes <= 9223372036854775807
       && builtins.isInt target.logicalSectorSizeBytes
       && target.logicalSectorSizeBytes == 512
-      && builtins.isInt target.physicalSectorSizeBytes
-      && lib.elem target.physicalSectorSizeBytes [
-        512
-        1024
-        2048
-        4096
-        8192
-        16384
-        32768
-        65536
-      ]
       && lib.mod target.sizeBytes target.logicalSectorSizeBytes == 0
-    ) "target capacity and sector sizes must use the frozen 512-byte logical-sector contract";
+    ) "target capacity must be supported and use the per-run 512-byte logical-sector layout";
     assert lib.assertMsg (
       builtins.isInt bootFilesystemSizeMiB && bootFilesystemSizeMiB >= 64 && bootFilesystemSizeMiB <= 256
     ) "bootFilesystemSizeMiB must be an integer from 64 through 256";
     let
+      hardwareConfigurationID = hardwareConfiguration.configurationID;
+      targetDevicePath = hardwareConfiguration.targetMedia.devicePath;
+      targetGeometry = {
+        inherit (target) logicalSectorSizeBytes sizeBytes;
+      };
       releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
       unsignedArtifacts = releaseContract.unsignedArtifacts or null;
       unsignedContract =
@@ -198,14 +193,13 @@ let
             passthru.kaibaRpi5ProductionMediaAssets = {
               inherit
                 bootFilesystemSizeMiB
-                initialMediaDigest
+                targetGeometry
                 transactionID
-                target
                 verifiedSignedRelease
                 ;
               rootDataPartitionGUID = dataGUID;
               rootHashPartitionGUID = hashGUID;
-              schemaVersion = "kaiba.provisioning.rpi5-media-staging-plan/v1alpha1";
+              schemaVersion = "kaiba.provisioning.rpi5-media-staging-plan/v1alpha2";
             };
           }
           ''
@@ -293,7 +287,7 @@ let
                 printf '%s\0%s\0%s\0%s\0' \
                   "$manifest_digest" \
                   ${lib.escapeShellArg transactionID} \
-                  ${lib.escapeShellArg target.byIDPath} \
+                  'per-run-geometry' \
                   "$target_size_bytes"
               } | sha256sum | cut -d ' ' -f 1)"
               printf '%s-%s-4%s-8%s-%s' \
@@ -584,20 +578,14 @@ let
 
             jq -cjn \
               --slurpfile layout "$out/layout.json" \
-              --arg schema_version 'kaiba.provisioning.rpi5-media-staging-plan/v1alpha1' \
+              --arg schema_version 'kaiba.provisioning.rpi5-media-staging-plan/v1alpha2' \
               --arg transaction_id ${lib.escapeShellArg transactionID} \
               --arg release_id "$release_id" \
               --arg manifest_digest "$manifest_digest" \
               --arg capsule_digest "$capsule_digest" \
-              --arg by_id_path ${lib.escapeShellArg target.byIDPath} \
-              --arg model ${lib.escapeShellArg target.model} \
-              --arg serial ${lib.escapeShellArg target.serial} \
-              --arg wwid ${lib.escapeShellArg target.wwid} \
-              --arg initial_digest ${lib.escapeShellArg initialMediaDigest} \
               --arg expected_digest "$expected_media_digest" \
               --argjson size_bytes ${toString target.sizeBytes} \
               --argjson logical_sector ${toString target.logicalSectorSizeBytes} \
-              --argjson physical_sector ${toString target.physicalSectorSizeBytes} \
               '{
                 schema_version: $schema_version,
                 transaction_id: $transaction_id,
@@ -607,21 +595,15 @@ let
                   capsule_digest: $capsule_digest
                 },
                 target: {
-                  by_id_path: $by_id_path,
-                  model: $model,
-                  serial: $serial,
-                  wwid: $wwid,
                   size_bytes: $size_bytes,
-                  logical_sector_size_bytes: $logical_sector,
-                  physical_sector_size_bytes: $physical_sector
+                  logical_sector_size_bytes: $logical_sector
                 },
                 layout: $layout[0],
-                initial_media_digest: $initial_digest,
                 expected_media_digest: $expected_digest,
                 plan_digest: ""
               }' > "$TMPDIR/plan-material.json"
             readonly plan_digest="sha256:$({
-              printf '%s\0' 'kaiba.provisioning.rpi5-media-staging-plan.v1alpha1'
+              printf '%s\0' 'kaiba.provisioning.rpi5-media-staging-plan.v1alpha2'
               cat "$TMPDIR/plan-material.json"
             } | sha256sum | cut -d ' ' -f 1)"
             jq -cj --arg digest "$plan_digest" '.plan_digest = $digest' \
@@ -641,7 +623,7 @@ let
               "$out/layout.json"
             check-jsonschema \
               --base-uri file://${moduleRoot}/schemas/ \
-              --schemafile ${moduleRoot}/schemas/rpi5-media-staging-plan-v1alpha1.schema.json \
+              --schemafile ${moduleRoot}/schemas/rpi5-media-staging-plan-v1alpha2.schema.json \
               "$out/plan.json"
 
             chmod 0444 \
@@ -671,20 +653,23 @@ let
         "-X=main.signedReleasePath=${verifiedSignedRelease}"
         "-X=main.mtypePath=${fixedMType}/bin/mtype"
       ];
+      selectedDeviceLDFlag = "-X=main.targetDevicePath=${targetDevicePath}";
 
       deviceStager = pkgs.buildGoModule {
         pname = "${name}-device-stager";
         inherit version;
         src = moduleRoot;
         subPackages = [ "cmd/kaiba-provision-media-device-stager" ];
-        ldflags = commonAssetLDFlags;
+        ldflags = commonAssetLDFlags ++ [ selectedDeviceLDFlag ];
         vendorHash = null;
         doCheck = false;
         passthru.kaibaMediaDeviceStager = {
           approvedPlan = "${assets}/plan.json";
           blockDeviceWriteCapable = true;
+          configuredSelectorMode = "operational_path_not_media_identity";
           fixtureModeAvailable = false;
-          mutationScope = "one_linker_fixed_whole_device";
+          inherit hardwareConfigurationID;
+          mutationScope = "one_linker_fixed_operational_device_path";
           oneTimeSettingCapable = false;
           otpCapable = false;
           eepromProgrammingCapable = false;
@@ -701,13 +686,15 @@ let
         inherit version;
         src = moduleRoot;
         subPackages = [ "cmd/kaiba-provision-media-device-verifier" ];
-        ldflags = verifierLDFlags;
+        ldflags = verifierLDFlags ++ [ selectedDeviceLDFlag ];
         vendorHash = null;
         doCheck = false;
         passthru.kaibaMediaDeviceVerifier = {
           approvedPlan = "${assets}/plan.json";
           blockDeviceReadCapable = true;
           blockDeviceWriteCapable = false;
+          configuredSelectorMode = "operational_path_not_media_identity";
+          inherit hardwareConfigurationID;
           independentAttachmentRequired = true;
           releaseLineageVerifier = verifiedSignedRelease;
           mutationCapable = false;
@@ -786,7 +773,7 @@ let
               truncate --size="$target_size" "$target"
 
               # Exercise the actual linker-specialized staging path, including
-              # complete prestate hashing, immutable source validation, ordered
+              # geometry validation, immutable source validation, ordered
               # durable writes, close/reopen, and full-media readback.
               ${fixtureStager}/bin/kaiba-provision-media-fixture-stager stage \
                 --plan ${assets}/plan.json \
@@ -884,10 +871,10 @@ let
               deviceStager
               deviceVerifier
               fixtureStager
-              initialMediaDigest
+              hardwareConfigurationID
               regularVerifier
               softwareCheck
-              target
+              targetGeometry
               transactionID
               verifiedSignedRelease
               ;
@@ -901,7 +888,7 @@ let
             mutationCapable = false;
             oneTimeSettingCapable = false;
             otpCapable = false;
-            schemaVersion = "kaiba.provisioning.rpi5-media-staging-plan/v1alpha1";
+            schemaVersion = "kaiba.provisioning.rpi5-media-staging-plan/v1alpha2";
             signingAuthorityConfigured = false;
             verificationMode = "pure_offline_plan_derivation";
           };

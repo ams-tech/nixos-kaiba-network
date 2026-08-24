@@ -14,6 +14,7 @@
         "aarch64-linux"
       ];
       forAllSystems = lib.genAttrs systems;
+      hardwareConfigurations = import ../../provisioning/config/hardware;
 
       packagesFor =
         system:
@@ -42,7 +43,7 @@
           pkgs = import nixpkgs { inherit system; };
         in
         import ../../tests/provisioning/packages.nix {
-          inherit pkgs lib;
+          inherit hardwareConfigurations pkgs lib;
           built = packagesFor system;
           kaibaModules = modules;
         };
@@ -51,6 +52,8 @@
       nixosModules = modules;
 
       lib = {
+        inherit hardwareConfigurations;
+
         mkRpi5SecureBootArtifacts =
           { system, ... }@args:
           let
@@ -178,6 +181,7 @@
           unit = built.suite;
           development-yubikey-signing = provisioning.developmentYubiKeySigningContract;
           device-profile-schema = provisioning.deviceProfileSchema;
+          rpi5-development-posture = provisioning.developmentPostureContract;
           module-eval = provisioning.moduleEval;
           provisioning-test-result = provisioning.provisioningTestResult;
           rpi5-probe-bundle = provisioning.probeBundleIntegrity;

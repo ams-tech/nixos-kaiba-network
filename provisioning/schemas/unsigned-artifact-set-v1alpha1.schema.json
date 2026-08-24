@@ -35,7 +35,10 @@
     "expected_customer_key_hash": { "$ref": "#/$defs/digest" },
     "boot_order_policy": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+      "enum": [
+        "nvme-only",
+        "nvme-sd-tftp-restart-development"
+      ]
     },
     "boot_command_line_path": { "$ref": "#/$defs/relative_path" },
     "firmware_allowlist": {

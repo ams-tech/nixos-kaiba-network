@@ -71,11 +71,54 @@ storage keys are separate future operations.
 `qualified_fresh_candidate` means only that the board passed the current
 profile's observable baseline: the customer-key hash is exactly zero and
 VideoCore JTAG is unlocked. The current probe does not establish other customer
-OTP, device-private-key rows, EEPROM contents or write protection, attached
-storage, inventory ownership, firmware authenticity, or every debug path.
-Those are separate preconditions for a real transaction. A non-zero unexpected
-customer-key hash is foreign ownership and must cause quarantine; it is not an
-acceptable variant of fresh.
+OTP, device-private-key rows, EEPROM contents or write protection, destructive
+authorization for selected storage, inventory ownership, firmware authenticity,
+or every debug path. Those are separate preconditions for a real transaction.
+The storage precondition is authorization and write safety, not appraisal or
+identity binding. A non-zero unexpected customer-key hash is foreign ownership
+and must cause quarantine; it is not an acceptable variant of fresh.
+
+### Approved posture for the sacrificial development unit
+
+The one-unit development ceremony has this explicit, non-production posture:
+
+- `BOOT_ORDER=0xf216` is read from right to left and tries NVMe (`6`), then SD
+  (`1`), then network/TFTP (`2`), then restarts the sequence (`f`);
+- `ENABLE_SELF_UPDATE=0` disables automatic bootloader self-update scanning;
+  it does not prevent a separately authorized RPIBOOT update or make an
+  otherwise writable EEPROM immutable;
+- VideoCore JTAG and EEPROM hardware write protection remain unlocked;
+- the initial EEPROM/key change is one transaction-bound, one-shot fresh-board
+  RPIBOOT commit with an exact prestate and signed EEPROM, followed by direct
+  readback; an uncertain result is never retried;
+- the recovery bundle is built and independently verified before ownership,
+  but execution is forbidden until the board is owned by the customer key;
+  owned-device recovery then uses only that narrowly capable,
+  customer-key-signed RPIBOOT bundle;
+- the persistent root is read-only and dm-verity protected, with permitted
+  mutable state held only in tmpfs; and
+- monotonic anti-rollback remains unimplemented, the device stops at
+  `security_applied`, and enrollment remains blocked.
+
+Boot-media hardware identity is not a trust input. Neither the development
+posture nor the intended production chain authenticates an NVMe model, serial,
+WWID, or `/dev/disk/by-id` value. The provisioning writer uses exact per-run
+capacity and a 512-byte logical sector only to construct and safely write the
+layout. Its station-local raw-device selector comes from a versioned, typed
+hardware configuration; the checked-in sacrificial-development configuration
+selects `/dev/nvme0n1`, but neither its selector nor configuration ID appears in
+canonical plans, receipts, or evidence. Trust in the running system must
+eventually come from observing and enforcing the signed boot and root-integrity
+chain, not from identifying the medium. That live enforcement remains a later
+hardware goal for the current development milestone.
+
+The development boot order and unlocked VideoCore JTAG are **not
+production-ready**. Production values for both are undecided and require
+separate review and qualification before any real production device. The
+existing `BOOT_UART=1` is also an unreviewed development setting and production
+blocker, not an approved production value. This development approval does not
+close the exact-board EEPROM, OTP, per-run destructive storage authorization,
+inventory, firmware-authenticity, or alternate-debug checks.
 
 ## What native Pi secure boot does
 
@@ -271,7 +314,12 @@ operation, authoritative readback, and a secret-free result.
   a customer counter-signature never execute. Isolate each candidate source or
   reconcile the digest of the image that actually ran; an approved fallback OS
   may legitimately boot after the bad candidate is rejected. Exercise every
-  enabled `BOOT_ORDER` path and partition-walk candidate.
+  enabled `BOOT_ORDER` path and partition-walk candidate. In particular,
+  isolate both SD and network/TFTP and test unsigned and wrong-key images plus
+  an older correctly development-key-signed image on each. The first two must
+  not execute; the correctly signed rollback case may execute and must prove
+  that enrollment remains blocked rather than be reported as a signature
+  rejection.
 - [ ] Demonstrate that persistent-system tampering fails before enrollment
   services and protected device material become available.
 - [ ] Demonstrate that the approved rollback gate rejects an older but validly
@@ -372,8 +420,9 @@ paths, digests, lane devices, and an explicit mutation flag.
 Production still requires hardware execution and evidence on the qualified
 rig, a distinct owned-device profile and signed probe bundle, independently
 monotonic anti-rollback, encrypted mutable state, device identity enrollment,
-production key backup/rotation, final debug/write-protection policy, and the
-complete positive, negative, power-loss, recovery, and quarantine campaign.
+production key backup/rotation, final JTAG, `BOOT_UART`, boot-order,
+self-update, recovery, and write-protection policy, and the complete positive,
+negative, power-loss, recovery, and quarantine campaign.
 
 The official [Raspberry Pi Secure Boot Provisioner] is a useful maintained
 reference for the vendor-supported provisioning flow, HSM signing, encrypted

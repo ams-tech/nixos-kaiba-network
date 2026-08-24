@@ -40,6 +40,9 @@
         "aarch64-linux"
       ];
       forAllSystems = lib.genAttrs systems;
+      rpi5DevelopmentPosture = builtins.fromJSON (
+        builtins.readFile ./provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
+      );
 
       sourceRevision =
         if self ? rev then
@@ -88,7 +91,7 @@
         {
           expectedCustomerKeyHash,
           bootImageSizeMiB ? 96,
-          bootOrderPolicy ? "nvme-only",
+          bootOrderPolicy ? rpi5DevelopmentPosture.boot_order.policy,
           rootDataPartitionGUID ? "bdd5be20-f7ea-56e7-ae90-4465ae950596",
           rootHashPartitionGUID ? "62616022-71fb-5036-8cc4-b7949cc6e52c",
           sourceRevision ? defaultTargetSourceRevision,
@@ -393,6 +396,7 @@
           unit = self.packages.${system}.default;
           development-yubikey-signing = provisioning.checks.${system}.development-yubikey-signing;
           device-profile-schema = provisioning.checks.${system}.device-profile-schema;
+          rpi5-development-posture = provisioning.checks.${system}.rpi5-development-posture;
           rpi5-probe-bundle = provisioning.checks.${system}.rpi5-probe-bundle;
           module-eval = moduleEval;
           provisioning-test-result = provisioning.checks.${system}.provisioning-test-result;

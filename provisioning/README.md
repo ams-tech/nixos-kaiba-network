@@ -62,9 +62,16 @@ Normal-boot signing additionally uses `lib.mkRpi5BootSigningPlan` and
 A signer-verified capsule can be wrapped in a
 deterministic outer FAT/GPT regular-file rehearsal with
 `lib.mkRpi5MediaStagingFixture`. A complete content-addressed signed release can
-instead be bound to one exact whole-device identity, full GPT/FAT/root/verity
-layout, and plan-specialized writer/verifier pair with
-`lib.mkRpi5ProductionMedia`; see the
+instead be bound to exact per-run capacity and 512-byte logical-sector geometry,
+the full GPT/FAT/root/verity layout, and a plan-specialized writer/verifier pair
+with `lib.mkRpi5ProductionMedia`. The station-local raw whole-device or
+`/dev/disk/by-path` selector comes from the versioned, typed catalog in
+`config/hardware/` and is linker-fixed into the writer and verifier. The
+catalog is exposed as `lib.hardwareConfigurations`; its checked-in
+`raspberryPi5SacrificialDevelopment` entry selects `/dev/nvme0n1`. The selector
+and hardware-configuration ID are absent from canonical plans, receipts, and
+evidence; storage model, serial, WWID, `/dev/disk/by-id`, physical sector size,
+and initial contents are not trust inputs. See the
 [signed-boot workflow](../docs/raspberry-pi-5-signed-boot-workflow.md) and
 [target-media staging contracts](../docs/target-media-staging-prototype.md).
 

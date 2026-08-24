@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-development-posture-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 sacrificial development posture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "posture_id",
+    "device_class",
+    "approval_status",
+    "scope",
+    "release_classification",
+    "production_ready",
+    "videocore_jtag",
+    "boot_order",
+    "boot_uart",
+    "initial_eeprom_update",
+    "eeprom_write_protection",
+    "recovery",
+    "self_update",
+    "root_integrity",
+    "rollback",
+    "lifecycle",
+    "production_blockers"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "provisioning.kaiba.network/rpi5-development-posture/v1alpha1"
+    },
+    "posture_id": {
+      "const": "raspberry-pi-5-sacrificial-development-v1alpha1"
+    },
+    "device_class": {
+      "const": "raspberry-pi-5-model-b-v1alpha1"
+    },
+    "approval_status": {
+      "const": "approved-development-only"
+    },
+    "scope": {
+      "const": "one-sacrificial-development-unit"
+    },
+    "release_classification": {
+      "const": "development_asset"
+    },
+    "production_ready": {
+      "const": false
+    },
+    "videocore_jtag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "production_value", "production_blocker"],
+      "properties": {
+        "policy": { "const": "unlocked-development" },
+        "production_value": { "const": "undecided-requires-qualification" },
+        "production_blocker": { "const": true }
+      }
+    },
+    "boot_order": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "evaluation",
+        "sequence",
+        "policy",
+        "production_value",
+        "production_blocker"
+      ],
+      "properties": {
+        "value": { "const": "0xf216" },
+        "evaluation": { "const": "right-to-left" },
+        "sequence": {
+          "const": ["nvme", "sd", "network-tftp", "restart"]
+        },
+        "policy": { "const": "nvme-sd-tftp-restart-development" },
+        "production_value": { "const": "undecided-requires-qualification" },
+        "production_blocker": { "const": true }
+      }
+    },
+    "boot_uart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "review_status", "production_value", "production_blocker"],
+      "properties": {
+        "value": { "const": 1 },
+        "review_status": { "const": "unreviewed-existing-development-setting" },
+        "production_value": { "const": "undecided-requires-qualification" },
+        "production_blocker": { "const": true }
+      }
+    },
+    "initial_eeprom_update": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "fresh_board_only",
+        "exact_target_and_release_binding_required",
+        "expected_prestate_required",
+        "signed_eeprom_required",
+        "post_write_readback_required",
+        "reconciliation_required",
+        "retry_after_uncertain_result",
+        "other_updaters_permitted"
+      ],
+      "properties": {
+        "policy": { "const": "transaction-bound-one-shot-fresh-board-rpiboot" },
+        "fresh_board_only": { "const": true },
+        "exact_target_and_release_binding_required": { "const": true },
+        "expected_prestate_required": { "const": true },
+        "signed_eeprom_required": { "const": true },
+        "post_write_readback_required": { "const": true },
+        "reconciliation_required": { "const": true },
+        "retry_after_uncertain_result": { "const": false },
+        "other_updaters_permitted": { "const": false }
+      }
+    },
+    "eeprom_write_protection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "effective_state_readback_required", "production_value", "production_blocker"],
+      "properties": {
+        "policy": { "const": "unlocked-development" },
+        "effective_state_readback_required": { "const": true },
+        "production_value": { "const": "undecided-requires-qualification" },
+        "production_blocker": { "const": true }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "bundle_prebuilt_before_ownership",
+        "execution_before_ownership_permitted",
+        "owned_state_required_for_execution",
+        "transaction_bound",
+        "customer_key_signed",
+        "reject_stock",
+        "reject_unsigned",
+        "reject_wrong_key",
+        "reject_altered",
+        "generic_shell",
+        "unrestricted_storage_access",
+        "production_value",
+        "production_blocker"
+      ],
+      "properties": {
+        "policy": { "const": "narrow-customer-signed-rpiboot" },
+        "bundle_prebuilt_before_ownership": { "const": true },
+        "execution_before_ownership_permitted": { "const": false },
+        "owned_state_required_for_execution": { "const": true },
+        "transaction_bound": { "const": true },
+        "customer_key_signed": { "const": true },
+        "reject_stock": { "const": true },
+        "reject_unsigned": { "const": true },
+        "reject_wrong_key": { "const": true },
+        "reject_altered": { "const": true },
+        "generic_shell": { "const": false },
+        "unrestricted_storage_access": { "const": false },
+        "production_value": { "const": "undecided-requires-qualification" },
+        "production_blocker": { "const": true }
+      }
+    },
+    "self_update": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "policy",
+        "automatic_sd_usb_tftp_scan",
+        "rpiboot_eeprom_write_still_possible",
+        "production_value",
+        "production_blocker"
+      ],
+      "properties": {
+        "value": { "const": 0 },
+        "policy": { "const": "automatic-self-update-disabled" },
+        "automatic_sd_usb_tftp_scan": { "const": false },
+        "rpiboot_eeprom_write_still_possible": { "const": true },
+        "production_value": { "const": "undecided-requires-qualification" },
+        "production_blocker": { "const": true }
+      }
+    },
+    "root_integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "persistent_root",
+        "root_binding",
+        "mutable_state",
+        "swap",
+        "persistent_journal",
+        "core_dumps",
+        "persistent_device_secrets",
+        "physical_enforcement_qualified"
+      ],
+      "properties": {
+        "persistent_root": { "const": "read-only-dm-verity" },
+        "root_binding": { "const": "signed-root-hash-and-partuuid" },
+        "mutable_state": { "const": "tmpfs-only" },
+        "swap": { "const": false },
+        "persistent_journal": { "const": false },
+        "core_dumps": { "const": false },
+        "persistent_device_secrets": { "const": false },
+        "physical_enforcement_qualified": { "const": false }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "older_correctly_signed_image_may_boot", "production_blocker"],
+      "properties": {
+        "policy": { "const": "unimplemented-block-enrollment-ready" },
+        "older_correctly_signed_image_may_boot": { "const": true },
+        "production_blocker": { "const": true }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal_state", "enrollment_ready", "authorizes_mutation"],
+      "properties": {
+        "terminal_state": { "const": "security_applied" },
+        "enrollment_ready": { "const": false },
+        "authorizes_mutation": { "const": false }
+      }
+    },
+    "production_blockers": {
+      "const": [
+        "boot-order-production-policy-undecided",
+        "boot-uart-policy-unreviewed",
+        "videocore-jtag-unlocked",
+        "eeprom-write-protection-unlocked",
+        "recovery-policy-not-production-qualified",
+        "self-update-production-policy-undecided",
+        "root-integrity-physical-enforcement-unqualified",
+        "anti-rollback-unimplemented"
+      ]
+    }
+  }
+}

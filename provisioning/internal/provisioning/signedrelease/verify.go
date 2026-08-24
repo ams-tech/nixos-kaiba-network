@@ -98,6 +98,12 @@ func Resolve(ctx context.Context, inputs Inputs, options Options) (ResolvedRelea
 		unsigned.ExpectedCustomerKeyHash != intent.ExpectedCustomerKeyHash {
 		return ResolvedRelease{}, errors.New("unsigned artifact set does not bind the release intent lineage")
 	}
+	if unsigned.BootOrderPolicy != currentBootOrderPolicy {
+		return ResolvedRelease{}, fmt.Errorf(
+			"unsigned boot_order_policy %q is historical and is not authorized for new signed-release finalization",
+			unsigned.BootOrderPolicy,
+		)
+	}
 
 	eepromReleaseSource, err := inspectRegular(inputs.EEPROMReleaseManifestPath, maxMetadataBytes, true)
 	if err != nil {
@@ -125,6 +131,9 @@ func Resolve(ctx context.Context, inputs Inputs, options Options) (ResolvedRelea
 	}
 	eepromPlan, eepromResult, err := verifySignedEEPROM(eepromFiles, intent, intentJSON, intentDigest)
 	if err != nil {
+		return ResolvedRelease{}, err
+	}
+	if err := unsigned.validateEEPROMBootConfig(eepromFiles["boot.conf"].contents); err != nil {
 		return ResolvedRelease{}, err
 	}
 

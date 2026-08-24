@@ -2,8 +2,9 @@
 
 // Package mediadevice contains the narrow Linux adapter shared by the
 // production media stager and its separately built read-only verifier. It
-// resolves an approved by-id path through the existing system inventory and
-// pins one exact block-device attachment before either caller may use it.
+// resolves an explicit station-local selector through the existing system
+// inventory and pins one exact block-device attachment before either caller
+// may use it.
 package mediadevice
 
 import (
@@ -42,25 +43,26 @@ func (inspector Inspector) inventory() mediainventory.Inventory {
 	return mediainventory.SystemInventory{}
 }
 
-// InspectApproved proves both the read-only safety inventory and
-// the stronger stable target facts frozen into the signed media plan.
-func (inspector Inspector) InspectApproved(ctx context.Context, plan mediacontract.Plan) (mediainventory.TargetFacts, error) {
+// InspectSelected proves the read-only safety inventory and required geometry
+// for one explicit station-local selector. Physical-media identity is not part
+// of the media plan and is not inferred from model, serial, WWID, or by-id data.
+func (inspector Inspector) InspectSelected(ctx context.Context, plan mediacontract.Plan, selectedPath string) (mediainventory.TargetFacts, error) {
 	if err := plan.Validate(); err != nil {
 		return mediainventory.TargetFacts{}, err
 	}
 	inventory := inspector.inventory()
-	facts, err := inventory.Inspect(ctx, plan.Target.ByIDPath, mediainventory.ModeDevice)
+	facts, err := inventory.Inspect(ctx, selectedPath, mediainventory.ModeSelectedDevice)
 	if err != nil {
-		return mediainventory.TargetFacts{}, fmt.Errorf("inspect approved device: %w", err)
+		return mediainventory.TargetFacts{}, fmt.Errorf("inspect selected device: %w", err)
 	}
-	usage, err := inventory.Usage(ctx, facts, mediainventory.ModeDevice)
+	usage, err := inventory.Usage(ctx, facts, mediainventory.ModeSelectedDevice)
 	if err != nil {
-		return mediainventory.TargetFacts{}, fmt.Errorf("inspect approved device usage: %w", err)
+		return mediainventory.TargetFacts{}, fmt.Errorf("inspect selected device usage: %w", err)
 	}
-	if err := validateFacts(plan, facts, usage); err != nil {
+	if err := validateFacts(plan, selectedPath, facts, usage); err != nil {
 		return mediainventory.TargetFacts{}, err
 	}
-	if err := validateSysfsFacts(plan.Target, facts.SysfsPath); err != nil {
+	if err := validateLogicalSectorSize(plan.Target, facts.SysfsPath); err != nil {
 		return mediainventory.TargetFacts{}, err
 	}
 	if err := validateInactiveBlockGraph(facts.SysfsPath); err != nil {
@@ -69,9 +71,9 @@ func (inspector Inspector) InspectApproved(ctx context.Context, plan mediacontra
 	return facts, nil
 }
 
-func validateFacts(plan mediacontract.Plan, facts mediainventory.TargetFacts, usage mediainventory.TargetUsage) error {
-	if facts.RequestedPath != plan.Target.ByIDPath || facts.Identity != filepath.Base(plan.Target.ByIDPath) {
-		return errors.New("inventory target path or by-id identity differs from the approved plan")
+func validateFacts(plan mediacontract.Plan, selectedPath string, facts mediainventory.TargetFacts, usage mediainventory.TargetUsage) error {
+	if facts.RequestedPath != selectedPath {
+		return errors.New("inventory target path differs from the explicit station selector")
 	}
 	if facts.ResolvedPath == "" || !filepath.IsAbs(facts.ResolvedPath) || filepath.Clean(facts.ResolvedPath) != facts.ResolvedPath || (facts.ResolvedPath != "/dev" && !strings.HasPrefix(facts.ResolvedPath, "/dev/")) {
 		return errors.New("inventory resolved target outside the clean /dev namespace")
@@ -83,37 +85,21 @@ func validateFacts(plan mediacontract.Plan, facts mediainventory.TargetFacts, us
 		return fmt.Errorf("inventory target size is %d, expected %d", facts.SizeBytes, plan.Target.SizeBytes)
 	}
 	if usage.Mounted || usage.System || usage.Root || usage.Swap {
-		return fmt.Errorf("approved target is in use: mounted=%t system=%t root=%t swap=%t", usage.Mounted, usage.System, usage.Root, usage.Swap)
+		return fmt.Errorf("selected target is in use: mounted=%t system=%t root=%t swap=%t", usage.Mounted, usage.System, usage.Root, usage.Swap)
 	}
 	return nil
 }
 
-func validateSysfsFacts(target mediacontract.TargetBinding, sysfsPath string) error {
+func validateLogicalSectorSize(target mediacontract.TargetBinding, sysfsPath string) error {
 	if sysfsPath == "" || !filepath.IsAbs(sysfsPath) || filepath.Clean(sysfsPath) != sysfsPath || !strings.HasPrefix(sysfsPath, "/sys/") {
-		return errors.New("target sysfs identity is not a clean absolute path below /sys")
-	}
-	model, err := readSysfsValue(filepath.Join(sysfsPath, "device", "model"))
-	if err != nil {
-		return fmt.Errorf("read target model: %w", err)
-	}
-	serial, err := readSysfsValue(filepath.Join(sysfsPath, "device", "serial"))
-	if err != nil {
-		return fmt.Errorf("read target serial: %w", err)
-	}
-	wwid, err := readSysfsValue(filepath.Join(sysfsPath, "wwid"))
-	if err != nil {
-		return fmt.Errorf("read target WWID: %w", err)
+		return errors.New("target sysfs path is not a clean absolute path below /sys")
 	}
 	logical, err := readSysfsUint(filepath.Join(sysfsPath, "queue", "logical_block_size"))
 	if err != nil {
 		return fmt.Errorf("read target logical sector size: %w", err)
 	}
-	physical, err := readSysfsUint(filepath.Join(sysfsPath, "queue", "physical_block_size"))
-	if err != nil {
-		return fmt.Errorf("read target physical sector size: %w", err)
-	}
-	if model != target.Model || serial != target.Serial || wwid != target.WWID || logical != target.LogicalSectorSizeBytes || physical != target.PhysicalSectorSizeBytes {
-		return errors.New("live model, serial, WWID, or sector sizes differ from the approved target")
+	if logical != target.LogicalSectorSizeBytes {
+		return errors.New("live logical sector size differs from the required media geometry")
 	}
 	return nil
 }
@@ -230,8 +216,8 @@ func SameAttachment(initial, current mediainventory.TargetFacts) error {
 	return nil
 }
 
-func (inspector Inspector) ReinspectSame(ctx context.Context, plan mediacontract.Plan, initial mediainventory.TargetFacts) (mediainventory.TargetFacts, error) {
-	current, err := inspector.InspectApproved(ctx, plan)
+func (inspector Inspector) ReinspectSame(ctx context.Context, plan mediacontract.Plan, selectedPath string, initial mediainventory.TargetFacts) (mediainventory.TargetFacts, error) {
+	current, err := inspector.InspectSelected(ctx, plan, selectedPath)
 	if err != nil {
 		return mediainventory.TargetFacts{}, err
 	}
@@ -289,15 +275,15 @@ func ValidateOpened(file *os.File, facts mediainventory.TargetFacts) error {
 	}
 	resolved, err := filepath.EvalSymlinks(facts.RequestedPath)
 	if err != nil || resolved != facts.ResolvedPath {
-		return errors.New("approved by-id alias no longer resolves to the pinned device")
+		return errors.New("selected device path no longer resolves to the pinned device")
 	}
 	alias, err := os.Stat(resolved)
 	if err != nil {
-		return fmt.Errorf("stat re-resolved by-id target: %w", err)
+		return fmt.Errorf("stat re-resolved selected target: %w", err)
 	}
 	aliasStat, ok := alias.Sys().(*syscall.Stat_t)
 	if !ok || alias.Mode()&os.ModeDevice == 0 || alias.Mode()&os.ModeCharDevice != 0 || aliasStat.Rdev != stat.Rdev {
-		return errors.New("approved by-id alias no longer identifies the pinned device number")
+		return errors.New("selected device path no longer identifies the pinned device number")
 	}
 	size, err := ioctlUint64(file, blockGetSize64)
 	if err != nil {

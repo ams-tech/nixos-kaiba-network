@@ -109,9 +109,43 @@ func TestResolveRequiresOwnedRecoveryUpdaterReplay(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsBootPolicyAndSignedEEPROMConfigMismatch(t *testing.T) {
+	fixture := newResolveFixtureWithBootPolicy(
+		t,
+		currentBootOrderPolicy,
+		[]byte(historicalEEPROMBootConfig),
+	)
+	options := Options{EEPROMReplayVerifier: EEPROMReplayVerifierFunc(func(context.Context, string, string, string) error {
+		return nil
+	})}
+	if _, err := Resolve(context.Background(), fixture.inputs, options); err == nil ||
+		!strings.Contains(err.Error(), "does not match the exact signed EEPROM boot.conf") {
+		t.Fatalf("Resolve() error = %v, want boot-policy/config mismatch", err)
+	}
+}
+
+func TestResolveRejectsHistoricalBootPolicyForNewFinalization(t *testing.T) {
+	fixture := newResolveFixtureWithBootPolicy(
+		t,
+		historicalBootOrderPolicy,
+		[]byte(historicalEEPROMBootConfig),
+	)
+	options := Options{EEPROMReplayVerifier: EEPROMReplayVerifierFunc(func(context.Context, string, string, string) error {
+		return nil
+	})}
+	if _, err := Resolve(context.Background(), fixture.inputs, options); err == nil ||
+		!strings.Contains(err.Error(), "not authorized for new signed-release finalization") {
+		t.Fatalf("Resolve() error = %v, want historical boot-policy rejection", err)
+	}
+}
+
 type resolveFixture struct{ inputs Inputs }
 
 func newResolveFixture(t *testing.T) resolveFixture {
+	return newResolveFixtureWithBootPolicy(t, currentBootOrderPolicy, []byte(currentEEPROMBootConfig))
+}
+
+func newResolveFixtureWithBootPolicy(t *testing.T, bootOrderPolicy string, bootConfig []byte) resolveFixture {
 	t.Helper()
 	root := t.TempDir()
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -138,7 +172,6 @@ func newResolveFixture(t *testing.T) resolveFixture {
 	originalRecovery := []byte("pinned unsigned synthetic recovery")
 	originalBootcode := []byte("pinned synthetic bootcode")
 	originalBootsys := []byte("pinned synthetic bootsys")
-	bootConfig := []byte("BOOT_ORDER=0xf6\nBOOT_UART=1\n")
 	eepromInputs, err := eepromsigning.NewSigningInputs(originalBootcode, originalBootsys, bootConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +183,9 @@ func newResolveFixture(t *testing.T) resolveFixture {
 
 	eepromRelease := []byte(`{"schema_version":"kaiba.provisioning.rpi5-eeprom-release/v1alpha1","device_class":"raspberry-pi-5-model-b-v1alpha1","source":{},"firmware":{},"provenance":[],"toolchain":{},"required_capability":{},"authority":{}}`)
 	eepromReleasePath := writeFixtureFile(t, root, "eeprom-release.json", eepromRelease)
-	unsignedPath, unsignedDigest, rootIntegrityDigest := writeUnsignedFixture(t, root, bootImage, rootData, rootHashImage, customerHash)
+	unsignedPath, unsignedDigest, rootIntegrityDigest := writeUnsignedFixture(
+		t, root, bootImage, rootData, rootHashImage, customerHash, bootOrderPolicy,
+	)
 
 	const sourceEpoch = uint64(1786968000)
 	policyDigest := bundle.Sum([]byte("fixed signing policy"))
@@ -333,12 +368,18 @@ func newResolveFixture(t *testing.T) resolveFixture {
 	}}
 }
 
-func writeUnsignedFixture(t *testing.T, root string, boot, rootData, rootHash []byte, customerHash bundle.Digest) (string, bundle.Digest, bundle.Digest) {
+func writeUnsignedFixture(
+	t *testing.T,
+	root string,
+	boot, rootData, rootHash []byte,
+	customerHash bundle.Digest,
+	bootOrderPolicy string,
+) (string, bundle.Digest, bundle.Digest) {
 	t.Helper()
 	rootIntegrityDigest := bundle.Sum([]byte("verity root hash"))
 	value := unsignedArtifactSet{
 		Schema: unsignedArtifactSchema, SourceRevision: strings.Repeat("a", 40), ExpectedCustomerKeyHash: customerHash,
-		BootOrderPolicy: "nvme-only", BootCommandLinePath: "nixos/default/cmdline.txt",
+		BootOrderPolicy: bootOrderPolicy, BootCommandLinePath: "nixos/default/cmdline.txt",
 		FirmwareAllowlist:  []string{"config.txt", "kaiba-root-integrity.json", "nixos/default/bcm2712-rpi-5-b.dtb", "nixos/default/cmdline.txt", "nixos/default/initrd", "nixos/default/kernel.img"},
 		BootImageSizeBytes: uint64(len(boot)), PersistentMutableState: "tmpfs-only", RollbackPolicy: "unimplemented-block-enrollment-ready",
 		DebugPolicy: "videocore-jtag-unlocked-development", EEPROMWriteProtectionPolicy: "unlocked-development",

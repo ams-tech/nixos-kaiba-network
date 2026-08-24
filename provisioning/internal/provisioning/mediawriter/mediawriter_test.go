@@ -583,16 +583,10 @@ func newMediaFixture(t *testing.T) mediaFixture {
 			CapsuleDigest:               testDigest([]byte("capsule")),
 		},
 		Target: mediacontract.TargetBinding{
-			ByIDPath:                "/dev/disk/by-id/nvme-kaiba-writer-test",
-			Model:                   "KAIBA Test NVMe",
-			Serial:                  "WRITER-TEST-1",
-			WWID:                    "eui.1111111111111111",
-			SizeBytes:               uint64(len(expected)),
-			LogicalSectorSizeBytes:  mediacontract.SectorSizeBytes,
-			PhysicalSectorSizeBytes: 4096,
+			SizeBytes:              uint64(len(expected)),
+			LogicalSectorSizeBytes: mediacontract.SectorSizeBytes,
 		},
 		Layout:              layout,
-		InitialMediaDigest:  testDigest(bytes.Repeat([]byte{0xa5}, len(expected))),
 		ExpectedMediaDigest: testDigest(expected),
 	}
 	plan, err = plan.WithDerivedDigest()

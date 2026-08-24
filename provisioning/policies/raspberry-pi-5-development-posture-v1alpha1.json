@@ -1,0 +1,104 @@
+{
+  "schema_version": "provisioning.kaiba.network/rpi5-development-posture/v1alpha1",
+  "posture_id": "raspberry-pi-5-sacrificial-development-v1alpha1",
+  "device_class": "raspberry-pi-5-model-b-v1alpha1",
+  "approval_status": "approved-development-only",
+  "scope": "one-sacrificial-development-unit",
+  "release_classification": "development_asset",
+  "production_ready": false,
+  "videocore_jtag": {
+    "policy": "unlocked-development",
+    "production_value": "undecided-requires-qualification",
+    "production_blocker": true
+  },
+  "boot_order": {
+    "value": "0xf216",
+    "evaluation": "right-to-left",
+    "sequence": [
+      "nvme",
+      "sd",
+      "network-tftp",
+      "restart"
+    ],
+    "policy": "nvme-sd-tftp-restart-development",
+    "production_value": "undecided-requires-qualification",
+    "production_blocker": true
+  },
+  "boot_uart": {
+    "value": 1,
+    "review_status": "unreviewed-existing-development-setting",
+    "production_value": "undecided-requires-qualification",
+    "production_blocker": true
+  },
+  "initial_eeprom_update": {
+    "policy": "transaction-bound-one-shot-fresh-board-rpiboot",
+    "fresh_board_only": true,
+    "exact_target_and_release_binding_required": true,
+    "expected_prestate_required": true,
+    "signed_eeprom_required": true,
+    "post_write_readback_required": true,
+    "reconciliation_required": true,
+    "retry_after_uncertain_result": false,
+    "other_updaters_permitted": false
+  },
+  "eeprom_write_protection": {
+    "policy": "unlocked-development",
+    "effective_state_readback_required": true,
+    "production_value": "undecided-requires-qualification",
+    "production_blocker": true
+  },
+  "recovery": {
+    "policy": "narrow-customer-signed-rpiboot",
+    "bundle_prebuilt_before_ownership": true,
+    "execution_before_ownership_permitted": false,
+    "owned_state_required_for_execution": true,
+    "transaction_bound": true,
+    "customer_key_signed": true,
+    "reject_stock": true,
+    "reject_unsigned": true,
+    "reject_wrong_key": true,
+    "reject_altered": true,
+    "generic_shell": false,
+    "unrestricted_storage_access": false,
+    "production_value": "undecided-requires-qualification",
+    "production_blocker": true
+  },
+  "self_update": {
+    "value": 0,
+    "policy": "automatic-self-update-disabled",
+    "automatic_sd_usb_tftp_scan": false,
+    "rpiboot_eeprom_write_still_possible": true,
+    "production_value": "undecided-requires-qualification",
+    "production_blocker": true
+  },
+  "root_integrity": {
+    "persistent_root": "read-only-dm-verity",
+    "root_binding": "signed-root-hash-and-partuuid",
+    "mutable_state": "tmpfs-only",
+    "swap": false,
+    "persistent_journal": false,
+    "core_dumps": false,
+    "persistent_device_secrets": false,
+    "physical_enforcement_qualified": false
+  },
+  "rollback": {
+    "policy": "unimplemented-block-enrollment-ready",
+    "older_correctly_signed_image_may_boot": true,
+    "production_blocker": true
+  },
+  "lifecycle": {
+    "terminal_state": "security_applied",
+    "enrollment_ready": false,
+    "authorizes_mutation": false
+  },
+  "production_blockers": [
+    "boot-order-production-policy-undecided",
+    "boot-uart-policy-unreviewed",
+    "videocore-jtag-unlocked",
+    "eeprom-write-protection-unlocked",
+    "recovery-policy-not-production-qualified",
+    "self-update-production-policy-undecided",
+    "root-integrity-physical-enforcement-unqualified",
+    "anti-rollback-unimplemented"
+  ]
+}

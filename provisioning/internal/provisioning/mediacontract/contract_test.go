@@ -29,6 +29,13 @@ func TestPlanAndReceiptChainIsCanonicalAndFailClosed(t *testing.T) {
 	if stage.BytesWritten != expectedBytesWritten || !stage.ReopenedTarget || !stage.IndependentReadbackRequired {
 		t.Fatalf("stage receipt does not describe full zero+copy and same-phase reopened readback: %#v", stage)
 	}
+	stageJSON, err := stage.CanonicalJSON(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stageJSON, []byte("initial_media_digest")) || bytes.Contains(stageJSON, []byte("by_id_path")) {
+		t.Fatalf("v1alpha2 stage receipt retained prestate or physical-media identity: %s", stageJSON)
+	}
 	report := successfulReport(plan)
 	verification, err := NewVerificationReceipt(plan, stage, VerificationIndependentDevice, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", 12, report)
 	if err != nil {
@@ -116,11 +123,13 @@ func TestCanonicalPlanRejectsAmbiguousOrNonCanonicalJSON(t *testing.T) {
 	unknown := bytes.Replace(canonical, []byte(`"schema_version":`), []byte(`"unknown":false,"schema_version":`), 1)
 	duplicate := bytes.Replace(canonical, []byte(`"transaction_id":`), []byte(`"transaction_id":"duplicate","transaction_id":`), 1)
 	nullValue := bytes.Replace(canonical, []byte(`"transaction_id":"transaction:media:1"`), []byte(`"transaction_id":null`), 1)
+	oldVersion := bytes.Replace(canonical, []byte(`/v1alpha2"`), []byte(`/v1alpha1"`), 1)
 	for name, data := range map[string][]byte{
 		"pretty":    pretty.Bytes(),
 		"unknown":   unknown,
 		"duplicate": duplicate,
 		"null":      nullValue,
+		"v1alpha1":  oldVersion,
 		"trailing":  append(append([]byte(nil), canonical...), []byte(`{}`)...),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -158,8 +167,12 @@ func TestPlanValidationCoversEveryByteAndRejectsSourcePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), "/nix/store") || strings.Contains(string(encoded), "source_path") {
-		t.Fatalf("production plan gained a runtime source path: %s", encoded)
+	for _, prohibited := range []string{
+		"/nix/store", "source_path", "by_id_path", "model", "serial", "wwid", "physical_sector_size_bytes", "initial_media_digest",
+	} {
+		if strings.Contains(string(encoded), prohibited) {
+			t.Fatalf("production plan gained prohibited runtime or media-identity field %q: %s", prohibited, encoded)
+		}
 	}
 	mutated := plan
 	mutated.Layout.Regions = append([]MediaRegion(nil), plan.Layout.Regions...)
@@ -334,11 +347,9 @@ func minimalPlan(t *testing.T) Plan {
 		TransactionID: "transaction:media:1",
 		Release:       ReleaseBinding{ReleaseID: "release:rpi5:1", SignedReleaseManifestDigest: testDigest("signed release"), CapsuleDigest: testDigest("capsule")},
 		Target: TargetBinding{
-			ByIDPath: "/dev/disk/by-id/nvme-kaiba-test", Model: "KAIBA-NVME", Serial: "SERIAL-1", WWID: "eui.1111111111111111",
-			SizeBytes: 8 * AlignmentBytes, LogicalSectorSizeBytes: SectorSizeBytes, PhysicalSectorSizeBytes: 4096,
+			SizeBytes: 8 * AlignmentBytes, LogicalSectorSizeBytes: SectorSizeBytes,
 		},
 		Layout:              layout,
-		InitialMediaDigest:  testDigest("initial media"),
 		ExpectedMediaDigest: testDigest("expected media"),
 	}
 	plan, err = plan.WithDerivedDigest()

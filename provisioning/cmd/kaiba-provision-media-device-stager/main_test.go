@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -52,6 +53,38 @@ func TestCommandSeparatesDryRunAndDestructiveStage(t *testing.T) {
 	code = run(context.Background(), []string{"stage", "--plan", "/evidence/plan.json", "--receipt", "/evidence/stage.json"}, &stdout, &stderr)
 	if code != exitOK || stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("stage exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestV1Alpha2PreflightReportsOnlyGeometryAndOperationalSafety(t *testing.T) {
+	report := devicePreflight{
+		SchemaVersion:          devicePreflightSchemaVersion,
+		Status:                 "validated_no_write",
+		EvidenceMode:           "device_preflight",
+		Target:                 mediacontract.TargetBinding{SizeBytes: 8 * mediacontract.AlignmentBytes, LogicalSectorSizeBytes: 512},
+		SourcesVerified:        true,
+		TargetUsageClear:       true,
+		TargetWholeDevice:      true,
+		TargetGeometryVerified: true,
+		TargetLocked:           true,
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`"schema_version":"kaiba.provisioning.rpi5-media-device-preflight/v1alpha2"`,
+		`"target_whole_device":true`,
+		`"target_geometry_verified":true`,
+	} {
+		if !bytes.Contains(encoded, []byte(required)) {
+			t.Fatalf("preflight is missing %s: %s", required, encoded)
+		}
+	}
+	for _, prohibited := range []string{"initial_media_digest", "full_prestate_verified", "by_id_path", "serial", "wwid", "model"} {
+		if bytes.Contains(encoded, []byte(prohibited)) {
+			t.Fatalf("preflight retained prohibited field %q: %s", prohibited, encoded)
+		}
 	}
 }
 

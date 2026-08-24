@@ -5,6 +5,9 @@
 }:
 
 let
+  developmentPosture = builtins.fromJSON (
+    builtins.readFile ../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
+  );
   cfg = target.nixosSystem.config;
   targetPolicy = builtins.fromJSON cfg.environment.etc."kaiba-provisioning/target-policy.json".text;
   allAssertionsPass = builtins.all (entry: entry.assertion) cfg.assertions;
@@ -88,6 +91,11 @@ assert lib.assertMsg (
 assert lib.assertMsg (
   !(targetPolicy ? boot_image_digest)
 ) "the target policy embeds the final boot-image digest and creates a self-hash cycle";
+assert lib.assertMsg (
+  targetPolicy.development_posture_id == developmentPosture.posture_id
+  && targetPolicy.videocore_jtag == developmentPosture.videocore_jtag.policy
+  && targetPolicy.eeprom_write_protection == developmentPosture.eeprom_write_protection.policy
+) "the target runtime policy is not bound to the canonical development posture";
 pkgs.runCommand "kaiba-rpi5-secure-boot-target-evaluation" { } ''
   mkdir -p "$out"
   printf '%s\n' \
@@ -96,5 +104,6 @@ pkgs.runCommand "kaiba-rpi5-secure-boot-target-evaluation" { } ''
     'rpi5-secure-boot-immutable-etc: pass' \
     'rpi5-secure-boot-firmware-allowlist: pass' \
     'rpi5-secure-boot-no-self-hash-cycle: pass' \
+    'rpi5-secure-boot-development-posture-binding: pass' \
     > "$out/results.txt"
 ''

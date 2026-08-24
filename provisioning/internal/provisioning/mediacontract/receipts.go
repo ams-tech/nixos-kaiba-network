@@ -42,7 +42,6 @@ type StageReceipt struct {
 	Target                      TargetBinding `json:"target"`
 	AttachmentBootID            string        `json:"attachment_boot_id"`
 	AttachmentSequence          uint64        `json:"attachment_sequence"`
-	InitialMediaDigest          Digest        `json:"initial_media_digest"`
 	ExpectedMediaDigest         Digest        `json:"expected_media_digest"`
 	ObservedMediaDigest         Digest        `json:"observed_media_digest"`
 	BytesWritten                uint64        `json:"bytes_written"`
@@ -72,7 +71,6 @@ func NewStageReceipt(plan Plan, attachmentBootID string, attachmentSequence uint
 		Target:                      plan.Target,
 		AttachmentBootID:            attachmentBootID,
 		AttachmentSequence:          attachmentSequence,
-		InitialMediaDigest:          plan.InitialMediaDigest,
 		ExpectedMediaDigest:         plan.ExpectedMediaDigest,
 		ObservedMediaDigest:         observedMediaDigest,
 		BytesWritten:                bytesWritten,
@@ -141,7 +139,7 @@ func (receipt StageReceipt) validateAgainst(plan Plan, requireDigest bool) error
 	if receipt.AttachmentSequence == 0 {
 		return errors.New("stage receipt requires a non-zero boot-local attachment sequence")
 	}
-	if receipt.InitialMediaDigest != plan.InitialMediaDigest || receipt.ExpectedMediaDigest != plan.ExpectedMediaDigest || receipt.ObservedMediaDigest != plan.ExpectedMediaDigest {
+	if receipt.ExpectedMediaDigest != plan.ExpectedMediaDigest || receipt.ObservedMediaDigest != plan.ExpectedMediaDigest {
 		return errors.New("stage receipt media digests differ from the approved plan")
 	}
 	expectedBytesWritten, err := stageBytesWritten(plan)

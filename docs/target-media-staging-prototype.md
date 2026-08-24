@@ -65,17 +65,28 @@ safety fields distinguish reopening from facts the program cannot observe:
 
 `lib.mkRpi5ProductionMedia` accepts only a store-backed output from
 `mkRpi5VerifiedSignedRelease` whose exact 18-role publication and deterministic
-EEPROM and owned-recovery replay have already passed. The factory also requires
-one transaction ID, the complete SHA-256 digest of the target's current bytes,
-and these immutable facts for one whole physical device:
+EEPROM and owned-recovery replay have already passed. Its v1alpha2 contract also
+requires one transaction ID plus the runtime-observed exact capacity and a
+512-byte logical sector size. Those two geometry values make the per-run GPT and
+complete-media layout compatible with the selected device; they are not a
+hardware identity or a boot-trust input.
 
-- a clean `/dev/disk/by-id/<whole-device>` path, never a `-partN` path;
-- exact model, serial, and WWID strings;
-- exact capacity; and
-- a 512-byte logical sector size and the observed physical sector size.
+The canonical plan and every receipt deliberately omit the boot medium's model,
+serial, WWID, physical sector size, persistent path, and initial-content digest.
+In particular, `/dev/disk/by-id` is not accepted as an identity or selector.
+The versioned, typed hardware-configuration catalog under
+`provisioning/config/hardware/` supplies one local operational selector naming
+either an immediate raw whole-device node or one
+`/dev/disk/by-path/<whole-device>` alias. The checked-in
+`raspberryPi5SacrificialDevelopment` configuration selects `/dev/nvme0n1`.
+The factory validates that configuration and linker-fixes its selector into the
+writer and verifier; it rejects a loose selector argument. Neither the selector
+nor the hardware-configuration ID appears in the canonical plan, receipts, or
+evidence. The selector determines where an explicitly authorized destructive
+operation is attempted; it does not attest what hardware is present.
 
 For example, expose the immutable assets and the capability-separated binaries
-from the flake that owns the reviewed release and target facts:
+from the flake that owns the reviewed release and station configuration:
 
 ```nix
 let
@@ -83,15 +94,11 @@ let
     system = "x86_64-linux";
     verifiedSignedRelease = verifiedSignedRelease;
     transactionID = "transaction:rpi5-sacrificial-001:1";
-    initialMediaDigest = "sha256:<complete-current-device-sha256>";
+    hardwareConfiguration =
+      kaiba.lib.hardwareConfigurations.raspberryPi5SacrificialDevelopment;
     target = {
-      byIDPath = "/dev/disk/by-id/<reviewed-whole-device>";
-      model = "<exact-observed-model>";
-      serial = "<exact-observed-serial>";
-      wwid = "<exact-observed-wwid>";
       sizeBytes = <exact-observed-capacity>;
       logicalSectorSizeBytes = 512;
-      physicalSectorSizeBytes = <exact-observed-physical-sector-size>;
     };
   };
 in {
@@ -103,9 +110,13 @@ in {
 }
 ```
 
-This is an evaluation example, not a source of target facts. Record and review
-those facts and the complete prestate digest through the physical runbook
-before instantiating the factory. Do not copy placeholder values.
+This is an evaluation example, not a selector-discovery procedure. Review the
+selected hardware configuration for the station and change the versioned
+configuration, rather than the factory call, if that station's operational
+path changes. Observe the capacity and logical sector size again for the
+current run, and obtain explicit destructive authorization before staging. Do
+not copy placeholder values. The software does not appraise existing media
+contents or decide whether they should be retained.
 
 ### Frozen layout
 
@@ -176,9 +187,12 @@ sudo "$stager/bin/kaiba-provision-media-device-stager" dry-run \
   --plan "$plan"
 ```
 
-Review the dry-run output against the approved transaction before crossing the
-mutation boundary. The production writer has no target override, source flag,
-fixture mode, force switch, or automatic retry:
+Review the selector resolved from the typed hardware configuration, runtime
+geometry, and successful device preflight against the approved transaction
+before crossing the mutation boundary. That reviewed preflight plus the
+deliberate, transaction-bound `stage` invocation is the current explicit
+destructive-authorization boundary. The production writer has no runtime
+target override, source flag, fixture mode, force switch, or automatic retry:
 
 ```console
 sudo "$stager/bin/kaiba-provision-media-device-stager" stage \
@@ -186,20 +200,26 @@ sudo "$stager/bin/kaiba-provision-media-device-stager" stage \
   --receipt /var/lib/kaiba-provisioning/evidence/transaction-rpi5-sacrificial-001/stage.json
 ```
 
-The writer exclusively opens the exact whole device, rejects mounts, the
-system/root device, swap, holders, slaves, partitions, identity drift, capacity
-drift, or prestate drift, and hashes all fixed sources. Its crash ordering is:
-invalidate both GPT copies and `fsync`; zero the rest and write all payloads and
-`fsync`; write the backup GPT and `fsync`; then write the primary GPT and
-`fsync`. It reopens and hashes the complete result before publishing a new,
-root-owned, exact-mode `0444` receipt without replacement. If publication
-fails after mutation, quarantine the target and do not retry automatically.
+The writer resolves the configured selector, requires one raw whole device with
+the plan's exact capacity and 512-byte logical sector size, and rejects a
+partition, mounted device, root or system device, swap, holders, or slaves. It
+locks the device and pins `(boot_id, diskseq)`, `dev_t`, sysfs resolution, and
+the opened file descriptor throughout the operation so a selector or attachment
+change fails closed. These are overwrite and intra-operation TOCTOU protections,
+not persistent identity checks. The writer does not read or bind an initial
+whole-media digest and makes no judgment about existing data.
+
+Its crash ordering is: invalidate both GPT copies and `fsync`; zero the rest and
+write all payloads and `fsync`; write the backup GPT and `fsync`; then write the
+primary GPT and `fsync`. It reopens and hashes the complete result before
+publishing a new, root-owned, exact-mode `0444` receipt without replacement. If
+publication fails after mutation, quarantine the selected device and do not
+retry automatically.
 
 The next commands are a physical procedure, not something the software check
-has performed. Remove all power from the target, independently record that
-manual boundary, reattach the same physical device, and confirm that its
-kernel `(boot_id, diskseq)` pair differs from staging. Then run the separate
-read-only verifier:
+has performed. Remove all power, independently record that manual boundary,
+reattach storage, and require a fresh kernel attachment whose `(boot_id,
+diskseq)` pair differs from staging. Then run the separate read-only verifier:
 
 ```console
 sudo "$verifier/bin/kaiba-provision-media-device-verifier" verify \
@@ -209,12 +229,22 @@ sudo "$verifier/bin/kaiba-provision-media-device-verifier" verify \
 ```
 
 The verifier trusts only a root-owned, non-symlink stage receipt with exact
-`0444` permissions under the trusted directory chain. It independently checks
-target identity, GPT CRCs and semantics, the canonical FAT bytes and four
-payloads, signed-release and signature lineage, every used and padded partition
-digest, zero tail, complete-media digest, and direct `veritysetup verify` over
-the read-only root-data and root-hash partition descriptors. It does not import
-the writer.
+`0444` permissions under the trusted directory chain. It applies the same
+runtime whole-device, usage, geometry, locking, and attachment-pinning checks,
+then independently checks GPT CRCs and semantics, the canonical FAT bytes and
+four payloads, offline signed-release and signature lineage, every used and
+padded partition digest, zero tail, complete-media digest, and direct
+`veritysetup verify` over the read-only root-data and root-hash partition
+descriptors. It does not import the writer.
+
+That cold readback proves that the freshly attached, operationally selected
+medium contains the expected bytes. Because model, serial, and WWID are not
+collected, and the typed hardware-configuration selector is omitted from
+canonical plans and evidence, it does not prove that this is the same physical
+medium used during staging. Offline verification of the
+staged signed artifacts likewise does not prove that a Pi bootloader executed
+them. Live signed-system boot observation and enforcement are later hardware
+goals.
 
 The generic `kaiba-provision-media-contract finalize` command can correlate
 the stage and verification receipts with a separately reviewed canonical
@@ -223,7 +253,8 @@ manual cold-power observation. That observation deliberately records
 does not implement an authenticated power-boundary collector. Consequently the
 final receipt also keeps `hardware_observed=false`, `security_enforced=false`,
 `mutation_eligible=false`, and `one_time_settings_changed=false`. A receipt
-chain is correlation evidence, not authority to proceed to OTP mutation.
+chain is content and operation correlation evidence, not media identity, signed
+boot enforcement, or authority to proceed to OTP mutation.
 
 ## Legacy mixed stager boundary
 
@@ -243,7 +274,8 @@ tamper matrix close the software-definition portion of SB-04. They have not
 written or cold-read a sacrificial NVMe device. The legacy initializer, all
 three `fixture-*` commands, both regular-file verifiers, and every Nix build are
 synthetic software tests: they do not select a block device, access a Pi, cross
-an external power boundary, or read or change EEPROM or OTP settings.
+an external power boundary, observe a live signed boot, or read or change EEPROM
+or OTP settings.
 
 The unfused runtime-record command is also serialization-only. It validates a
 canonical runtime-facts object against the independent media plan and emits

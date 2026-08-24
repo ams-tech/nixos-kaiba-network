@@ -2,6 +2,7 @@
   pkgs,
   lib,
   built,
+  hardwareConfigurations,
   kaibaModules,
 }:
 
@@ -1170,34 +1171,41 @@ let
     verifiedSignedEEPROM = productionMediaVerifiedSignedEEPROM;
   };
   productionMediaTarget = {
-    byIDPath = "/dev/disk/by-id/nvme-KAIBA_FIXTURE_0001";
     logicalSectorSizeBytes = 512;
-    model = "KAIBA fixture NVMe";
-    physicalSectorSizeBytes = 4096;
-    serial = "KAIBA-FIXTURE-0001";
     sizeBytes = 268435456;
-    wwid = "eui.4b41494241000001";
+  };
+  productionMediaHardwareConfiguration = hardwareConfigurations.raspberryPi5SacrificialDevelopment;
+  productionMediaAlternateHardwareConfiguration = productionMediaHardwareConfiguration // {
+    configurationID = "hardware-configuration:rpi5-alternate-selector-fixture:1";
+    targetMedia.devicePath = "/dev/disk/by-path/platform-kaiba-fixture";
   };
   productionMediaFixture = built.mkRpi5ProductionMedia {
     name = "kaiba-rpi5-production-media-fixture";
     verifiedSignedRelease = productionMediaSignedReleaseFixture;
     transactionID = "transaction:rpi5-media-fixture:1";
     target = productionMediaTarget;
-    initialMediaDigest = "sha256:a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484";
+    hardwareConfiguration = productionMediaHardwareConfiguration;
+  };
+  productionMediaAlternateHardwareFixture = built.mkRpi5ProductionMedia {
+    name = "kaiba-rpi5-production-media-fixture";
+    verifiedSignedRelease = productionMediaSignedReleaseFixture;
+    transactionID = "transaction:rpi5-media-fixture:1";
+    target = productionMediaTarget;
+    hardwareConfiguration = productionMediaAlternateHardwareConfiguration;
   };
   productionMediaDeterminismFixture = built.mkRpi5ProductionMedia {
     name = "kaiba-rpi5-production-media-determinism-fixture";
     verifiedSignedRelease = productionMediaSignedReleaseFixture;
     transactionID = "transaction:rpi5-media-fixture:1";
     target = productionMediaTarget;
-    initialMediaDigest = "sha256:a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484";
+    hardwareConfiguration = productionMediaHardwareConfiguration;
   };
   productionMediaAlternatePlanFixture = built.mkRpi5ProductionMedia {
     name = "kaiba-rpi5-production-media-alternate-plan-fixture";
     verifiedSignedRelease = productionMediaSignedReleaseFixture;
     transactionID = "transaction:rpi5-media-alternate:1";
     target = productionMediaTarget;
-    initialMediaDigest = "sha256:a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484";
+    hardwareConfiguration = productionMediaHardwareConfiguration;
   };
   spoofedSignedRelease =
     pkgs.runCommand "kaiba-spoofed-signed-release"
@@ -1219,7 +1227,7 @@ let
         inherit verifiedSignedRelease;
         transactionID = "transaction:rpi5-media-fixture:1";
         target = productionMediaTarget;
-        initialMediaDigest = "sha256:a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484";
+        hardwareConfiguration = productionMediaHardwareConfiguration;
       }).drvPath
     )).success;
   productionMediaTargetInputAccepted =
@@ -1230,7 +1238,18 @@ let
         verifiedSignedRelease = productionMediaSignedReleaseFixture;
         transactionID = "transaction:rpi5-media-fixture:1";
         target = productionMediaTarget // targetOverrides;
-        initialMediaDigest = "sha256:a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484";
+        hardwareConfiguration = productionMediaHardwareConfiguration;
+      }).drvPath
+    )).success;
+  productionMediaHardwareConfigurationInputAccepted =
+    hardwareConfiguration:
+    (builtins.tryEval (
+      (built.mkRpi5ProductionMedia {
+        name = "kaiba-rpi5-production-media-hardware-configuration-input-evaluation";
+        verifiedSignedRelease = productionMediaSignedReleaseFixture;
+        transactionID = "transaction:rpi5-media-fixture:1";
+        target = productionMediaTarget;
+        inherit hardwareConfiguration;
       }).drvPath
     )).success;
   verifiedUnfusedCapsuleInputAccepted =
@@ -1286,6 +1305,12 @@ let
 
   qualificationProfileName = "raspberry-pi-5-model-b-v1alpha1.json";
   qualificationEvidenceName = "sacrificial-pi-5.json";
+  developmentPostureName = "raspberry-pi-5-development-posture-v1alpha1.json";
+  developmentPostureEvidencePath = "evidence/provisioning/development-posture/${developmentPostureName}";
+  developmentPosturePath = built.goSource + "/policies/${developmentPostureName}";
+  developmentPostureSchemaPath =
+    built.goSource + "/schemas/rpi5-development-posture-v1alpha1.schema.json";
+  developmentPosture = builtins.fromJSON (builtins.readFile developmentPosturePath);
   qualificationProfilePath = built.goSource + "/profiles/device-classes/${qualificationProfileName}";
   qualificationProfile = builtins.fromJSON (builtins.readFile qualificationProfilePath);
   qualificationPolicy = qualificationProfile // {
@@ -1359,6 +1384,84 @@ let
         )
       );
 
+  developmentPostureContract =
+    assert lib.assertMsg (
+      secureBootFixtureA.kaibaUnsignedArtifacts.bootOrderPolicy == developmentPosture.boot_order.policy
+    ) "the secure-boot artifact default drifted from the approved development posture";
+    pkgs.runCommand "kaiba-rpi5-development-posture-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.check-jsonschema
+          pkgs.coreutils
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+
+        readonly posture=${developmentPosturePath}
+        readonly schema=${developmentPostureSchemaPath}
+        readonly boot_config=${../../provisioning/config/rpi5-prototype-eeprom/boot.conf}
+        readonly unsigned_manifest=${secureBootFixtureA}/manifest.json
+
+        check-jsonschema --check-metaschema "$schema"
+        check-jsonschema --schemafile "$schema" "$posture"
+
+        jq -r '
+          [
+            "[all]",
+            "BOOT_UART=\(.boot_uart.value)",
+            "BOOT_ORDER=\(.boot_order.value)",
+            "ENABLE_SELF_UPDATE=\(.self_update.value)"
+          ][]
+        ' "$posture" > "$TMPDIR/expected-boot.conf"
+        cmp "$TMPDIR/expected-boot.conf" "$boot_config"
+
+        jq -e '
+          .production_ready == false
+          and .release_classification == "development_asset"
+          and .boot_order.evaluation == "right-to-left"
+          and .boot_order.sequence == ["nvme", "sd", "network-tftp", "restart"]
+          and .boot_order.production_blocker == true
+          and .boot_uart.review_status == "unreviewed-existing-development-setting"
+          and .videocore_jtag.policy == "unlocked-development"
+          and .videocore_jtag.production_blocker == true
+          and .initial_eeprom_update.retry_after_uncertain_result == false
+          and .initial_eeprom_update.other_updaters_permitted == false
+          and .recovery.bundle_prebuilt_before_ownership == true
+          and .recovery.execution_before_ownership_permitted == false
+          and .recovery.owned_state_required_for_execution == true
+          and .recovery.customer_key_signed == true
+          and .recovery.reject_stock == true
+          and .recovery.reject_unsigned == true
+          and .recovery.reject_wrong_key == true
+          and .recovery.reject_altered == true
+          and .self_update.automatic_sd_usb_tftp_scan == false
+          and .self_update.rpiboot_eeprom_write_still_possible == true
+          and .root_integrity.persistent_root == "read-only-dm-verity"
+          and .root_integrity.mutable_state == "tmpfs-only"
+          and .rollback.policy == "unimplemented-block-enrollment-ready"
+          and .rollback.older_correctly_signed_image_may_boot == true
+          and .lifecycle.terminal_state == "security_applied"
+          and .lifecycle.enrollment_ready == false
+          and .lifecycle.authorizes_mutation == false
+        ' "$posture" > /dev/null
+
+        jq -e \
+          --arg boot_order_policy '${developmentPosture.boot_order.policy}' \
+          '
+            .boot_order_policy == $boot_order_policy
+            and .persistent_mutable_state == "tmpfs-only"
+            and .rollback_policy == "unimplemented-block-enrollment-ready"
+            and .debug_policy == "videocore-jtag-unlocked-development"
+            and .eeprom_write_protection_policy == "unlocked-development"
+          ' "$unsigned_manifest" > /dev/null
+
+        install -D -m 0444 "$posture" \
+          "$out/${developmentPostureEvidencePath}"
+        touch "$out/passed"
+      '';
+
   deviceProfileSchema =
     assert profilePromotionContract;
     pkgs.runCommand "kaiba-device-profile-schema-check"
@@ -1374,6 +1477,7 @@ let
           --schemafile ${built.goSource}/schemas/device-profile-v1alpha1.schema.json \
           ${qualificationProfilePath}
         check-jsonschema --check-metaschema \
+          ${developmentPostureSchemaPath} \
           ${built.goSource}/schemas/rpi5-hardware-qualification-v1alpha1.schema.json
         check-jsonschema --check-metaschema \
           ${built.goSource}/schemas/rpi5-boot-signing-plan-v1alpha2.schema.json \
@@ -1383,12 +1487,18 @@ let
           ${built.goSource}/schemas/rpi5-device-media-layout-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-media-binding-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-media-cold-power-observation-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-media-cold-power-observation-v1alpha2.schema.json \
           ${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha2.schema.json \
           ${built.goSource}/schemas/rpi5-media-fixture-result-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-media-stage-receipt-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-media-stage-receipt-v1alpha2.schema.json \
           ${built.goSource}/schemas/rpi5-media-staging-plan-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-media-staging-plan-v1alpha2.schema.json \
           ${built.goSource}/schemas/rpi5-media-staging-receipt-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-media-staging-receipt-v1alpha2.schema.json \
           ${built.goSource}/schemas/rpi5-media-verification-receipt-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-media-verification-receipt-v1alpha2.schema.json \
           ${built.goSource}/schemas/rpi5-media-verification-report-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-unfused-runtime-facts-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-release-intent-v1alpha1.schema.json \
@@ -1400,27 +1510,22 @@ let
           ${built.goSource}/schemas/unsigned-artifact-set-v1alpha1.schema.json \
           ${built.goSource}/schemas/yubikey-signing-policy-v1alpha1.schema.json
 
-        readonly media_preflight_schema=${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha1.schema.json
+        readonly media_preflight_schema=${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha2.schema.json
         readonly media_preflight_valid="$TMPDIR/rpi5-media-device-preflight-valid.json"
         readonly media_preflight_invalid="$TMPDIR/rpi5-media-device-preflight-invalid.json"
         jq -cn '{
-          schema_version: "kaiba.provisioning.rpi5-media-device-preflight/v1alpha1",
+          schema_version: "kaiba.provisioning.rpi5-media-device-preflight/v1alpha2",
           status: "validated_no_write",
           evidence_mode: "device_preflight",
           plan_digest: ("sha256:" + ("a" * 64)),
           target: {
-            by_id_path: "/dev/disk/by-id/nvme-kaiba-test",
-            model: "Kaiba NVMe",
-            serial: "kaiba-serial-1",
-            wwid: "kaiba-wwid-1",
             size_bytes: 8388608,
-            logical_sector_size_bytes: 512,
-            physical_sector_size_bytes: 4096
+            logical_sector_size_bytes: 512
           },
           attachment_boot_id: "11111111-1111-4111-8111-111111111111",
           attachment_sequence: 1,
-          initial_media_digest: ("sha256:" + ("b" * 64)),
-          full_prestate_verified: true,
+          target_whole_device: true,
+          target_geometry_verified: true,
           sources_verified: true,
           target_usage_clear: true,
           target_locked: true,
@@ -1431,7 +1536,11 @@ let
           "$media_preflight_valid"
         for mutation in \
           '.unexpected_property = true' \
+          '.hardware_configuration_id = "hardware-configuration:prohibited:1"' \
+          '.target.device_path = "/dev/nvme0n1"' \
           '.write_performed = true' \
+          '.target_whole_device = false' \
+          '.target_geometry_verified = false' \
           '.plan_digest = "sha256:not-canonical"' \
           '.attachment_boot_id = "not-a-guid"'
         do
@@ -1441,6 +1550,156 @@ let
             "$media_preflight_invalid" > /dev/null 2>&1
           then
             echo "media preflight schema accepted prohibited mutation: $mutation" >&2
+            exit 1
+          fi
+        done
+
+        readonly media_stage_receipt_schema=${built.goSource}/schemas/rpi5-media-stage-receipt-v1alpha2.schema.json
+        readonly media_verification_receipt_schema=${built.goSource}/schemas/rpi5-media-verification-receipt-v1alpha2.schema.json
+        readonly media_cold_observation_schema=${built.goSource}/schemas/rpi5-media-cold-power-observation-v1alpha2.schema.json
+        readonly media_final_receipt_schema=${built.goSource}/schemas/rpi5-media-staging-receipt-v1alpha2.schema.json
+        readonly media_stage_receipt="$TMPDIR/rpi5-media-stage-receipt-valid.json"
+        readonly media_verification_receipt="$TMPDIR/rpi5-media-verification-receipt-valid.json"
+        readonly media_cold_observation="$TMPDIR/rpi5-media-cold-power-observation-valid.json"
+        readonly media_final_receipt="$TMPDIR/rpi5-media-staging-receipt-valid.json"
+
+        jq -cn '{
+          schema_version: "kaiba.provisioning.rpi5-media-stage-receipt/v1alpha2",
+          status: "staged_readback_required",
+          transaction_id: "transaction:media-schema:1",
+          plan_digest: ("sha256:" + ("a" * 64)),
+          signed_release_manifest_digest: ("sha256:" + ("b" * 64)),
+          layout_digest: ("sha256:" + ("c" * 64)),
+          target: {size_bytes: 8388608, logical_sector_size_bytes: 512},
+          attachment_boot_id: "11111111-1111-4111-8111-111111111111",
+          attachment_sequence: 1,
+          expected_media_digest: ("sha256:" + ("d" * 64)),
+          observed_media_digest: ("sha256:" + ("d" * 64)),
+          bytes_written: 9437184,
+          fsync_complete: true,
+          reopened_target: true,
+          independent_readback_required: true,
+          cold_power_cycle_observed: false,
+          one_time_settings_changed: false,
+          receipt_digest: ("sha256:" + ("e" * 64))
+        }' > "$media_stage_receipt"
+        check-jsonschema --schemafile "$media_stage_receipt_schema" "$media_stage_receipt"
+
+        jq -cn '{
+          schema_version: "kaiba.provisioning.rpi5-media-verification-receipt/v1alpha2",
+          status: "full_media_verified",
+          verification_mode: "independent_read_only_device",
+          transaction_id: "transaction:media-schema:1",
+          plan_digest: ("sha256:" + ("a" * 64)),
+          stage_receipt_digest: ("sha256:" + ("e" * 64)),
+          signed_release_manifest_digest: ("sha256:" + ("b" * 64)),
+          layout_digest: ("sha256:" + ("c" * 64)),
+          target: {size_bytes: 8388608, logical_sector_size_bytes: 512},
+          attachment_boot_id: "22222222-2222-4222-8222-222222222222",
+          attachment_sequence: 2,
+          full_media_digest: ("sha256:" + ("d" * 64)),
+          regions: [
+            {role: "primary-gpt", digest: ("sha256:" + ("1" * 64)), verified: true},
+            {role: "boot-filesystem", digest: ("sha256:" + ("2" * 64)), verified: true},
+            {role: "root-data", digest: ("sha256:" + ("3" * 64)), verified: true},
+            {role: "root-hash", digest: ("sha256:" + ("4" * 64)), verified: true},
+            {role: "tail-zero", digest: ("sha256:" + ("5" * 64)), verified: true},
+            {role: "backup-gpt", digest: ("sha256:" + ("6" * 64)), verified: true}
+          ],
+          gpt_verified: true,
+          fat_verified: true,
+          partition_digests_verified: true,
+          dm_verity_verified: true,
+          boot_signature_verified: true,
+          release_lineage_verified: true,
+          reopened_target: true,
+          cold_power_cycle_observed: false,
+          one_time_settings_changed: false,
+          receipt_digest: ("sha256:" + ("f" * 64))
+        }' > "$media_verification_receipt"
+        check-jsonschema \
+          --schemafile "$media_verification_receipt_schema" \
+          "$media_verification_receipt"
+
+        jq -cn '{
+          schema_version: "kaiba.provisioning.rpi5-media-cold-power-observation/v1alpha2",
+          observation_id: "observation:media-schema:1",
+          observation_mode: "manual_operator_confirmation",
+          transaction_id: "transaction:media-schema:1",
+          plan_digest: ("sha256:" + ("a" * 64)),
+          stage_receipt_digest: ("sha256:" + ("e" * 64)),
+          verification_receipt_digest: ("sha256:" + ("f" * 64)),
+          target: {size_bytes: 8388608, logical_sector_size_bytes: 512},
+          before_attachment_boot_id: "11111111-1111-4111-8111-111111111111",
+          before_attachment_sequence: 1,
+          after_attachment_boot_id: "22222222-2222-4222-8222-222222222222",
+          after_attachment_sequence: 2,
+          complete_power_removal: true,
+          collector_evidence_digest: ("sha256:" + ("7" * 64)),
+          capture_authenticated: false,
+          freshness_established: false,
+          observation_digest: ("sha256:" + ("8" * 64))
+        }' > "$media_cold_observation"
+        check-jsonschema \
+          --schemafile "$media_cold_observation_schema" \
+          "$media_cold_observation"
+
+        jq -cn '{
+          schema_version: "kaiba.provisioning.rpi5-media-staging-receipt/v1alpha2",
+          status: "media_staging_verified",
+          transaction_id: "transaction:media-schema:1",
+          plan_digest: ("sha256:" + ("a" * 64)),
+          stage_receipt_digest: ("sha256:" + ("e" * 64)),
+          verification_receipt_digest: ("sha256:" + ("f" * 64)),
+          cold_power_observation_digest: ("sha256:" + ("8" * 64)),
+          signed_release_manifest_digest: ("sha256:" + ("b" * 64)),
+          layout_digest: ("sha256:" + ("c" * 64)),
+          target: {size_bytes: 8388608, logical_sector_size_bytes: 512},
+          full_media_digest: ("sha256:" + ("d" * 64)),
+          cold_readback_verified: true,
+          capture_authenticated: false,
+          freshness_established: false,
+          hardware_observed: false,
+          security_enforced: false,
+          mutation_eligible: false,
+          one_time_settings_changed: false,
+          receipt_digest: ("sha256:" + ("9" * 64))
+        }' > "$media_final_receipt"
+        check-jsonschema --schemafile "$media_final_receipt_schema" "$media_final_receipt"
+
+        for receipt_schema_and_path in \
+          "$media_stage_receipt_schema:$media_stage_receipt" \
+          "$media_verification_receipt_schema:$media_verification_receipt" \
+          "$media_cold_observation_schema:$media_cold_observation" \
+          "$media_final_receipt_schema:$media_final_receipt"
+        do
+          receipt_schema="''${receipt_schema_and_path%%:*}"
+          receipt_path="''${receipt_schema_and_path#*:}"
+          jq '.target.serial = "prohibited-media-identity"' \
+            "$receipt_path" > "$media_preflight_invalid"
+          if check-jsonschema \
+            --schemafile "$receipt_schema" \
+            "$media_preflight_invalid" > /dev/null 2>&1
+          then
+            echo "media schema accepted a prohibited target serial: $receipt_schema" >&2
+            exit 1
+          fi
+          jq '.target.device_path = "/dev/nvme0n1"' \
+            "$receipt_path" > "$media_preflight_invalid"
+          if check-jsonschema \
+            --schemafile "$receipt_schema" \
+            "$media_preflight_invalid" > /dev/null 2>&1
+          then
+            echo "media schema accepted a prohibited target selector: $receipt_schema" >&2
+            exit 1
+          fi
+          jq '.hardware_configuration_id = "hardware-configuration:prohibited:1"' \
+            "$receipt_path" > "$media_preflight_invalid"
+          if check-jsonschema \
+            --schemafile "$receipt_schema" \
+            "$media_preflight_invalid" > /dev/null 2>&1
+          then
+            echo "media schema accepted a prohibited hardware-configuration identity: $receipt_schema" >&2
             exit 1
           fi
         done
@@ -1740,6 +1999,11 @@ let
       description = "Stable Raspberry Pi 5 device-profile conformance with the strict v1alpha1 schema.";
     }
     {
+      id = "rpi5-development-posture";
+      description = "The approved sacrificial Pi 5 development posture is schema-valid and artifact/configuration-bound: BOOT_ORDER=0xf216 selects NVMe, SD, TFTP, then restart; BOOT_UART=1 and ENABLE_SELF_UPDATE=0 are explicit. Policy leaves VideoCore JTAG and EEPROM write protection unlocked, requires recovery to be prebuilt before customer ownership, and forbids its execution until ownership. This software-only check makes no live hardware or enforcement claim. These settings are not production-ready; production boot/debug/write-protection values remain undecided, rollback is unimplemented, and enrollment is blocked.";
+      evidence = [ developmentPostureEvidencePath ];
+    }
+    {
       id = "go-tests";
       description = "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.";
     }
@@ -1753,7 +2017,7 @@ let
     }
     {
       id = "rpi5-production-media-contract";
-      description = "Complete software-only production-media contract binds the signed release, exact GPT/FAT/root/verity layout, plan-specialized writer, independent verifier, and canonical receipts without making hardware, cold-power, or security-enforcement claims.";
+      description = "Software-only v1alpha2 production-media contract sources the operational selector from typed hardware configuration while keeping the selector and configuration ID out of plans, receipts, and evidence; it binds the signed release, exact GPT/FAT/root/verity content, and per-run geometry without media model, serial, or WWID. The linker-fixed writer and verifier retain whole-device, clear-use, and geometry guards; this makes no hardware, cold-power, or live signed-system boot-enforcement claim.";
     }
     {
       id = "nixos-module-evaluation";
@@ -1864,7 +2128,7 @@ let
         check
         // {
           status = "passed";
-          evidence = [ ];
+          evidence = check.evidence or [ ];
         }
       ) checks;
     }
@@ -2845,10 +3109,10 @@ let
         export LC_ALL=C
 
         cd ${built.goSource}
-        readonly focused_test_pattern='^(TestFinalizeVerifiesCompleteCrossBundleLineage|TestResolveRejectsTreesOutsideCanonicalRPIBootBundleSet|TestResolveRequiresOwnedRecoveryUpdaterReplay|TestRetainedPublicationParentDetectsPathReplacement|TestTreePayloadLimitAccommodatesProductionRootImages|TestVerifyPublicationRejectsTamperingAndAdditions)$'
+        readonly focused_test_pattern='^(TestFinalizeVerifiesCompleteCrossBundleLineage|TestResolveRejectsBootPolicyAndSignedEEPROMConfigMismatch|TestResolveRejectsHistoricalBootPolicyForNewFinalization|TestResolveRejectsTreesOutsideCanonicalRPIBootBundleSet|TestResolveRequiresOwnedRecoveryUpdaterReplay|TestRetainedPublicationParentDetectsPathReplacement|TestTreePayloadLimitAccommodatesProductionRootImages|TestVerifyPublicationRejectsTamperingAndAdditions)$'
         go test ./internal/provisioning/signedrelease \
           -list "$focused_test_pattern" > "$TMPDIR/focused-tests.txt"
-        test "$(grep -Ec "$focused_test_pattern" "$TMPDIR/focused-tests.txt")" -eq 6
+        test "$(grep -Ec "$focused_test_pattern" "$TMPDIR/focused-tests.txt")" -eq 8
         KAIBA_SIGNED_RELEASE_TEST_PUBLICATION="$TMPDIR/publication.json" \
           go test ./internal/provisioning/signedrelease \
             -run "$focused_test_pattern" \
@@ -4199,33 +4463,109 @@ let
       (
         let
           contract = productionMediaFixture.kaibaRpi5ProductionMedia;
+          alternateHardwareContract = productionMediaAlternateHardwareFixture.kaibaRpi5ProductionMedia;
+          assetsContract = contract.assets.kaibaRpi5ProductionMediaAssets;
           stager = contract.deviceStager.kaibaMediaDeviceStager;
           verifier = contract.deviceVerifier.kaibaMediaDeviceVerifier;
           fixtureStager = contract.fixtureStager.kaibaMediaFixtureStager;
           fixtureVerifier = contract.regularVerifier.kaibaMediaRegularVerifier;
+          hardwareWithDevicePath =
+            devicePath:
+            productionMediaHardwareConfiguration
+            // {
+              targetMedia = { inherit devicePath; };
+            };
         in
         productionMediaInputAccepted productionMediaSignedReleaseFixture
         && !(productionMediaInputAccepted spoofedSignedRelease)
+        && builtins.attrNames hardwareConfigurations == [ "raspberryPi5SacrificialDevelopment" ]
+        &&
+          builtins.attrNames productionMediaHardwareConfiguration == [
+            "configurationID"
+            "schemaVersion"
+            "targetMedia"
+          ]
+        && builtins.attrNames productionMediaHardwareConfiguration.targetMedia == [ "devicePath" ]
+        &&
+          productionMediaHardwareConfiguration.schemaVersion
+          == "kaiba.provisioning.hardware-configuration/v1alpha1"
+        &&
+          productionMediaHardwareConfiguration.configurationID
+          == "hardware-configuration:rpi5-sacrificial-development:1"
+        && productionMediaHardwareConfiguration.targetMedia.devicePath == "/dev/nvme0n1"
         && productionMediaTargetInputAccepted { }
-        && !(productionMediaTargetInputAccepted { model = " leading-space"; })
-        && !(productionMediaTargetInputAccepted { serial = "trailing-space "; })
-        && !(productionMediaTargetInputAccepted { physicalSectorSizeBytes = 768; })
-        && !(productionMediaTargetInputAccepted { physicalSectorSizeBytes = 131072; })
+        && !(productionMediaTargetInputAccepted { model = "must-not-bind-media-model"; })
+        && !(productionMediaTargetInputAccepted { devicePath = "/dev/nvme0n1"; })
+        && !(productionMediaTargetInputAccepted { logicalSectorSizeBytes = 4096; })
         && !(productionMediaTargetInputAccepted { sizeBytes = 8388096; })
         && !(productionMediaTargetInputAccepted { sizeBytes = 9223372036854775807; })
+        && productionMediaHardwareConfigurationInputAccepted productionMediaHardwareConfiguration
+        && productionMediaHardwareConfigurationInputAccepted productionMediaAlternateHardwareConfiguration
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          productionMediaHardwareConfiguration // { schemaVersion = "unsupported"; }
+        ))
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          productionMediaHardwareConfiguration // { configurationID = "NOT-CANONICAL"; }
+        ))
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          productionMediaHardwareConfiguration // { model = "must-not-bind-media-model"; }
+        ))
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          productionMediaHardwareConfiguration
+          // {
+            targetMedia = productionMediaHardwareConfiguration.targetMedia // {
+              serial = "must-not-bind-media-serial";
+            };
+          }
+        ))
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          hardwareWithDevicePath "/dev/disk/by-id/nvme-forbidden"
+        ))
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          hardwareWithDevicePath "/dev/disk/by-path/platform-kaiba-fixture-part1"
+        ))
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          hardwareWithDevicePath "/dev/mapper/forbidden"
+        ))
+        && !(productionMediaHardwareConfigurationInputAccepted (hardwareWithDevicePath "nvme0n1"))
+        && !(builtins.functionArgs built.mkRpi5ProductionMedia ? targetDevicePath)
         && contract.verifiedSignedRelease == productionMediaSignedReleaseFixture
-        && contract.target == productionMediaTarget
+        && contract.targetGeometry == productionMediaTarget
+        && !(contract ? target)
+        && !(contract ? targetDevicePath)
+        && !(contract ? hardwareConfiguration)
+        && assetsContract.targetGeometry == productionMediaTarget
+        && !(assetsContract ? target)
+        && !(assetsContract ? targetDevicePath)
+        && !(assetsContract ? hardwareConfiguration)
+        && !(assetsContract ? hardwareConfigurationID)
+        && contract.hardwareConfigurationID == productionMediaHardwareConfiguration.configurationID
         && contract.transactionID == "transaction:rpi5-media-fixture:1"
-        && contract.schemaVersion == "kaiba.provisioning.rpi5-media-staging-plan/v1alpha1"
+        && contract.schemaVersion == "kaiba.provisioning.rpi5-media-staging-plan/v1alpha2"
         && contract.contentAddressedReleaseRequired
         && contract.verificationMode == "pure_offline_plan_derivation"
         && stager.blockDeviceWriteCapable
+        && stager.configuredSelectorMode == "operational_path_not_media_identity"
         && stager.fixtureModeAvailable == false
-        && stager.mutationScope == "one_linker_fixed_whole_device"
+        && stager.hardwareConfigurationID == productionMediaHardwareConfiguration.configurationID
+        && !(stager ? targetDevicePath)
+        && !(stager ? hardwareConfiguration)
+        && stager.mutationScope == "one_linker_fixed_operational_device_path"
         && verifier.blockDeviceReadCapable
         && verifier.blockDeviceWriteCapable == false
+        && verifier.configuredSelectorMode == "operational_path_not_media_identity"
+        && verifier.hardwareConfigurationID == productionMediaHardwareConfiguration.configurationID
+        && !(verifier ? targetDevicePath)
+        && !(verifier ? hardwareConfiguration)
         && verifier.independentAttachmentRequired
         && verifier.releaseLineageVerifier == productionMediaSignedReleaseFixture
+        && contract.assets.drvPath == alternateHardwareContract.assets.drvPath
+        && contract.plan == alternateHardwareContract.plan
+        && contract.deviceStager.drvPath != alternateHardwareContract.deviceStager.drvPath
+        && contract.deviceVerifier.drvPath != alternateHardwareContract.deviceVerifier.drvPath
+        &&
+          alternateHardwareContract.hardwareConfigurationID
+          == productionMediaAlternateHardwareConfiguration.configurationID
         && fixtureStager.blockDeviceAccess == false
         && fixtureStager.evidenceMode == "regular_file_fixture"
         && fixtureStager.mutationEligible == false
@@ -4258,6 +4598,7 @@ let
           pkgs.coreutils
           pkgs.go
           pkgs.gnugrep
+          pkgs.jq
           pkgs.python3
         ];
       }
@@ -4327,6 +4668,33 @@ let
         done
         test -f ${productionMediaFixture}/plan.json
         test ! -L ${productionMediaFixture}/plan.json
+        jq -e '
+          .schema_version == "kaiba.provisioning.rpi5-media-staging-plan/v1alpha2"
+          and .target == {
+            size_bytes: ${toString productionMediaTarget.sizeBytes},
+            logical_sector_size_bytes: 512
+          }
+          and (has("initial_media_digest") | not)
+        ' "$production_assets/plan.json" > /dev/null
+        if grep -E \
+          '"(by_id_path|device_path|model|serial|wwid|physical_sector_size_bytes|initial_media_digest)"' \
+          "$production_assets/plan.json"
+        then
+          echo 'canonical media plan retained an operational selector, hardware identity, or prestate field' >&2
+          exit 1
+        fi
+        if grep -F ${lib.escapeShellArg productionMediaHardwareConfiguration.targetMedia.devicePath} \
+          "$production_assets/plan.json"
+        then
+          echo 'linker-fixed operational selector leaked into the canonical media plan' >&2
+          exit 1
+        fi
+        if grep -F ${lib.escapeShellArg productionMediaHardwareConfiguration.configurationID} \
+          "$production_assets/plan.json"
+        then
+          echo 'hardware-configuration identity leaked into the canonical media plan' >&2
+          exit 1
+        fi
         test -x ${productionMediaFixture.kaibaRpi5ProductionMedia.deviceStager}/bin/kaiba-provision-media-device-stager
         test -x ${productionMediaFixture.kaibaRpi5ProductionMedia.deviceVerifier}/bin/kaiba-provision-media-device-verifier
         test -x ${productionMediaFixture.kaibaRpi5ProductionMedia.fixtureStager}/bin/kaiba-provision-media-fixture-stager
@@ -4705,6 +5073,7 @@ let
         test -r ${built.provision}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json
         test -r ${built.provision}/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json
         test -f ${deviceProfileSchema}/passed
+        test -f ${developmentPostureContract}/passed
         test -f ${probeBundleIntegrity}/passed
         test -f ${rpibootMetadataStdoutCompatibility}/passed
         test -f ${eepromReleaseContract}/passed
@@ -4719,6 +5088,20 @@ let
         test -f ${productionMediaStagingContract}/passed
         test -f ${developmentYubiKeySigningContract}/passed
         test -f ${moduleEval}/results.txt
+
+        jq -e \
+          '[.checks[] | select(.id == "rpi5-development-posture") | [.status, .evidence]]
+            == [["passed", ["${developmentPostureEvidencePath}"]]]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "rpi5-development-posture")
+            | [.system, .status, .evidence]
+          ] == [
+            ["aarch64-linux", "not-observed", []],
+            ["x86_64-linux", "passed", []]
+          ]
+        ' ${canonicalJSON}/report-input.json > /dev/null
 
         jq -e \
           '[.checks[] | select(.id == "authenticated-authority-bridge") | .status]
@@ -4800,7 +5183,12 @@ let
           ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
         ' ${canonicalJSON}/report-input.json > /dev/null
 
-        mkdir -p "$out/evidence/provisioning/hardware-qualification"
+        mkdir -p \
+          "$out/evidence/provisioning/development-posture" \
+          "$out/evidence/provisioning/hardware-qualification"
+        install -m 0444 \
+          ${developmentPostureContract}/${developmentPostureEvidencePath} \
+          "$out/${developmentPostureEvidencePath}"
         ${lib.optionalString (qualificationEvidence != null) ''
           entry=${./evidence + "/${qualificationEvidenceName}"}
           test -f "$entry"
@@ -4836,6 +5224,7 @@ let
 in
 {
   inherit
+    developmentPostureContract
     developmentYubiKeySigningContract
     deviceProfileSchema
     eepromReleaseContract

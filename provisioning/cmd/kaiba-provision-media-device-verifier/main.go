@@ -29,12 +29,14 @@ const (
 	maximumTrustedReceiptBytes = 4 * 1024 * 1024
 )
 
-// Nix must linker-fix this to the reviewed veritysetup store executable.
-// There is deliberately no flag or environment fallback.
+// Nix must linker-fix the public verification inputs and targetDevicePath to
+// one explicit station-local selector. There are deliberately no flag or
+// environment fallbacks.
 var veritysetupPath string
 var approvedPlanPath string
 var signedReleasePath string
 var mtypePath string
+var targetDevicePath string
 
 var (
 	effectiveUID        = os.Geteuid
@@ -120,7 +122,7 @@ func productionVerifyAndEncode(ctx context.Context, plan mediacontract.Plan, sta
 		return nil, err
 	}
 	inspector := mediadevice.Inspector{}
-	facts, err := inspector.InspectApproved(ctx, plan)
+	facts, err := inspector.InspectSelected(ctx, plan, targetDevicePath)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +134,7 @@ func productionVerifyAndEncode(ctx context.Context, plan mediacontract.Plan, sta
 		return nil, err
 	}
 	defer mediadevice.CloseLocked(target) //nolint:errcheck
-	current, err := inspector.ReinspectSame(ctx, plan, facts)
+	current, err := inspector.ReinspectSame(ctx, plan, targetDevicePath, facts)
 	if err != nil {
 		return nil, err
 	}
@@ -154,10 +156,17 @@ func productionVerifyAndEncode(ctx context.Context, plan mediacontract.Plan, sta
 	if err != nil {
 		return nil, fmt.Errorf("final complete-media revalidation after dm-verity: %w", err)
 	}
+	receiptFacts, err := inspector.ReinspectSame(ctx, plan, targetDevicePath, current)
+	if err != nil {
+		return nil, fmt.Errorf("reinspect verified target after final hash: %w", err)
+	}
+	if err := mediadevice.ValidateOpened(target, receiptFacts); err != nil {
+		return nil, fmt.Errorf("revalidate verified target after final hash: %w", err)
+	}
 	if finalDigest != plan.ExpectedMediaDigest {
 		return nil, fmt.Errorf("final complete-media digest after dm-verity is %s, expected %s", finalDigest, plan.ExpectedMediaDigest)
 	}
-	receipt, err := mediacontract.NewVerificationReceipt(plan, stage, mediacontract.VerificationIndependentDevice, current.BootID, current.DiskSequence, report)
+	receipt, err := mediacontract.NewVerificationReceipt(plan, stage, mediacontract.VerificationIndependentDevice, receiptFacts.BootID, receiptFacts.DiskSequence, report)
 	if err != nil {
 		return nil, err
 	}

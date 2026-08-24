@@ -82,17 +82,17 @@ func inspectRegularFixture(path string) (TargetFacts, error) {
 func (inventory SystemInventory) inspectDevice(requestedPath string) (TargetFacts, error) {
 	entry, err := os.Lstat(requestedPath)
 	if err != nil {
-		return TargetFacts{}, fmt.Errorf("inspect by-id target: %w", err)
+		return TargetFacts{}, fmt.Errorf("inspect device selector: %w", err)
 	}
 	if entry.Mode()&os.ModeSymlink == 0 && entry.Mode()&os.ModeDevice == 0 {
-		return TargetFacts{}, fmt.Errorf("%w: by-id target is neither a device alias nor a device node", ErrUnsafeTarget)
+		return TargetFacts{}, fmt.Errorf("%w: device selector is neither an allowed alias nor a device node", ErrUnsafeTarget)
 	}
 	resolvedPath, err := filepath.EvalSymlinks(requestedPath)
 	if err != nil {
-		return TargetFacts{}, fmt.Errorf("resolve by-id target: %w", err)
+		return TargetFacts{}, fmt.Errorf("resolve device selector: %w", err)
 	}
 	if !cleanAbsolutePath(resolvedPath) || (resolvedPath != "/dev" && !strings.HasPrefix(resolvedPath, "/dev/")) {
-		return TargetFacts{}, fmt.Errorf("%w: by-id alias resolves outside /dev", ErrUnsafeTarget)
+		return TargetFacts{}, fmt.Errorf("%w: device selector resolves outside /dev", ErrUnsafeTarget)
 	}
 	fd, err := syscall.Open(resolvedPath, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
