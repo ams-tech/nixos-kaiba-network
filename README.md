@@ -284,7 +284,7 @@ The provisioning leaf provides:
 - fail-closed signer, signing-client, signing-gate, and YubiKey-wrapper
   foundations, configured only through the Nix library factories
 
-`kaiba-provision probe` is an experimental, non-persistent Raspberry Pi 5
+`kaiba-provision probe` is a hardware-qualified, non-persistent Raspberry Pi 5
 preflight slice. It can normalize imported OTP metadata or acquire it from one
 lane-bound Pi 5 Model B using a digest-pinned metadata-only recovery bundle.
 Its result is correlation and partial preflight evidence, never authentication,

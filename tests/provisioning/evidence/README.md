@@ -12,14 +12,15 @@ into the reserved public report namespace
 Adding the completed record makes `tests/provisioning/packages.nix` derive the
 report status, description, and evidence path from it. The build rejects a
 record whose profile policy/adapter or pinned probe inputs differ from the
-current packaged inputs. Exact profile bytes and status must match while the
-profile is experimental; a later experimental-to-stable status-only promotion
-is accepted only when the status-independent policy digest is unchanged. The
+current packaged inputs. The checked ceremony record retains the exact
+profile digest and `experimental` status it captured. The current `stable`
+profile accepts that record only through the one-way status-only promotion
+rule and only while the status-independent policy digest is unchanged. The
 probe executable digest is checked on the CI system matching the record's
 `station_system`; both systems check the tool version and platform-independent
 bundle, firmware, and config digests. `source_revision` identifies the frozen
-ceremony revision; reviewers must verify that provenance when the later
-closeout commit adds this record. Update the checked canonical snapshot in
+ceremony revision; reviewers must verify that provenance whenever a change
+adds or replaces this record. Update the checked canonical snapshot in
 `tests/provisioning/report-input.json` in the same reviewed commit. A pending
 qualification must continue to cite no evidence, and an `incomplete` preflight
 record must never be added here.

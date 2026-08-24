@@ -19,7 +19,8 @@ interface, boot chain, or storage technology. Hardware-specific behavior is
 supplied by a signed device-class profile and a pinned platform adapter.
 
 This remains the target design rather than a complete implemented station. The
-experimental [Raspberry Pi 5 provisioning probe](raspberry-pi-5-provisioning-probe.md)
+hardware-qualified, read-only
+[Raspberry Pi 5 provisioning probe](raspberry-pi-5-provisioning-probe.md)
 implements one deliberately non-persistent adapter slice: target observation
 and partial unprovisioned-baseline evaluation. It cannot authorize or perform a
 device mutation. The separate
@@ -855,15 +856,20 @@ A future implementation must demonstrate that:
 
 ## Kaiba implementation boundary
 
-The current repository has an experimental Raspberry Pi 5 probe and profile,
-but no production provisioning station, coordinator, device RA, inventory
-activation service, bundle authority, pending-credential verifier, or
-independent provisioning audit service. The probe establishes only public
-target correlation and a partial observable baseline; it has no mutation or
+The current repository has a hardware-qualified, read-only Raspberry Pi 5
+probe backed by a stable device-class profile. It also has development
+foundations for durable control and audit, authenticated execute-side
+bridging, a one-shot lane guard, an offline signed-release assembler and Nix
+factory, and software-only production-media writer and verifier contracts. It
+still has no qualified production station, general production coordinator,
+device RA, inventory
+activation service, production bundle authority, or pending-credential
+verifier. The probe and these development foundations grant no mutation or
 activation authority. The integration PKI and file-backed agent key remain
 test fixtures.
 
-An implementation following this design will require, at minimum:
+Completing a production implementation following this design will require, at
+minimum, production qualification or integration of:
 
 - the generic transaction orchestrator and durable journal;
 - a signed device-class profile and platform-adapter interface;

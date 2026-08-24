@@ -11,8 +11,9 @@ This is the production security design and ceremony specification. The
 repository now contains a separate, fail-closed development-cohort reference
 implementation for building the target and unsigned artifacts, external
 approval-gated signing, transaction/audit state, and a one-shot physical lane
-guard. See the [live implementation runbook]. It has not been qualified on the
-physical rig and deliberately does not claim production enrollment. Do not
+guard. See the [live implementation runbook]. Its read-only probe has passed
+physical qualification; the mutation lane and irreversible path have not.
+The implementation deliberately does not claim production enrollment. Do not
 translate this checklist into ad hoc shell commands.
 
 The primary sources were checked on 2026-08-21. Raspberry Pi's maintained

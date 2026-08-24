@@ -11,8 +11,10 @@ authentication, remote attestation, a complete determination that a device is
 unprovisioned, or authorization to change the device. The command always emits
 `mutation_eligible: false` and `full_unprovisioned_state: not_established`.
 
-The profile and adapter are experimental until the hardware qualification at
-the end of this document has been completed and reviewed.
+The device-class profile is now `stable` following reviewed hardware
+qualification. The promotion changed status only and preserved the pinned
+adapter and status-independent policy. Stability applies to this read-only
+classification contract; it does not authorize target mutation.
 
 ## Safety boundary
 
@@ -263,9 +265,10 @@ from authorizing later mutations.
 
 ## Hardware qualification gate
 
-Do not promote the profile from `experimental` to `stable` or merge a change
-that enables the live path until a sacrificial fresh Pi 5 Model B passes this
-ceremony:
+The profile was promoted from `experimental` to `stable` only after a
+sacrificial fresh Pi 5 Model B passed this ceremony. Any change to the
+read-only policy, adapter, pinned inputs, or live acquisition path requires a
+new frozen qualification before the checked evidence can be replaced.
 
 The hardware findings above changed the profile and qualification contract.
 Any probe result or comparison record produced before this revision is
@@ -464,9 +467,10 @@ change. That change must also update the checked canonical snapshot in
 the evidence path from the completed record and binds it to the current profile
 policy and pinned probe inputs. The executable digest is checked by the CI job
 whose Nix system matches the recorded station; architecture-independent probe
-inputs are checked by both jobs. A subsequent, reviewed
-`experimental`-to-`stable` status-only promotion is allowed only while the
-policy digest remains unchanged. Reviewers must separately verify that
+inputs are checked by both jobs. The reviewed `experimental`-to-`stable`
+status-only promotion remains valid only while the policy digest is unchanged;
+the checked record therefore retains the status and exact profile digest
+captured during qualification. Reviewers must separately verify that
 `source_revision` is the frozen ceremony revision. The report is public on
 GitHub Pages; never add raw results or an `incomplete` preflight record.
 

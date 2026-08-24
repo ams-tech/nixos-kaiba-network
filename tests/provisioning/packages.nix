@@ -1737,7 +1737,7 @@ let
   checks = [
     {
       id = "device-profile-schema";
-      description = "Experimental Raspberry Pi 5 device-profile conformance with the strict v1alpha1 schema.";
+      description = "Stable Raspberry Pi 5 device-profile conformance with the strict v1alpha1 schema.";
     }
     {
       id = "go-tests";

@@ -52,10 +52,12 @@ mutation_eligible: false
 full_unprovisioned_state: not_established
 ```
 
-The profile also remains `experimental` and lists the storage, remaining OTP
-and key rows, EEPROM, firmware-authenticity, inventory, and other debug checks
-that the metadata-only probe cannot close. Those checks must be resolved for
-the exact transaction-bound board before ownership commit.
+The profile is now `stable` through a reviewed status-only promotion. Its
+adapter, status-independent policy digest, and eight deferred checks are
+unchanged. Stability covers the qualified read-only classification contract
+only; it neither establishes a fully unprovisioned board nor authorizes
+mutation. The deferred checks must be resolved for the exact
+transaction-bound board before ownership commit.
 
 The repository already contains useful foundations:
 
@@ -92,12 +94,15 @@ The repository already contains useful foundations:
   offline unfused record correlator that makes no hardware claim.
 
 The repository now contains a complete offline signed-release assembler and
-Nix factory, but it does not contain a production release assembled from the
-reviewed live-token results. It also does not yet contain a production-complete
-GPT/FAT/dm-verity NVMe writer and verifier, mutation-capable station backend,
-authenticated control-to-guard transport, or a proven RPIBOOT-to-normal-boot
-lane transition. In particular, the EEPROM foundation is not a production
-signed EEPROM, owned-recovery signature, hardware write, or OTP result.
+Nix factory, a complete software-only production-media writer and independent
+verifier contract, and authenticated execute-side control-to-guard transport.
+These remain foundations backed by synthetic or offline evidence: there is no
+production release assembled from reviewed live-token results, recorded
+physical NVMe stage and cold readback, production-authenticated post-mutation
+reconciliation path, fully qualified mutation-capable station, or proven
+RPIBOOT-to-normal-boot lane transition. In particular, the EEPROM foundation
+is not a production signed EEPROM, owned-recovery signature, hardware write,
+or OTP result.
 
 ## Safety invariants
 
@@ -126,10 +131,10 @@ These rules apply to every work item and rehearsal:
 
 ## Milestones
 
-| ID | Milestone | Initial status | Exit condition |
+| ID | Milestone | Current status | Exit condition |
 | --- | --- | --- | --- |
 | SB-00 | Read-only hardware qualification | Complete | Reviewed record is checked in and bound to the frozen profile and probe inputs. |
-| SB-01 | Baseline and documentation closeout | Not started | The profile decision, deferred target checks, documentation, and current-revision CI evidence are reviewed. |
+| SB-01 | Baseline and documentation closeout | In progress | The profile decision, deferred target checks, documentation, and current-revision CI evidence are reviewed. |
 | SB-02 | Development signing root | Not started | The development YubiKey and signing service pass the live key, PIN, touch, token-binding, and failure tests. |
 | SB-03 | Complete signed release | In progress | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
 | SB-04 | Target-media staging | In progress | The exact NVMe layout is written and cold-read back with matching digests. |
@@ -197,10 +202,9 @@ claim.
   probe input digests.
 - [ ] Confirm the checked record remains the only public, redacted evidence;
   retain raw probe results only under the approved private-evidence policy.
-- [ ] Decide whether to promote the device-class profile from `experimental` to
-  `stable`. A promotion must be status-only and must preserve the qualification
-  policy digest.
-- [ ] Update repository text that still describes physical qualification as
+- [x] Promote the device-class profile from `experimental` to `stable` in a
+  status-only change that preserves the qualification policy digest.
+- [x] Update repository text that still describes physical qualification as
   pending or the physical foundation as wholly unqualified.
 - [ ] Close, for the exact candidate board, every deferred check in the device
   profile:
@@ -979,7 +983,7 @@ plan are:
 - the [control-plane terminal workflow];
 - the [physical Pi 5 adapter];
 - the [live-station entry point];
-- the [experimental Pi 5 device profile]; and
+- the [Pi 5 device profile]; and
 - the [hardware-evidence handling rules].
 
 Changes to these boundaries should update their focused tests and add the
@@ -1031,5 +1035,5 @@ path must continue to reject `enrollment_ready`.
 [control-plane terminal workflow]: ../provisioning/internal/provisioning/controlplane/workflow.go
 [physical Pi 5 adapter]: ../provisioning/internal/provisioning/physicalrpi5/adapter.go
 [live-station entry point]: ../provisioning/cmd/kaiba-provision-station/main.go
-[experimental Pi 5 device profile]: ../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json
+[Pi 5 device profile]: ../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json
 [hardware-evidence handling rules]: ../tests/provisioning/evidence/README.md

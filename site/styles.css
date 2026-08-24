@@ -1246,6 +1246,12 @@ code {
   background: rgb(255 194 102 / 5%);
 }
 
+.status-qualified {
+  color: var(--cyan-soft);
+  border-color: rgb(85 220 255 / 40%);
+  background: rgb(85 220 255 / 5%);
+}
+
 .status-executable {
   color: var(--lime);
   border-color: rgb(185 245 106 / 38%);
