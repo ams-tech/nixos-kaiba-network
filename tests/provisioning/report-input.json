@@ -33,6 +33,13 @@
         "evidence": []
       },
       {
+        "id": "authenticated-restart-reconciliation",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Durable control, audit, and execute-once journals survive simulated process restarts while mTLS authority reads, strict Unix IPC, plan compilation, the lane guard, and the production Raspberry Pi 5 adapter implementation reconcile both applied and not-applied uncertain ownership outcomes by observation without redispatch. Target-facing OS interfaces are simulated; this makes no live-hardware or security-enforcement claim.",
+        "evidence": []
+      },
+      {
         "id": "media-staging-fixture",
         "system": "aarch64-linux",
         "status": "not-observed",
@@ -135,6 +142,13 @@
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, and lane-guard contract revalidation fail closed without exposing physical selectors or a generic mutation primitive.",
+        "evidence": []
+      },
+      {
+        "id": "authenticated-restart-reconciliation",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Durable control, audit, and execute-once journals survive simulated process restarts while mTLS authority reads, strict Unix IPC, plan compilation, the lane guard, and the production Raspberry Pi 5 adapter implementation reconcile both applied and not-applied uncertain ownership outcomes by observation without redispatch. Target-facing OS interfaces are simulated; this makes no live-hardware or security-enforcement claim.",
         "evidence": []
       },
       {

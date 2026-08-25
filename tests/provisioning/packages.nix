@@ -2012,6 +2012,10 @@ let
       description = "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, and lane-guard contract revalidation fail closed without exposing physical selectors or a generic mutation primitive.";
     }
     {
+      id = "authenticated-restart-reconciliation";
+      description = "Durable control, audit, and execute-once journals survive simulated process restarts while mTLS authority reads, strict Unix IPC, plan compilation, the lane guard, and the production Raspberry Pi 5 adapter implementation reconcile both applied and not-applied uncertain ownership outcomes by observation without redispatch. Target-facing OS interfaces are simulated; this makes no live-hardware or security-enforcement claim.";
+    }
+    {
       id = "media-staging-fixture";
       description = "Synthetic capsule-bound regular-file fixture validates FAT/GPT layout, staged extents, reopened readback, complete partition digests, dm-verity, and fail-closed tamper rejection without making hardware or enforcement claims.";
     }
@@ -5110,6 +5114,17 @@ let
         jq -e '
           [.automated.checks[]
             | select(.id == "authenticated-authority-bridge")
+            | [.system, .status]
+          ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
+        ' ${canonicalJSON}/report-input.json > /dev/null
+
+        jq -e \
+          '[.checks[] | select(.id == "authenticated-restart-reconciliation") | .status]
+            == ["passed"]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "authenticated-restart-reconciliation")
             | [.system, .status]
           ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
         ' ${canonicalJSON}/report-input.json > /dev/null

@@ -189,6 +189,68 @@ func TestLoopbackPlaintextAuditHandlerPreservesDevelopmentMode(t *testing.T) {
 	}
 }
 
+func TestMutualTLSExactReceiptReadDoesNotGrantTransactionWideVisibility(t *testing.T) {
+	service, err := NewService(&MemoryStore{}, WithClock(fixedClock()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testAppendRequest("event-1", "idem-1", ResultIntentRecorded)
+	first.Event.TransactionID = "transaction-1"
+	first.Event.StationID = "station-1"
+	first.Event.LaneID = "lane-1"
+	firstReceipt, err := service.Append(t.Context(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := testAppendRequest("event-2", "idem-2", ResultIntentRecorded)
+	second.Event.TransactionID = "transaction-1"
+	second.Event.StationID = "station-1"
+	second.Event.LaneID = "lane-1"
+	if _, err := service.Append(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/v1/events?transaction_id=transaction-1&receipt_id="+url.QueryEscape(firstReceipt.ReceiptID), nil)
+	request.TLS = auditVerifiedTLSState(t, "station-2/lane-2", "spiffe://kaiba.network/station/station-2/lane/lane-2")
+	response := httptest.NewRecorder()
+	Handler(service, mtls.MutualTLSIdentityPolicy()).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		SchemaVersion string   `json:"schema_version"`
+		Records       []Record `json:"records"`
+	}
+	if err := DecodeStrict(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Records) != 1 || envelope.Records[0].Event.EventID != "event-1" {
+		t.Fatalf("exact records = %#v", envelope.Records)
+	}
+
+	broad := httptest.NewRequest(http.MethodGet, "/api/v1/events?transaction_id=transaction-1", nil)
+	broad.TLS = request.TLS
+	broadResponse := httptest.NewRecorder()
+	Handler(service, mtls.MutualTLSIdentityPolicy()).ServeHTTP(broadResponse, broad)
+	if err := DecodeStrict(broadResponse.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Records) != 0 {
+		t.Fatalf("cross-lane broad read exposed %d records", len(envelope.Records))
+	}
+
+	missingTransaction := httptest.NewRequest(http.MethodGet,
+		"/api/v1/events?receipt_id="+url.QueryEscape(firstReceipt.ReceiptID), nil)
+	missingTransaction.TLS = request.TLS
+	missingTransactionResponse := httptest.NewRecorder()
+	Handler(service, mtls.MutualTLSIdentityPolicy()).ServeHTTP(missingTransactionResponse, missingTransaction)
+	if missingTransactionResponse.Code != http.StatusBadRequest {
+		t.Fatalf("unscoped exact read status = %d, want %d; body=%s",
+			missingTransactionResponse.Code, http.StatusBadRequest, missingTransactionResponse.Body.String())
+	}
+}
+
 func auditVerifiedTLSState(t *testing.T, commonName string, identityURIs ...string) *tls.ConnectionState {
 	t.Helper()
 	certificate := &x509.Certificate{Raw: []byte("audit-client-leaf"), Subject: pkix.Name{CommonName: commonName}}

@@ -273,9 +273,16 @@ claim-scoped command and transaction read with the active claim. A transfer
 must be authorized by the current claimant; it advances the fence and changes
 the active station/lane binding. The old certificate is rejected immediately
 afterward, and the new station/lane certificate is required for the next
-claim-scoped command. The audit service compares each append with the event's
-station and lane and limits reads to records for the authenticated pair. A
-valid but mismatched identity is forbidden before state can change.
+claim-scoped command. After release, transaction reads remain limited to the
+highest-fence historical claimant; a never-claimed transaction has no mTLS
+reader. The audit service compares each append with the event's station and
+lane, and broad reads remain limited to records for the authenticated pair.
+The authenticated bridge has one narrow exception for transferred-claim
+reconciliation: it may request at most eight exact, canonical receipt IDs for
+one required transaction. Those high-entropy receipt IDs act as read
+capabilities, remain confined by the control-read policy, and must not be
+logged or disclosed as public identifiers. A valid but mismatched identity is
+forbidden before state can change.
 
 Plan approval uses a separate certificate identity:
 
@@ -319,11 +326,23 @@ lane-guard state directory, bridge socket, or device nodes. The bridge exposes
 no browser endpoint, executable path, payload selector, hardware selector, or
 generic mutation request.
 
-The execute bridge intentionally rejects reconciliation mode. After an unknown
-result, claim reconstruction advances the fence and clears approval, while the
-original approval identity is not retained in the operation record. A separate
-authenticated reconciliation authority contract and the combined restart test
-remain required before an uncertain live mutation may resume.
+The authority bridge exposes separate, strict execute and reconciliation
+contracts. After an unknown result, claim reconstruction advances the fence
+and clears current forward-mutation approval. The operation record retains the
+original approval snapshot, and reconciliation reconstructs the exact original
+plan and attempt from that snapshot plus its durable approval and intent audit
+receipts. A fresh, short-lived reconciliation claim authorizes observation
+only; it cannot be converted into an execute request and the lane guard never
+redispatches the operation. Exact owned state becomes confirmed-applied; the
+exact original fresh prestate becomes terminal confirmed-not-applied. Neither
+outcome authorizes replay of the old request, and current policy refuses a new
+mutation claim after confirmed-not-applied until a separate retry protocol is
+reviewed. The combined authenticated restart test exercises both outcomes
+through reopened control, audit, and dedicated v1alpha1 attempt-journal stores
+and the real physical adapter with only target-facing I/O simulated. Prior
+`lane-guard/v1alpha3` journal envelopes are not auto-migrated. This remains
+software-only evidence: uncertain live mutation recovery still requires the
+documented sacrificial-hardware qualification before production use.
 
 The live station uses the following order for every irreversible operation:
 

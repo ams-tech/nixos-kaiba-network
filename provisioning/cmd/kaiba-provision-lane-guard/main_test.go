@@ -19,19 +19,22 @@ import (
 )
 
 type commandHardware struct {
-	observation laneguard.Observation
-	executions  int
-	poststate   laneguard.DirectState
+	observation  laneguard.Observation
+	observations int
+	executions   int
+	executeErr   error
+	poststate    laneguard.DirectState
 }
 
 func (hardware *commandHardware) Observe(context.Context, laneguard.Config) (laneguard.Observation, error) {
+	hardware.observations++
 	return hardware.observation, nil
 }
 
 func (hardware *commandHardware) Execute(_ context.Context, _ laneguard.Config, _ laneguard.Operation) (laneguard.OperationResult, error) {
 	hardware.executions++
 	hardware.observation.State = hardware.poststate
-	return laneguard.OperationResult{OutputDigest: commandDigest("f"), Detail: "fake physical execution"}, nil
+	return laneguard.OperationResult{OutputDigest: commandDigest("f"), Detail: "fake physical execution"}, hardware.executeErr
 }
 
 func TestDisabledCommandValidatesLaneWithoutMutationInputs(t *testing.T) {
@@ -121,6 +124,72 @@ func TestOneShotCommandUsesDurableJournalAndNoCallerArtifactPaths(t *testing.T) 
 	}
 	if err := run(context.Background(), []string{"--request", "/tmp/root-request.json"}); err == nil {
 		t.Fatal("root-supplied executable request flag was accepted")
+	}
+}
+
+func TestCommandReconcilesRestartWithModeAutoAndNoRedispatch(t *testing.T) {
+	restoreCommandGlobals(t)
+	effectiveUID = func() int { return 0 }
+	setImmutableTestGlobals(t)
+	plan, executeRequest := commandPlanAndRequest()
+	reconcileRequest := laneguard.ReconcileRequest{
+		SchemaVersion:   laneguard.ReconcileRequestSchemaVersion,
+		OriginalRequest: executeRequest,
+		Claim: laneguard.ReconciliationClaim{
+			StationID: plan.StationID, LaneID: plan.LaneID,
+			TransactionID: plan.TransactionID, TargetFingerprint: plan.TargetFingerprint,
+			ClaimID: "reconciliation-claim", FenceEpoch: plan.FenceEpoch + 1,
+			ExpiresAt: time.Now().UTC().Add(10 * time.Minute),
+		},
+	}
+	authorityCalls := 0
+	requestAuthority = func(_ context.Context, socketPath string, request authoritybridge.BridgeRequest) (authoritybridge.BoundRequest, error) {
+		authorityCalls++
+		if !filepath.IsAbs(socketPath) || request.SchemaVersion != authoritybridge.RequestSchemaVersion ||
+			request.TransactionID != plan.TransactionID || request.DraftSnapshot.PlanDigest != plan.PlanDigest {
+			t.Fatalf("authority request = %#v via %q", request, socketPath)
+		}
+		switch request.Mode {
+		case authoritybridge.ModeExecute:
+			return authoritybridge.BoundRequest{Plan: plan, ExecuteRequest: &executeRequest}, nil
+		case authoritybridge.ModeReconcile:
+			return authoritybridge.BoundRequest{Plan: plan, ReconcileRequest: &reconcileRequest}, nil
+		default:
+			t.Fatalf("authority mode = %q", request.Mode)
+			return authoritybridge.BoundRequest{}, nil
+		}
+	}
+	hardware := &commandHardware{
+		observation: laneguard.Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+		},
+		poststate:  plan.Operations[0].ExpectedPoststate,
+		executeErr: errors.New("response lost after target commit"),
+	}
+	var adapterModes []string
+	buildHardware = func(config physicalrpi5.Config) (laneguard.Hardware, error) {
+		adapterModes = append(adapterModes, config.InitialMode)
+		return hardware, nil
+	}
+	directory := t.TempDir()
+	draftPath := writeJSON(t, directory, "draft.json", commandDraft(plan))
+	journalPath := filepath.Join(directory, "journal.json")
+	common := []string{
+		"--enable-mutations", "--draft", draftPath,
+		"--bridge-socket", filepath.Join(directory, "bridge.sock"), "--journal", journalPath,
+	}
+	if err := run(context.Background(), common); !errors.Is(err, laneguard.ErrReconciliationRequired) {
+		t.Fatalf("uncertain execution = %v", err)
+	}
+	if err := run(context.Background(), append(append([]string(nil), common...), "--mode", "reconcile")); err != nil {
+		t.Fatalf("restart reconciliation = %v", err)
+	}
+	if authorityCalls != 2 || len(adapterModes) != 2 || adapterModes[0] != physicalrpi5.ModeFresh || adapterModes[1] != physicalrpi5.ModeAuto {
+		t.Fatalf("dispatch = authority:%d modes:%#v", authorityCalls, adapterModes)
+	}
+	if hardware.executions != 1 || hardware.observations != 3 {
+		t.Fatalf("reconciliation redispatch/double observation: executions=%d observations=%d", hardware.executions, hardware.observations)
 	}
 }
 
@@ -300,14 +369,14 @@ func commandDraft(plan laneguard.Plan) laneguard.Plan {
 
 func stubAuthorityResult(t *testing.T, plan laneguard.Plan, request laneguard.ExecuteRequest) {
 	t.Helper()
-	requestAuthority = func(_ context.Context, socketPath string, bridgeRequest authoritybridge.BridgeRequest) (authoritybridge.BoundExecution, error) {
+	requestAuthority = func(_ context.Context, socketPath string, bridgeRequest authoritybridge.BridgeRequest) (authoritybridge.BoundRequest, error) {
 		if !filepath.IsAbs(socketPath) || bridgeRequest.SchemaVersion != authoritybridge.RequestSchemaVersion ||
 			bridgeRequest.Mode != authoritybridge.ModeExecute || bridgeRequest.TransactionID != plan.TransactionID ||
 			bridgeRequest.DraftSnapshot.ApprovalID != "" || bridgeRequest.DraftSnapshot.IntentReceipt != "" ||
 			bridgeRequest.DraftSnapshot.IntentSequence != 0 || bridgeRequest.DraftSnapshot.PlanDigest != plan.PlanDigest {
 			t.Fatalf("authority request = %#v via %q", bridgeRequest, socketPath)
 		}
-		return authoritybridge.BoundExecution{Plan: plan, Request: request}, nil
+		return authoritybridge.BoundRequest{Plan: plan, ExecuteRequest: &request}, nil
 	}
 }
 

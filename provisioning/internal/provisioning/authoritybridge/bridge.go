@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	RequestSchemaVersion  = "provisioning.kaiba.network/authority-bridge-request/v1alpha1"
-	ResponseSchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha1"
+	RequestSchemaVersion  = "provisioning.kaiba.network/authority-bridge-request/v1alpha2"
+	ResponseSchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha2"
 
 	// AuthorityReadTimeout is the maximum duration expected from each
 	// authenticated control or audit read. Network adapters must enforce this
@@ -32,11 +32,11 @@ const (
 
 var (
 	ErrInvalidRequest            = errors.New("invalid authority bridge request")
-	ErrReconciliationUnsupported = errors.New("authenticated reconciliation is not implemented")
 	ErrAuthoritySource           = errors.New("authenticated authority source failed")
 	ErrAuthorityChanged          = errors.New("control authority changed while binding")
 	ErrAuthorityRecordMissing    = errors.New("required audit authority record is missing")
 	ErrAuthorityRecordDuplicate  = errors.New("required audit authority record is duplicated")
+	ErrAuthorityRecordUnexpected = errors.New("audit authority returned an unexpected record")
 	ErrAuthorityRejected         = errors.New("control or audit authority rejected the plan")
 )
 
@@ -58,12 +58,13 @@ type BridgeRequest struct {
 	DraftSnapshot laneguard.Plan `json:"draft_snapshot"`
 }
 
-// BoundExecution is the only successful bridge result. The lane guard still
-// independently validates the pair and its immutable release binding before
-// constructing a physical adapter.
-type BoundExecution struct {
-	Plan    laneguard.Plan           `json:"plan"`
-	Request laneguard.ExecuteRequest `json:"request"`
+// BoundRequest is a strict union. Exactly one request variant is present and
+// the lane guard independently revalidates it against Plan before constructing
+// a physical adapter or observing the target.
+type BoundRequest struct {
+	Plan             laneguard.Plan
+	ExecuteRequest   *laneguard.ExecuteRequest
+	ReconcileRequest *laneguard.ReconcileRequest
 }
 
 // ControlReader and AuditReader are intentionally read-only. Production
@@ -74,7 +75,7 @@ type ControlReader interface {
 }
 
 type AuditReader interface {
-	GetRecords(context.Context, string) ([]auditlog.Record, error)
+	GetRecordsByReceiptIDs(context.Context, string, []string) ([]auditlog.Record, error)
 }
 
 type Binder struct {
@@ -87,15 +88,15 @@ type Binder struct {
 // Bind fetches control state twice around the audit read. This closes the
 // obvious mixed-snapshot window: any claim, fence, approval, intent, or
 // resource-version change during authority collection fails closed.
-func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundExecution, error) {
+func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundRequest, error) {
 	if err := validateBridgeRequest(request); err != nil {
-		return BoundExecution{}, err
+		return BoundRequest{}, err
 	}
 	if binder.Control == nil || binder.Audit == nil {
-		return BoundExecution{}, fmt.Errorf("%w: readers are not configured", ErrAuthoritySource)
+		return BoundRequest{}, fmt.Errorf("%w: readers are not configured", ErrAuthoritySource)
 	}
 	if binder.LeaseSafetyMargin < 0 {
-		return BoundExecution{}, fmt.Errorf("%w: lease safety margin is negative", ErrAuthoritySource)
+		return BoundRequest{}, fmt.Errorf("%w: lease safety margin is negative", ErrAuthoritySource)
 	}
 	now := time.Now
 	if binder.Now != nil {
@@ -104,47 +105,47 @@ func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundExec
 
 	draft, err := plancompiler.DraftFromSnapshot(request.DraftSnapshot)
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("%w: restore draft: %w", ErrInvalidRequest, err)
+		return BoundRequest{}, fmt.Errorf("%w: restore draft: %w", ErrInvalidRequest, err)
 	}
 	first, err := binder.Control.GetTransaction(ctx, request.TransactionID)
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("%w: first control read: %w", ErrAuthoritySource, err)
+		return BoundRequest{}, fmt.Errorf("%w: first control read: %w", ErrAuthoritySource, err)
 	}
 	firstSnapshot, err := json.Marshal(first)
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("%w: snapshot first control read: %w", ErrAuthoritySource, err)
+		return BoundRequest{}, fmt.Errorf("%w: snapshot first control read: %w", ErrAuthoritySource, err)
 	}
-	records, err := binder.Audit.GetRecords(ctx, request.TransactionID)
+	receiptIDs, err := authorityReceiptIDs(first, request.Mode)
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("%w: audit read: %w", ErrAuthoritySource, err)
+		return BoundRequest{}, err
+	}
+	records, err := binder.Audit.GetRecordsByReceiptIDs(ctx, request.TransactionID, receiptIDs)
+	if err != nil {
+		return BoundRequest{}, fmt.Errorf("%w: audit read: %w", ErrAuthoritySource, err)
 	}
 	second, err := binder.Control.GetTransaction(ctx, request.TransactionID)
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("%w: second control read: %w", ErrAuthoritySource, err)
+		return BoundRequest{}, fmt.Errorf("%w: second control read: %w", ErrAuthoritySource, err)
 	}
 	secondSnapshot, err := json.Marshal(second)
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("%w: snapshot second control read: %w", ErrAuthoritySource, err)
+		return BoundRequest{}, fmt.Errorf("%w: snapshot second control read: %w", ErrAuthoritySource, err)
 	}
 	if !bytes.Equal(firstSnapshot, secondSnapshot) {
-		return BoundExecution{}, ErrAuthorityChanged
+		return BoundRequest{}, ErrAuthorityChanged
 	}
-	if second.Approval == nil || second.Approval.AuditReceiptID == "" || len(second.Operations) == 0 {
-		return BoundExecution{}, ErrAuthorityRecordMissing
-	}
-	currentIntent := second.Operations[len(second.Operations)-1]
-	if currentIntent.IntentAuditReceiptID == "" {
-		return BoundExecution{}, ErrAuthorityRecordMissing
-	}
-	approvalRecord, approvalReceipt, err := selectUniqueRecord(records, second.Approval.AuditReceiptID)
+	approvalRecord, approvalReceipt, err := selectUniqueRecord(records, receiptIDs[0])
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("approval authority: %w", err)
+		return BoundRequest{}, fmt.Errorf("approval authority: %w", err)
 	}
-	intentRecord, intentReceipt, err := selectUniqueRecord(records, currentIntent.IntentAuditReceiptID)
+	intentRecord, intentReceipt, err := selectUniqueRecord(records, receiptIDs[1])
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("intent authority: %w", err)
+		return BoundRequest{}, fmt.Errorf("intent authority: %w", err)
 	}
-	bound, err := plancompiler.Bind(draft, plancompiler.Authority{
+	if len(records) != len(receiptIDs) {
+		return BoundRequest{}, ErrAuthorityRecordUnexpected
+	}
+	authority := plancompiler.Authority{
 		Transaction:       second,
 		ApprovalReceipt:   approvalReceipt,
 		ApprovalRecord:    approvalRecord,
@@ -152,19 +153,34 @@ func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundExec
 		IntentRecord:      intentRecord,
 		Now:               now().UTC(),
 		LeaseSafetyMargin: binder.LeaseSafetyMargin,
-	})
-	if err != nil {
-		return BoundExecution{}, fmt.Errorf("%w: bind plan: %w", ErrAuthorityRejected, err)
 	}
-	plan, executeRequest, err := bound.Execution()
-	if err != nil {
-		return BoundExecution{}, fmt.Errorf("%w: construct bound execution: %w", ErrAuthorityRejected, err)
+	var result BoundRequest
+	switch request.Mode {
+	case ModeExecute:
+		bound, bindErr := plancompiler.Bind(draft, authority)
+		if bindErr != nil {
+			return BoundRequest{}, fmt.Errorf("%w: bind execution: %w", ErrAuthorityRejected, bindErr)
+		}
+		plan, executeRequest, executionErr := bound.Execution()
+		if executionErr != nil {
+			return BoundRequest{}, fmt.Errorf("%w: construct bound execution: %w", ErrAuthorityRejected, executionErr)
+		}
+		result = BoundRequest{Plan: plan, ExecuteRequest: &executeRequest}
+	case ModeReconcile:
+		bound, bindErr := plancompiler.BindReconciliation(draft, authority)
+		if bindErr != nil {
+			return BoundRequest{}, fmt.Errorf("%w: bind reconciliation: %w", ErrAuthorityRejected, bindErr)
+		}
+		plan, reconcileRequest, reconciliationErr := bound.Reconciliation()
+		if reconciliationErr != nil {
+			return BoundRequest{}, fmt.Errorf("%w: construct bound reconciliation: %w", ErrAuthorityRejected, reconciliationErr)
+		}
+		result = BoundRequest{Plan: plan, ReconcileRequest: &reconcileRequest}
 	}
-	execution := BoundExecution{Plan: plan, Request: executeRequest}
-	if err := validateBoundExecution(execution, request); err != nil {
-		return BoundExecution{}, fmt.Errorf("%w: generated execution: %w", ErrAuthorityRejected, err)
+	if err := validateBoundRequest(result, request); err != nil {
+		return BoundRequest{}, fmt.Errorf("%w: generated binding: %w", ErrAuthorityRejected, err)
 	}
-	return execution, nil
+	return result, nil
 }
 
 func validateBridgeRequest(request BridgeRequest) error {
@@ -172,13 +188,34 @@ func validateBridgeRequest(request BridgeRequest) error {
 		return ErrInvalidRequest
 	}
 	switch request.Mode {
-	case ModeExecute:
+	case ModeExecute, ModeReconcile:
 		return nil
-	case ModeReconcile:
-		return ErrReconciliationUnsupported
 	default:
 		return ErrInvalidRequest
 	}
+}
+
+func authorityReceiptIDs(transaction controlplane.Transaction, mode Mode) ([]string, error) {
+	if len(transaction.Operations) == 0 {
+		return nil, ErrAuthorityRecordMissing
+	}
+	operation := transaction.Operations[len(transaction.Operations)-1]
+	if operation.IntentAuditReceiptID == "" {
+		return nil, ErrAuthorityRecordMissing
+	}
+	var approvalReceiptID string
+	switch mode {
+	case ModeExecute:
+		if transaction.Approval != nil {
+			approvalReceiptID = transaction.Approval.AuditReceiptID
+		}
+	case ModeReconcile:
+		approvalReceiptID = operation.Approval.AuditReceiptID
+	}
+	if approvalReceiptID == "" {
+		return nil, ErrAuthorityRecordMissing
+	}
+	return []string{approvalReceiptID, operation.IntentAuditReceiptID}, nil
 }
 
 func selectUniqueRecord(records []auditlog.Record, receiptID string) (auditlog.Record, auditlog.Receipt, error) {
@@ -213,12 +250,11 @@ func receiptFromRecord(record auditlog.Record) auditlog.Receipt {
 	}
 }
 
-func validateBoundExecution(execution BoundExecution, source BridgeRequest) error {
-	if execution.Plan.TransactionID != source.TransactionID || execution.Plan.PlanDigest != source.DraftSnapshot.PlanDigest ||
-		execution.Request.TransactionID != source.TransactionID {
-		return errors.New("execution identity differs from the requested draft")
+func validateBoundRequest(binding BoundRequest, source BridgeRequest) error {
+	if binding.Plan.TransactionID != source.TransactionID || binding.Plan.PlanDigest != source.DraftSnapshot.PlanDigest {
+		return errors.New("binding identity differs from the requested draft")
 	}
-	authorityFree := execution.Plan
+	authorityFree := binding.Plan
 	authorityFree.ApprovalID = ""
 	authorityFree.IntentReceipt = ""
 	authorityFree.IntentSequence = 0
@@ -228,18 +264,33 @@ func validateBoundExecution(execution BoundExecution, source BridgeRequest) erro
 	if !reflect.DeepEqual(authorityFree, source.DraftSnapshot) {
 		return errors.New("bound plan body differs from the requested draft")
 	}
-	config := validationConfig(execution.Plan)
-	if err := laneguard.ValidatePlanRequest(config, execution.Plan, execution.Request); err != nil {
-		return fmt.Errorf("plan/request contract: %w", err)
+	switch source.Mode {
+	case ModeExecute:
+		if binding.ExecuteRequest == nil || binding.ReconcileRequest != nil || binding.ExecuteRequest.TransactionID != source.TransactionID {
+			return errors.New("execution response is not a strict execute request")
+		}
+		if err := laneguard.ValidatePlanRequest(validationConfig(binding.Plan.StationID, binding.Plan.LaneID), binding.Plan, *binding.ExecuteRequest); err != nil {
+			return fmt.Errorf("plan/execute-request contract: %w", err)
+		}
+	case ModeReconcile:
+		if binding.ExecuteRequest != nil || binding.ReconcileRequest == nil || binding.ReconcileRequest.OriginalRequest.TransactionID != source.TransactionID {
+			return errors.New("reconciliation response is not a strict reconcile request")
+		}
+		claim := binding.ReconcileRequest.Claim
+		if err := laneguard.ValidateReconcileRequest(validationConfig(claim.StationID, claim.LaneID), binding.Plan, *binding.ReconcileRequest); err != nil {
+			return fmt.Errorf("plan/reconcile-request contract: %w", err)
+		}
+	default:
+		return errors.New("binding mode is invalid")
 	}
 	return nil
 }
 
-func validationConfig(plan laneguard.Plan) laneguard.Config {
+func validationConfig(stationID, laneID string) laneguard.Config {
 	return laneguard.Config{
 		SchemaVersion:    laneguard.ContractSchemaVersion,
-		StationID:        plan.StationID,
-		LaneID:           plan.LaneID,
+		StationID:        stationID,
+		LaneID:           laneID,
 		RPIBootSysfsPath: "/sys/bus/usb/devices/authority-bridge-validation",
 		UARTPath:         "/dev/serial/by-id/authority-bridge-validation",
 		PowerGPIO:        laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0"},

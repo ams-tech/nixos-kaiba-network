@@ -117,6 +117,9 @@ func (s *Service) RecordIntent(_ context.Context, request RecordIntentRequest) (
 			if operation.ID == request.OperationID {
 				return fmt.Errorf("%w: operation_id already exists", ErrConflict)
 			}
+			if operation.Status == OperationConfirmedNotApplied {
+				return fmt.Errorf("%w: confirmed-not-applied operations cannot be retried under the current protocol", ErrIllegalTransition)
+			}
 			if operation.Status == OperationIntentRecorded || operation.Status == OperationUncertain {
 				return fmt.Errorf("%w: previous operation requires reconciliation", ErrIllegalTransition)
 			}
@@ -131,6 +134,7 @@ func (s *Service) RecordIntent(_ context.Context, request RecordIntentRequest) (
 		transaction.Operations = append(transaction.Operations, OperationRecord{
 			ID: request.OperationID, Operation: request.Operation, Status: OperationIntentRecorded,
 			PlanDigest: request.PlanDigest, Release: approval.Release, ApprovalExpiresAt: approval.ExpiresAt,
+			Approval:       cloneApproval(*approval),
 			InputDigest:    request.InputDigest,
 			PrestateDigest: request.PrestateDigest, IntentAuditReceiptID: request.AuditReceiptID,
 			IntentAt: now, IntentFenceEpoch: claim.FenceEpoch,
@@ -138,6 +142,11 @@ func (s *Service) RecordIntent(_ context.Context, request RecordIntentRequest) (
 		transaction.Status = StatusMutationInProgress
 		return nil
 	})
+}
+
+func cloneApproval(approval Approval) Approval {
+	approval.AllowedOperations = append([]string(nil), approval.AllowedOperations...)
+	return approval
 }
 
 func (s *Service) RecordStageEvidence(ctx context.Context, request RecordEvidenceRequest) (Transaction, error) {
@@ -358,9 +367,8 @@ func validateCompletedDevelopmentCampaign(operations []OperationRecord, approval
 		case OperationSucceeded, OperationConfirmedApplied:
 			next++
 		case OperationConfirmedNotApplied:
-			// A conclusive no-op does not satisfy this campaign step. The
-			// existing reconciliation flow may later record a new successful
-			// intent for the same logical operation.
+			// A conclusive no-op does not satisfy this campaign step and cannot
+			// be retried under the current protocol.
 		default:
 			return fmt.Errorf("%w: operation record %d lacks authoritative terminal evidence", ErrIllegalTransition, index+1)
 		}

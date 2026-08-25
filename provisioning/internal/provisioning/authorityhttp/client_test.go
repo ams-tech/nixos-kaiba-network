@@ -100,6 +100,38 @@ func TestReadersUseMTLSStrictRoutesAndSeparateRoots(t *testing.T) {
 	}
 }
 
+func TestAuditReaderUsesExactReceiptSelection(t *testing.T) {
+	certificatePath, keyPath := writeClientCredential(t)
+	receiptID := "sha256:" + strings.Repeat("a", 64)
+	server, serverCA := startMTLSServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		if values := request.URL.Query()["receipt_id"]; len(values) != 1 || values[0] != receiptID {
+			t.Errorf("receipt query = %#v", values)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(struct {
+			SchemaVersion string            `json:"schema_version"`
+			Records       []auditlog.Record `json:"records"`
+		}{auditlog.StoreSchemaVersion, []auditlog.Record{{
+			Sequence: 1, Event: auditlog.Event{TransactionID: "transaction-1"},
+		}}})
+	})
+	reader, err := NewAuditReader(server.URL, mtls.ClientFiles{
+		Certificate: certificatePath, PrivateKey: keyPath, ServerCA: serverCA,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := reader.GetRecordsByReceiptIDs(context.Background(), "transaction-1", []string{receiptID})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("exact audit records = %#v, %v", records, err)
+	}
+	for _, receiptIDs := range [][]string{nil, {"bad"}, {receiptID, receiptID}} {
+		if _, err := reader.GetRecordsByReceiptIDs(context.Background(), "transaction-1", receiptIDs); err == nil {
+			t.Fatalf("invalid receipt selection accepted: %#v", receiptIDs)
+		}
+	}
+}
+
 func TestIndependentReadersRejectSharedServerTrustRoot(t *testing.T) {
 	certificatePath, keyPath := writeClientCredential(t)
 	_, sharedCA := startMTLSServer(t, func(http.ResponseWriter, *http.Request) {})
@@ -270,6 +302,9 @@ func TestReadersRejectInvalidTransactionIDWithoutNetworkAccess(t *testing.T) {
 	}
 	if _, err := (&AuditReader{}).GetRecords(context.Background(), "transaction/escape"); err == nil {
 		t.Fatal("invalid audit transaction ID was accepted")
+	}
+	if _, err := (&AuditReader{}).GetRecordsByReceiptIDs(context.Background(), "transaction/escape", []string{"sha256:" + strings.Repeat("a", 64)}); err == nil {
+		t.Fatal("invalid exact audit transaction ID was accepted")
 	}
 }
 

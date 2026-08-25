@@ -24,7 +24,7 @@ func (function controlReaderFunc) GetTransaction(ctx context.Context, transactio
 
 type auditReaderFunc func(context.Context, string) ([]auditlog.Record, error)
 
-func (function auditReaderFunc) GetRecords(ctx context.Context, transactionID string) ([]auditlog.Record, error) {
+func (function auditReaderFunc) GetRecordsByReceiptIDs(ctx context.Context, transactionID string, _ []string) ([]auditlog.Record, error) {
 	return function(ctx, transactionID)
 }
 
@@ -63,13 +63,13 @@ func TestBinderReturnsOnlyTheCurrentAuthenticatedExecution(t *testing.T) {
 	if controlCalls != 2 {
 		t.Fatalf("control reads = %d, want 2", controlCalls)
 	}
-	if execution.Request.Sequence != 1 || execution.Plan.IntentSequence != 1 ||
+	if execution.ExecuteRequest == nil || execution.ReconcileRequest != nil || execution.ExecuteRequest.Sequence != 1 || execution.Plan.IntentSequence != 1 ||
 		execution.Plan.IntentReceipt != fixture.intentReceiptID ||
 		execution.Plan.ApprovalID != fixture.transaction.Approval.ID {
-		t.Fatalf("bound execution = %#v / %#v", execution.Plan, execution.Request)
+		t.Fatalf("bound execution = %#v / %#v", execution.Plan, execution.ExecuteRequest)
 	}
-	if execution.Request.ClaimExpiresAt != fixture.transaction.ActiveClaim.ExpiresAt {
-		t.Fatalf("claim expiry = %s", execution.Request.ClaimExpiresAt)
+	if execution.ExecuteRequest.ClaimExpiresAt != fixture.transaction.ActiveClaim.ExpiresAt {
+		t.Fatalf("claim expiry = %s", execution.ExecuteRequest.ClaimExpiresAt)
 	}
 	if execution.Plan.PlanDigest != fixture.request.DraftSnapshot.PlanDigest {
 		t.Fatal("bridge changed the approved plan digest")
@@ -205,6 +205,7 @@ func TestBinderRequiresUniqueApprovalAndCurrentIntentRecords(t *testing.T) {
 		{name: "missing intent", records: []auditlog.Record{find(fixture.approvalReceiptID)}, want: ErrAuthorityRecordMissing},
 		{name: "duplicate approval", records: append(append([]auditlog.Record(nil), fixture.records...), find(fixture.approvalReceiptID)), want: ErrAuthorityRecordDuplicate},
 		{name: "duplicate intent", records: append(append([]auditlog.Record(nil), fixture.records...), find(fixture.intentReceiptID)), want: ErrAuthorityRecordDuplicate},
+		{name: "unexpected record", records: append(append([]auditlog.Record(nil), fixture.records...), auditlog.Record{}), want: ErrAuthorityRecordUnexpected},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -261,22 +262,36 @@ func TestBinderPropagatesAuthoritySourceFailuresWithoutUsingPartialState(t *test
 	}
 }
 
-func TestBinderRejectsReconciliationBeforeAuthorityReads(t *testing.T) {
+func TestBinderRejectsReconciliationWithoutAReconciliationClaim(t *testing.T) {
 	fixture := newBridgeFixture(t)
 	request := fixture.request
 	request.Mode = ModeReconcile
-	binder := Binder{
-		Control: controlReaderFunc(func(context.Context, string) (controlplane.Transaction, error) {
-			t.Fatal("reconciliation reached control")
-			return controlplane.Transaction{}, nil
-		}),
-		Audit: auditReaderFunc(func(context.Context, string) ([]auditlog.Record, error) {
-			t.Fatal("reconciliation reached audit")
-			return nil, nil
-		}),
-	}
-	if _, err := binder.Bind(context.Background(), request); !errors.Is(err, ErrReconciliationUnsupported) {
+	binder := fixedBinder(fixture, fixture.records)
+	if _, err := binder.Bind(context.Background(), request); !errors.Is(err, ErrAuthorityRejected) {
 		t.Fatalf("Bind() error = %v", err)
+	}
+}
+
+func TestBinderReconstructsExpiredAttemptUnderFreshReconciliationClaim(t *testing.T) {
+	fixture := newReconciliationBridgeFixture(t, "station-reconcile", "lane-reconcile")
+	binding, err := fixedBinder(fixture, fixture.records).Bind(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.ExecuteRequest != nil || binding.ReconcileRequest == nil {
+		t.Fatalf("binding is not a strict reconciliation union: %#v", binding)
+	}
+	reconcile := binding.ReconcileRequest
+	if reconcile.OriginalRequest.FenceEpoch != fixture.request.DraftSnapshot.FenceEpoch ||
+		reconcile.OriginalRequest.ApprovalID == "" || reconcile.OriginalRequest.IntentReceipt != fixture.intentReceiptID {
+		t.Fatalf("original attempt authority changed: %#v", reconcile.OriginalRequest)
+	}
+	if reconcile.Claim.StationID != "station-reconcile" || reconcile.Claim.LaneID != "lane-reconcile" ||
+		reconcile.Claim.FenceEpoch != fixture.transaction.FenceEpoch || reconcile.Claim.ClaimID != fixture.transaction.ActiveClaim.ID {
+		t.Fatalf("current reconciliation authority = %#v", reconcile.Claim)
+	}
+	if !fixture.now.After(binding.Plan.ApprovalExpiresAt) {
+		t.Fatal("fixture did not prove reconciliation after original approval expiry")
 	}
 }
 
@@ -414,6 +429,32 @@ func newBridgeFixture(t *testing.T) bridgeFixture {
 		transaction: transaction, records: audit.Records(transaction.ID),
 		approvalReceiptID: approvalReceipt.ReceiptID, intentReceiptID: intentReceipt.ReceiptID,
 	}
+}
+
+func newReconciliationBridgeFixture(t *testing.T, stationID, laneID string) bridgeFixture {
+	t.Helper()
+	fixture := newBridgeFixture(t)
+	transaction := cloneBridgeTransaction(t, fixture.transaction)
+	originalClaim := *transaction.ActiveClaim
+	fixture.now = originalClaim.ExpiresAt.Add(time.Minute)
+	closedAt := fixture.now
+	originalClaim.Status = controlplane.ClaimExpired
+	originalClaim.ClosedAt = &closedAt
+	transaction.ClaimHistory = append(transaction.ClaimHistory, originalClaim)
+	transaction.FenceEpoch++
+	transaction.ResourceVersion++
+	transaction.Status = controlplane.StatusReconciliationRequired
+	transaction.Approval = nil
+	transaction.ActiveClaim = &controlplane.Claim{
+		ID: "claim-reconciliation", Mode: controlplane.ClaimModeReconciliation, Status: controlplane.ClaimActive,
+		StationID: stationID, LaneID: laneID, AssetID: transaction.AssetID,
+		FenceEpoch: transaction.FenceEpoch, AllowedStages: []string{"reconciliation"},
+		AcquiredAt: fixture.now, ExpiresAt: fixture.now.Add(10 * time.Minute),
+	}
+	transaction.UpdatedAt = fixture.now
+	fixture.transaction = transaction
+	fixture.request.Mode = ModeReconcile
+	return fixture
 }
 
 func bridgeAuditEvent(draft plancompiler.Draft, transaction controlplane.Transaction, eventID, stage string, actor auditlog.Actor, now time.Time) auditlog.Event {

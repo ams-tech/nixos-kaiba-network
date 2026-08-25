@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	TransactionSchemaVersion = "provisioning.kaiba.network/control-transaction/v1alpha3"
-	StoreSchemaVersion       = "provisioning.kaiba.network/control-store/v1alpha3"
+	TransactionSchemaVersion = "provisioning.kaiba.network/control-transaction/v1alpha4"
+	StoreSchemaVersion       = "provisioning.kaiba.network/control-store/v1alpha4"
 	CommandSchemaVersion     = "provisioning.kaiba.network/control-command/v1alpha1"
 
 	CreateTransactionRequestSchemaVersion    = "provisioning.kaiba.network/create-transaction-request/v1alpha3"
@@ -136,6 +136,7 @@ type OperationRecord struct {
 	PlanDigest                   string                 `json:"plan_digest"`
 	Release                      releasebinding.Binding `json:"release"`
 	ApprovalExpiresAt            time.Time              `json:"approval_expires_at"`
+	Approval                     Approval               `json:"approval"`
 	InputDigest                  string                 `json:"input_digest"`
 	PrestateDigest               string                 `json:"prestate_digest"`
 	IntentAuditReceiptID         string                 `json:"intent_audit_receipt_id"`

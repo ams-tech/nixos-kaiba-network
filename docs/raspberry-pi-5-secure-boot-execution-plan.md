@@ -98,8 +98,9 @@ Nix factory, a complete software-only production-media writer and independent
 verifier contract, and authenticated execute-side control-to-guard transport.
 These remain foundations backed by synthetic or offline evidence: there is no
 production release assembled from reviewed live-token results, recorded
-physical NVMe stage and cold readback, production-authenticated post-mutation
-reconciliation path, fully qualified mutation-capable station, or proven
+physical NVMe stage and cold readback, live-hardware authenticated
+post-mutation reconciliation evidence, fully qualified mutation-capable
+station, or proven
 RPIBOOT-to-normal-boot lane transition. In particular, the EEPROM foundation
 is not a production signed EEPROM, owned-recovery signature, hardware write,
 or OTP result.
@@ -650,13 +651,16 @@ expiry. Every operation intent persists that plan/release/expiry anchor, so a
 claim transfer or reconciliation cannot erase it, and persisted approvals fail
 closed if their lifetime exceeds 24 hours.
 
-The `v1alpha3` execute-once journal persists the approval ID, current intent
-receipt, and current intent sequence with every attempt. Older journal records
-cannot prove that per-operation binding and are never upgraded into executable
-authority. An empty development journal may be discarded and recreated. A
-nonempty older journal must be drained from service and handled as a manual
-reconciliation or quarantine case after direct board-state inspection; it must
-not be replayed through the new guard.
+The execute-once journal now uses the dedicated
+`lane-guard-attempt-store/v1alpha1` envelope and
+`lane-guard-attempt/v1alpha1` records. Every attempt persists the approval ID,
+current intent receipt, current intent sequence, and a terminal distinction
+between verified-applied, confirmed-not-applied, and quarantined outcomes. The
+prior shared `lane-guard/v1alpha3` journal envelope and older records are never
+auto-migrated into executable authority. An empty development journal may be
+discarded and recreated. A nonempty older journal must be drained from service
+and handled as a manual reconciliation or quarantine case after direct
+board-state inspection; it must not be replayed through the new guard.
 
 - [x] Carry and enforce one declared plan binding covering the signed-release
   manifest digest, lane-guard package digest, compiled artifact-set digest,
@@ -697,9 +701,11 @@ not be replayed through the new guard.
 - [x] Verify the control identity, active claim, fence epoch, approval,
   remaining lease, durable audit receipt, target fingerprint, operation order,
   and idempotency key immediately before every guarded operation.
-- [ ] Add combined tests that exercise control, audit, bridge, lane guard,
-  physical-adapter state, restart, and reconciliation together rather than
-  substituting fake hardware at every boundary.
+- [x] Add a combined software integration test that exercises durable control,
+  audit, the authenticated bridge, plan compilation, lane guard, the production
+  physical-adapter implementation, restart, and observation-only
+  reconciliation together. Target-facing OS interfaces remain simulated, so
+  this is not live-hardware or security-enforcement evidence.
 
 The `kaiba-provision-authority-bridge` now closes the execute-side conversion
 boundary. It uses a station/lane client certificate and separate exclusive
@@ -707,9 +713,10 @@ server trust roots to read the control transaction twice around one audit read,
 rejects any changed snapshot, reconstructs the two durable audit receipts, and
 passes the result through `plancompiler`. A group-restricted mode-0660 Unix
 socket in a mode-0750 bridge-owned directory emits only the paired current
-`Plan` and `ExecuteRequest`; both its client and the lane guard revalidate that pair. Requests cannot carry executable paths,
-bundle or device selectors, GPIO/UART values, or an operation selector. The
-one-shot guard must obtain fresh authority again after every successful
+`Plan` and exactly one `ExecuteRequest` or `ReconcileRequest`; its client and
+the lane guard revalidate the selected pair. Requests cannot carry executable
+paths, bundle or device selectors, GPIO/UART values, or an operation selector.
+The one-shot guard must obtain fresh authority again after every successful
 operation.
 
 Approval provenance is independent of that station identity. Under mutual TLS,
@@ -727,16 +734,32 @@ record before emitting exactly the one request backed by that pending intent.
 A successful operation must be recorded and a fresh per-operation intent bound
 before the next request can be emitted. The integrated software rehearsal uses
 a separate verifier that covers durable restart but cannot return a lane plan
-or request. The bridge is wired to physical execution, but the combined
-real-adapter restart/reconciliation test remains deliberately unchecked.
+or request.
 
-Cold restart after a mutation claim expires or transfers is also still a
-deliberate blocker. Claim reconstruction advances the fence and clears the old
-approval, while the forward-mutation binder requires the original live claim
-and approval. The attempt journal prevents redispatch but does not by itself
-provide authenticated reconciliation authority. A separate reconciliation
-binder and durable reconstruction contract are required before physical
-mutation can rely on post-restart reconciliation.
+The `authenticated-restart-reconciliation` integration check now covers the
+combined software boundary. It dispatches the first irreversible operation
+once through the production Raspberry Pi 5 adapter implementation and runs
+two lost-response cases: one where ownership committed and one where it did
+not. Each case discards the in-memory control, audit, bridge, guard, and adapter
+objects and advances beyond the original mutation claim and approval expiry.
+After reopening all three durable stores and acquiring a new read-only
+reconciliation claim, it authenticates the control and audit reads over mTLS,
+reconstructs the immutable original approval and intent through the Unix
+bridge, and uses the guard's atomic reconciliation-only entry point. ModeAuto
+observes the owned poststate or falls back to the exact fresh prestate. The
+journal and control service record `confirmed_applied` or
+`confirmed_not_applied` respectively, while execute and simulated commit
+counters prove that `Hardware.Execute` was not called again. The no-op branch
+also proves that current policy refuses a new mutation claim: any retry needs
+a separately reviewed protocol.
+
+This check uses real control, audit, bridge, compiler, lane-guard journal, and
+physical-adapter code, but replaces the adapter's command runner, filesystem,
+GPIO, UART, and timing interfaces with deterministic simulations. It therefore
+closes the authenticated software restart/reconciliation gap only. A physical
+rig must still prove USB, power, RPIBOOT, UART, target continuity, and cold-boot
+behavior before a sacrificial mutation, and the result makes no production
+security-enforcement claim.
 
 ### Manual boundary limitation
 

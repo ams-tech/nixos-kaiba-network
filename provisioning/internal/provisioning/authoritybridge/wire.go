@@ -29,22 +29,22 @@ const (
 )
 
 const (
-	ErrorCodeInvalidRequest            = "invalid_request"
-	ErrorCodeReconciliationUnsupported = "reconciliation_unsupported"
-	ErrorCodeAuthorityUnavailable      = "authority_unavailable"
-	ErrorCodeAuthorityChanged          = "authority_changed"
-	ErrorCodeAuthorityRecordMissing    = "authority_record_missing"
-	ErrorCodeAuthorityRecordDuplicate  = "authority_record_duplicate"
-	ErrorCodeAuthorityRejected         = "authority_rejected"
-	ErrorCodeInternal                  = "internal"
+	ErrorCodeInvalidRequest           = "invalid_request"
+	ErrorCodeAuthorityUnavailable     = "authority_unavailable"
+	ErrorCodeAuthorityChanged         = "authority_changed"
+	ErrorCodeAuthorityRecordMissing   = "authority_record_missing"
+	ErrorCodeAuthorityRecordDuplicate = "authority_record_duplicate"
+	ErrorCodeAuthorityRejected        = "authority_rejected"
+	ErrorCodeInternal                 = "internal"
 )
 
 type BridgeResponse struct {
-	SchemaVersion string                    `json:"schema_version"`
-	Status        string                    `json:"status"`
-	Plan          *laneguard.Plan           `json:"plan,omitempty"`
-	Request       *laneguard.ExecuteRequest `json:"request,omitempty"`
-	ErrorCode     string                    `json:"error_code,omitempty"`
+	SchemaVersion    string                      `json:"schema_version"`
+	Status           string                      `json:"status"`
+	Plan             *laneguard.Plan             `json:"plan,omitempty"`
+	ExecuteRequest   *laneguard.ExecuteRequest   `json:"execute_request,omitempty"`
+	ReconcileRequest *laneguard.ReconcileRequest `json:"reconcile_request,omitempty"`
+	ErrorCode        string                      `json:"error_code,omitempty"`
 }
 
 type ServerConfig struct {
@@ -125,17 +125,18 @@ func handleConnection(ctx context.Context, connection *net.UnixConn, binder *Bin
 		writeResponse(connection, errorResponse(ErrorCodeInvalidRequest), errorLog)
 		return
 	}
-	execution, err := binder.Bind(ctx, request)
+	binding, err := binder.Bind(ctx, request)
 	if err != nil {
 		fmt.Fprintf(errorLog, "deny authority bridge request for transaction %q: %v\n", request.TransactionID, err)
 		writeResponse(connection, errorResponse(errorCode(err)), errorLog)
 		return
 	}
 	writeResponse(connection, BridgeResponse{
-		SchemaVersion: ResponseSchemaVersion,
-		Status:        responseStatusOK,
-		Plan:          &execution.Plan,
-		Request:       &execution.Request,
+		SchemaVersion:    ResponseSchemaVersion,
+		Status:           responseStatusOK,
+		Plan:             &binding.Plan,
+		ExecuteRequest:   binding.ExecuteRequest,
+		ReconcileRequest: binding.ReconcileRequest,
 	}, errorLog)
 }
 
@@ -162,8 +163,6 @@ func errorResponse(code string) BridgeResponse {
 
 func errorCode(err error) string {
 	switch {
-	case errors.Is(err, ErrReconciliationUnsupported):
-		return ErrorCodeReconciliationUnsupported
 	case errors.Is(err, ErrInvalidRequest):
 		return ErrorCodeInvalidRequest
 	case errors.Is(err, ErrAuthorityChanged):
@@ -184,29 +183,29 @@ func errorCode(err error) string {
 // Request obtains one freshly authority-bound execution from the fixed Unix
 // socket. It revalidates both the authority-free plan body and the complete
 // lane-guard plan/request binding before returning.
-func Request(ctx context.Context, socketPath string, request BridgeRequest) (BoundExecution, error) {
+func Request(ctx context.Context, socketPath string, request BridgeRequest) (BoundRequest, error) {
 	if err := validateSocketPath(socketPath); err != nil {
-		return BoundExecution{}, err
+		return BoundRequest{}, err
 	}
 	if err := validateBridgeRequest(request); err != nil {
-		return BoundExecution{}, err
+		return BoundRequest{}, err
 	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("encode authority bridge request: %w", err)
+		return BoundRequest{}, fmt.Errorf("encode authority bridge request: %w", err)
 	}
 	if len(encoded) == 0 || len(encoded) > maxWireRequestBytes {
-		return BoundExecution{}, ErrInvalidRequest
+		return BoundRequest{}, ErrInvalidRequest
 	}
 	dialer := net.Dialer{}
 	connection, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("connect to authority bridge: %w", err)
+		return BoundRequest{}, fmt.Errorf("connect to authority bridge: %w", err)
 	}
 	unixConnection, ok := connection.(*net.UnixConn)
 	if !ok {
 		_ = connection.Close()
-		return BoundExecution{}, errors.New("authority bridge connection is not a Unix socket")
+		return BoundRequest{}, errors.New("authority bridge connection is not a Unix socket")
 	}
 	defer unixConnection.Close()
 	deadline := time.Now().Add(wireRoundTripTimeout)
@@ -214,50 +213,50 @@ func Request(ctx context.Context, socketPath string, request BridgeRequest) (Bou
 		deadline = contextDeadline
 	}
 	if err := unixConnection.SetDeadline(deadline); err != nil {
-		return BoundExecution{}, fmt.Errorf("set authority bridge deadline: %w", err)
+		return BoundRequest{}, fmt.Errorf("set authority bridge deadline: %w", err)
 	}
 	if _, err := io.Copy(unixConnection, bytes.NewReader(encoded)); err != nil {
-		return BoundExecution{}, fmt.Errorf("send authority bridge request: %w", err)
+		return BoundRequest{}, fmt.Errorf("send authority bridge request: %w", err)
 	}
 	if err := unixConnection.CloseWrite(); err != nil {
-		return BoundExecution{}, fmt.Errorf("finish authority bridge request: %w", err)
+		return BoundRequest{}, fmt.Errorf("finish authority bridge request: %w", err)
 	}
 	responseBytes, err := io.ReadAll(io.LimitReader(unixConnection, maxWireResponseBytes+1))
 	if err != nil {
-		return BoundExecution{}, fmt.Errorf("read authority bridge response: %w", err)
+		return BoundRequest{}, fmt.Errorf("read authority bridge response: %w", err)
 	}
 	if len(responseBytes) == 0 || len(responseBytes) > maxWireResponseBytes {
-		return BoundExecution{}, errors.New("authority bridge response has invalid size")
+		return BoundRequest{}, errors.New("authority bridge response has invalid size")
 	}
 	var response BridgeResponse
 	if err := decodeStrict(responseBytes, &response); err != nil {
-		return BoundExecution{}, fmt.Errorf("decode authority bridge response: %w", err)
+		return BoundRequest{}, fmt.Errorf("decode authority bridge response: %w", err)
 	}
 	return validateResponse(response, request)
 }
 
-func validateResponse(response BridgeResponse, source BridgeRequest) (BoundExecution, error) {
+func validateResponse(response BridgeResponse, source BridgeRequest) (BoundRequest, error) {
 	if response.SchemaVersion != ResponseSchemaVersion {
-		return BoundExecution{}, fmt.Errorf("unsupported authority bridge response schema %q", response.SchemaVersion)
+		return BoundRequest{}, fmt.Errorf("unsupported authority bridge response schema %q", response.SchemaVersion)
 	}
 	switch response.Status {
 	case responseStatusError:
-		if response.Plan != nil || response.Request != nil || !knownErrorCode(response.ErrorCode) {
-			return BoundExecution{}, errors.New("authority bridge returned a malformed error response")
+		if response.Plan != nil || response.ExecuteRequest != nil || response.ReconcileRequest != nil || !knownErrorCode(response.ErrorCode) {
+			return BoundRequest{}, errors.New("authority bridge returned a malformed error response")
 		}
-		return BoundExecution{}, BridgeError{Code: response.ErrorCode}
+		return BoundRequest{}, BridgeError{Code: response.ErrorCode}
 	case responseStatusOK:
-		if response.Plan == nil || response.Request == nil || response.ErrorCode != "" {
-			return BoundExecution{}, errors.New("authority bridge returned a malformed success response")
+		if response.Plan == nil || response.ErrorCode != "" || (response.ExecuteRequest == nil) == (response.ReconcileRequest == nil) {
+			return BoundRequest{}, errors.New("authority bridge returned a malformed success response")
 		}
 	default:
-		return BoundExecution{}, errors.New("authority bridge returned an invalid status")
+		return BoundRequest{}, errors.New("authority bridge returned an invalid status")
 	}
-	execution := BoundExecution{Plan: *response.Plan, Request: *response.Request}
-	if err := validateBoundExecution(execution, source); err != nil {
-		return BoundExecution{}, fmt.Errorf("reject authority bridge execution: %w", err)
+	binding := BoundRequest{Plan: *response.Plan, ExecuteRequest: response.ExecuteRequest, ReconcileRequest: response.ReconcileRequest}
+	if err := validateBoundRequest(binding, source); err != nil {
+		return BoundRequest{}, fmt.Errorf("reject authority bridge binding: %w", err)
 	}
-	return execution, nil
+	return binding, nil
 }
 
 type BridgeError struct{ Code string }
@@ -266,7 +265,7 @@ func (err BridgeError) Error() string { return "authority bridge denied request:
 
 func knownErrorCode(code string) bool {
 	switch code {
-	case ErrorCodeInvalidRequest, ErrorCodeReconciliationUnsupported, ErrorCodeAuthorityUnavailable,
+	case ErrorCodeInvalidRequest, ErrorCodeAuthorityUnavailable,
 		ErrorCodeAuthorityChanged, ErrorCodeAuthorityRecordMissing, ErrorCodeAuthorityRecordDuplicate,
 		ErrorCodeAuthorityRejected, ErrorCodeInternal:
 		return true

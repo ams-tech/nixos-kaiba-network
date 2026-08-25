@@ -37,8 +37,13 @@ func Handler(service *Service, identityPolicy mtls.IdentityPolicy) http.Handler 
 			writeError(writer, status, err)
 			return
 		}
-		if transaction.ActiveClaim != nil {
-			if err := identityPolicy.Authorize(request, transaction.ActiveClaim.StationID, transaction.ActiveClaim.LaneID); err != nil {
+		stationID, laneID, authorized := transactionReadOwner(transaction)
+		if !authorized && identityPolicy.RequiresClientIdentity() {
+			writeError(writer, http.StatusForbidden, mtls.ErrClientIdentityMismatch)
+			return
+		}
+		if authorized {
+			if err := identityPolicy.Authorize(request, stationID, laneID); err != nil {
 				writeError(writer, statusForError(err), err)
 				return
 			}
@@ -68,6 +73,26 @@ func Handler(service *Service, identityPolicy mtls.IdentityPolicy) http.Handler 
 		writeJSON(writer, http.StatusOK, transaction)
 	})
 	return mux
+}
+
+// transactionReadOwner keeps durable authority, including capability-like
+// audit receipt IDs, scoped to the active claimant or the most recently
+// fenced historical claimant after release. A never-claimed transaction has
+// no station/lane reader under mutual TLS.
+func transactionReadOwner(transaction Transaction) (string, string, bool) {
+	if transaction.ActiveClaim != nil {
+		return transaction.ActiveClaim.StationID, transaction.ActiveClaim.LaneID, true
+	}
+	if len(transaction.ClaimHistory) == 0 {
+		return "", "", false
+	}
+	latest := transaction.ClaimHistory[0]
+	for _, claim := range transaction.ClaimHistory[1:] {
+		if claim.FenceEpoch > latest.FenceEpoch {
+			latest = claim
+		}
+	}
+	return latest.StationID, latest.LaneID, true
 }
 
 func dispatchCommand(httpRequest *http.Request, service *Service, identityPolicy mtls.IdentityPolicy, command Command) (Transaction, error) {

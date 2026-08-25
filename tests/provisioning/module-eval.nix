@@ -327,6 +327,10 @@ let
     services.kaiba-provisioning-lane-guard.mode = "reconcile";
   };
 
+  provisioningLaneGuardReconcileDisabled = lib.recursiveUpdate provisioningLaneGuard {
+    services.kaiba-provisioning-lane-guard.mode = "reconcile";
+  };
+
   provisioningLaneGuardStoreJournal = lib.recursiveUpdate provisioningLaneGuard {
     services.kaiba-provisioning-lane-guard.journalPath = "${kaibaLaneGuardPackage}/journal.json";
   };
@@ -370,6 +374,7 @@ let
   laneGuardConfig = evaluateConfig provisioningLaneGuard;
   laneGuardMutatingConfig = evaluateConfig provisioningLaneGuardMutating;
   laneGuardMutatingCustomSocketConfig = evaluateConfig provisioningLaneGuardMutatingCustomSocket;
+  laneGuardReconcileConfig = evaluateConfig provisioningLaneGuardReconcile;
   laneGuardNamedModuleConfig = evaluateModules [
     kaibaModules."provisioning-lane-guard"
     provisioningLaneGuardMutating
@@ -390,6 +395,8 @@ let
     laneGuardMutatingConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
   laneGuardMutatingCustomSocketService =
     laneGuardMutatingCustomSocketConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
+  laneGuardReconcileService =
+    laneGuardReconcileConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
   authorityBridgeCustomSocketService =
     laneGuardMutatingCustomSocketConfig.systemd.services.kaiba-provisioning-authority-bridge.serviceConfig;
   signingGateService = signingGateConfig.systemd.services.kaiba-provision-signing-gate.serviceConfig;
@@ -567,6 +574,8 @@ let
     && lib.hasInfix ''"--bridge-socket" "/run/kaiba-provision-authority-bridge/lane-authority.sock"'' laneGuardMutatingCustomSocketService.ExecStart
     && lib.hasInfix ''"--lease-safety-margin" "47s"'' authorityBridgeCustomSocketService.ExecStart
     && lib.hasInfix ''"--lease-safety-margin" "47s"'' laneGuardMutatingCustomSocketService.ExecStart
+    && lib.hasInfix ''"--mode" "reconcile"'' laneGuardReconcileService.ExecStart
+    && lib.hasInfix "--enable-mutations" laneGuardReconcileService.ExecStart
     &&
       laneGuardMutatingConfig.systemd.services.kaiba-provisioning-lane-guard.requires
       == [ "kaiba-provisioning-authority-bridge.service" ]
@@ -701,9 +710,12 @@ assert lib.assertMsg (assertionsPass provisioningLaneGuardMutatingCustomSocket) 
 assert lib.assertMsg (
   !assertionsPass provisioningLaneGuardMutationWithoutBridge
 ) "a mutation-enabled lane guard without the authenticated bridge was accepted";
+assert lib.assertMsg (assertionsPass provisioningLaneGuardReconcile) (
+  builtins.toJSON (failedMessages provisioningLaneGuardReconcile)
+);
 assert lib.assertMsg (
-  !assertionsPass provisioningLaneGuardReconcile
-) "a lane guard using unsupported authenticated reconciliation was accepted";
+  !assertionsPass provisioningLaneGuardReconcileDisabled
+) "a reconciliation-mode lane guard with physical operation disabled was accepted";
 assert lib.assertMsg (
   !assertionsPass provisioningLaneGuardUnlinked
 ) "a generic lane-guard package without immutable physical configuration was accepted";

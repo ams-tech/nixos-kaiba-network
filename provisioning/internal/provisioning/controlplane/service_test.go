@@ -179,6 +179,13 @@ func TestControlStoreRejectsPreKeyInvariantSchema(t *testing.T) {
 	}
 }
 
+func TestControlStoreRejectsPreReconciliationAuthoritySchema(t *testing.T) {
+	store := &MemoryStore{data: []byte(`{"schema_version":"provisioning.kaiba.network/control-store/v1alpha3","transactions":{},"fence_epochs":{},"idempotency":{}}`)}
+	if _, err := NewService(store); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("pre-reconciliation-authority store error = %v", err)
+	}
+}
+
 func TestPersistedTransactionRejectsInvalidFreshToOwnedKeyTransition(t *testing.T) {
 	for name, mutate := range map[string]func(*Transaction){
 		"nonzero fresh key": func(transaction *Transaction) { transaction.ExpectedPrestateCustomerKeyHash = digest("f") },
@@ -864,6 +871,12 @@ func TestExpiredInFlightClaimEntersReadOnlyReconciliationAndUnknownQuarantines(t
 	if transaction.Status != StatusReconciliationRequired || transaction.ActiveClaim.Mode != ClaimModeReconciliation || transaction.FenceEpoch != 2 {
 		t.Fatalf("reconciliation claim = %#v", transaction)
 	}
+	if transaction.Approval != nil || len(transaction.Operations) != 1 ||
+		transaction.Operations[0].Approval.ID != "approval-1" ||
+		transaction.Operations[0].Approval.AuditReceiptID == "" ||
+		transaction.Operations[0].Approval.FenceEpoch != 1 {
+		t.Fatalf("durable original approval snapshot = %#v", transaction.Operations)
+	}
 	reconcile := RecordReconciliationRequest{
 		SchemaVersion: RecordReconciliationRequestSchemaVersion, IdempotencyKey: "reconcile-1",
 		MutationContext: contextFor(transaction), OperationID: "operation-1", Resolution: ResolutionUnknown,
@@ -884,6 +897,58 @@ func TestExpiredInFlightClaimEntersReadOnlyReconciliationAndUnknownQuarantines(t
 	}
 	if _, err := fixture.service.RecordIntent(context.Background(), intent); err == nil {
 		t.Fatal("quarantined transaction accepted a blind retry")
+	}
+}
+
+func TestConfirmedNotAppliedReconciliationCannotAuthorizeRetry(t *testing.T) {
+	fixture := newTestFixture(t, &MemoryStore{})
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBindApprove(operations)
+	transaction = fixture.intent(RecordIntentRequest{
+		SchemaVersion: RecordIntentRequestSchemaVersion, IdempotencyKey: "intent-not-applied",
+		MutationContext: contextFor(transaction), ApprovalID: transaction.Approval.ID,
+		OperationID: "operation-not-applied", Operation: operations[0], PlanDigest: transaction.Approval.PlanDigest,
+		InputDigest: digest("6"), PrestateDigest: digest("7"), AuditReceiptID: digest("8"),
+	})
+	transaction, err := fixture.service.TransferClaim(context.Background(), TransferClaimRequest{
+		SchemaVersion: TransferClaimRequestSchemaVersion, IdempotencyKey: "transfer-to-reconcile-not-applied",
+		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
+		NewStationID: "station-1", NewLaneID: "lane-1", Mode: ClaimModeReconciliation,
+		AllowedStages: []string{"reconciliation"}, LeaseDurationSeconds: 300,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = fixture.service.RecordReconciliation(context.Background(), RecordReconciliationRequest{
+		SchemaVersion: RecordReconciliationRequestSchemaVersion, IdempotencyKey: "reconcile-not-applied",
+		MutationContext: contextFor(transaction), OperationID: "operation-not-applied",
+		Resolution: ResolutionConfirmedNotApplied, ObservationDigest: digest("a"), AuditReceiptID: digest("b"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.Status != StatusReconciled || transaction.Operations[0].Status != OperationConfirmedNotApplied {
+		t.Fatalf("confirmed-not-applied transaction = %#v", transaction)
+	}
+	transfer := TransferClaimRequest{
+		SchemaVersion: TransferClaimRequestSchemaVersion, IdempotencyKey: "forbidden-retry-transfer",
+		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
+		NewStationID: "station-1", NewLaneID: "lane-1", Mode: ClaimModeMutation,
+		AllowedStages: operations, LeaseDurationSeconds: 300,
+	}
+	if _, err := fixture.service.TransferClaim(context.Background(), transfer); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("mutation transfer after confirmed no-op = %v", err)
+	}
+	fixture.now = transaction.ActiveClaim.ExpiresAt.Add(time.Second)
+	if _, err := fixture.service.AcquireClaim(context.Background(), AcquireClaimRequest{
+		SchemaVersion: AcquireClaimRequestSchemaVersion, IdempotencyKey: "forbidden-retry-acquire",
+		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+		StationID: "station-1", LaneID: "lane-1", Mode: ClaimModeMutation,
+		AllowedStages: operations, LeaseDurationSeconds: 300,
+	}); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("mutation acquire after confirmed no-op = %v", err)
 	}
 }
 

@@ -28,13 +28,14 @@ type systemClock struct{}
 func (systemClock) Now() time.Time { return time.Now() }
 
 type Guard struct {
-	mu        sync.Mutex
-	config    Config
-	hardware  Hardware
-	store     AttemptStore
-	clock     Clock
-	plan      *Plan
-	lockedOut bool
+	mu                 sync.Mutex
+	config             Config
+	hardware           Hardware
+	store              AttemptStore
+	clock              Clock
+	plan               *Plan
+	reconciliationOnly bool
+	lockedOut          bool
 }
 
 func New(config Config, hardware Hardware, store AttemptStore) (*Guard, error) {
@@ -91,6 +92,40 @@ func (guard *Guard) LoadPlan(ctx context.Context, plan Plan) error {
 	return nil
 }
 
+// ReconcilePlan atomically loads the immutable original execution plan from
+// its durable journal and reconciles its unresolved attempt under a fresh,
+// read-only claim. Claim authority is checked before any target-facing I/O,
+// and the target is observed exactly once. The method never calls
+// Hardware.Execute.
+func (guard *Guard) ReconcilePlan(ctx context.Context, plan Plan, request ReconcileRequest) (Attempt, error) {
+	plan = clonePlan(plan)
+	if err := ValidateReconcileRequest(guard.config, plan, request); err != nil {
+		return Attempt{}, err
+	}
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+	if !LeaseCoversOperation(guard.clock.Now(), request.Claim.ExpiresAt, ReconciliationObservationBudget, guard.config.LeaseSafetyMargin) {
+		return Attempt{}, ErrLeaseInvalid
+	}
+	if guard.plan != nil {
+		if !samePlan(*guard.plan, plan) {
+			return Attempt{}, ErrPlanLocked
+		}
+	} else {
+		_, lockedOut, err := guard.restartStates(plan)
+		if err != nil {
+			return Attempt{}, err
+		}
+		guard.plan = &plan
+		guard.lockedOut = lockedOut
+	}
+	// Once a guard accepts a current reconciliation claim, the original
+	// execute envelope is attempt identity only. Permanently disarm mutation
+	// even when journal recovery finds that the local started record is absent.
+	guard.reconciliationOnly = true
+	return guard.reconcileLocked(ctx, request)
+}
+
 func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attempt, error) {
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
@@ -117,6 +152,8 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 		switch existing.Status {
 		case AttemptVerified:
 			return existing, nil
+		case AttemptConfirmedNotApplied:
+			return existing, ErrConfirmedNotApplied
 		case AttemptQuarantined:
 			return existing, ErrQuarantined
 		default:
@@ -141,7 +178,7 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	}
 	now := guard.clock.Now().UTC()
 	attempt := Attempt{
-		SchemaVersion: ContractSchemaVersion, Key: key,
+		SchemaVersion: AttemptSchemaVersion, Key: key,
 		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest,
 		TargetFingerprint: plan.TargetFingerprint, FenceEpoch: plan.FenceEpoch,
 		ApprovalID: plan.ApprovalID, IntentReceipt: plan.IntentReceipt, IntentSequence: plan.IntentSequence,
@@ -189,12 +226,20 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 // Reconcile directly observes an already-started operation. It never calls
 // Hardware.Execute. A non-matching conclusive state is quarantined, while a
 // temporarily unavailable observation remains uncertain.
-func (guard *Guard) Reconcile(ctx context.Context, request ExecuteRequest) (Attempt, error) {
+func (guard *Guard) Reconcile(ctx context.Context, request ReconcileRequest) (Attempt, error) {
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
-	plan, operation, err := guard.matchRequest(request)
+	return guard.reconcileLocked(ctx, request)
+}
+
+func (guard *Guard) reconcileLocked(ctx context.Context, request ReconcileRequest) (Attempt, error) {
+	plan, operation, err := guard.matchReconcileRequest(request)
 	if err != nil {
 		return Attempt{}, err
+	}
+	current := guard.clock.Now()
+	if !LeaseCoversOperation(current, request.Claim.ExpiresAt, ReconciliationObservationBudget, guard.config.LeaseSafetyMargin) {
+		return Attempt{}, ErrLeaseInvalid
 	}
 	key := attemptKey(plan, operation.Sequence)
 	attempt, found, err := guard.store.Get(key)
@@ -210,11 +255,19 @@ func (guard *Guard) Reconcile(ctx context.Context, request ExecuteRequest) (Atte
 	switch attempt.Status {
 	case AttemptVerified:
 		return attempt, nil
+	case AttemptConfirmedNotApplied:
+		return attempt, nil
 	case AttemptQuarantined:
 		return attempt, ErrQuarantined
 	case AttemptStarted, AttemptUncertain:
 	default:
 		return Attempt{}, errors.New("attempt journal has an invalid status")
+	}
+	// Journal recovery may itself take time. Recheck immediately before the
+	// sole target observation so the full bounded observation still fits in
+	// the authenticated claim lease.
+	if !LeaseCoversOperation(guard.clock.Now(), request.Claim.ExpiresAt, ReconciliationObservationBudget, guard.config.LeaseSafetyMargin) {
+		return Attempt{}, ErrLeaseInvalid
 	}
 	observation, err := guard.observeBoundTarget(ctx, plan.TargetFingerprint)
 	if err != nil {
@@ -238,6 +291,16 @@ func (guard *Guard) Reconcile(ctx context.Context, request ExecuteRequest) (Atte
 			return attempt, errors.Join(ErrReconciliationRequired, fmt.Errorf("record indistinguishable outcome: %w", err))
 		}
 		return attempt, ErrReconciliationRequired
+	}
+	if observation.State == operation.ExpectedPrestate {
+		attempt.Status = AttemptConfirmedNotApplied
+		attempt.ObservedState = observation.State
+		attempt.UpdatedAt = guard.clock.Now().UTC()
+		attempt.Detail = "direct original prestate confirms that the interrupted operation did not apply"
+		if err := guard.store.Put(attempt); err != nil {
+			return attempt, fmt.Errorf("record confirmed-not-applied reconciliation: %w", err)
+		}
+		return attempt, nil
 	}
 	return guard.finishObserved(attempt, operation, observation)
 }
@@ -294,11 +357,29 @@ func (guard *Guard) matchRequest(request ExecuteRequest) (Plan, OperationSpec, e
 	if guard.plan == nil {
 		return Plan{}, OperationSpec{}, ErrNoPlan
 	}
+	if guard.reconciliationOnly {
+		return Plan{}, OperationSpec{}, ErrReconciliationAuthority
+	}
 	if guard.lockedOut {
 		return Plan{}, OperationSpec{}, ErrQuarantined
 	}
 	plan := *guard.plan
 	operation, err := matchPlanRequest(plan, request)
+	if err != nil {
+		return Plan{}, OperationSpec{}, err
+	}
+	return plan, operation, nil
+}
+
+func (guard *Guard) matchReconcileRequest(request ReconcileRequest) (Plan, OperationSpec, error) {
+	if guard.plan == nil {
+		return Plan{}, OperationSpec{}, ErrNoPlan
+	}
+	if guard.lockedOut {
+		return Plan{}, OperationSpec{}, ErrQuarantined
+	}
+	plan := *guard.plan
+	operation, err := matchReconcileRequest(guard.config, plan, request)
 	if err != nil {
 		return Plan{}, OperationSpec{}, err
 	}
@@ -319,6 +400,24 @@ func matchPlanRequest(plan Plan, request ExecuteRequest) (OperationSpec, error) 
 	operation := plan.Operations[request.Sequence-1]
 	if request.OperationDigest != operation.OperationDigest || request.AuthorizationID != operation.AuthorizationID || request.ExpectedPrestate != operation.ExpectedPrestate {
 		return OperationSpec{}, ErrPlanMismatch
+	}
+	return operation, nil
+}
+
+func matchReconcileRequest(config Config, plan Plan, request ReconcileRequest) (OperationSpec, error) {
+	operation, err := matchPlanRequest(plan, request.OriginalRequest)
+	if err != nil {
+		return OperationSpec{}, err
+	}
+	claim := request.Claim
+	if request.SchemaVersion != ReconcileRequestSchemaVersion ||
+		claim.StationID != config.StationID || claim.LaneID != config.LaneID ||
+		claim.TransactionID != plan.TransactionID || claim.TargetFingerprint != plan.TargetFingerprint ||
+		!identifierPattern.MatchString(claim.ClaimID) || claim.FenceEpoch <= plan.FenceEpoch || claim.ExpiresAt.IsZero() {
+		return OperationSpec{}, ErrReconciliationAuthority
+	}
+	if _, err := canonicalApprovalExpiry(claim.ExpiresAt); err != nil {
+		return OperationSpec{}, ErrReconciliationAuthority
 	}
 	return operation, nil
 }
@@ -362,6 +461,16 @@ func (guard *Guard) restartStates(plan Plan) ([]DirectState, bool, error) {
 		switch attempt.Status {
 		case AttemptVerified:
 			expected = []DirectState{operation.ExpectedPoststate}
+		case AttemptConfirmedNotApplied:
+			for later := index + 1; later < len(plan.Operations); later++ {
+				if _, exists, err := guard.store.Get(attemptKey(plan, plan.Operations[later].Sequence)); err != nil {
+					return nil, false, fmt.Errorf("read restart journal: %w", err)
+				} else if exists {
+					return nil, false, errors.New("journal continues after a confirmed-not-applied attempt")
+				}
+			}
+			expected = []DirectState{operation.ExpectedPrestate}
+			return expected, false, nil
 		case AttemptStarted, AttemptUncertain:
 			expected = []DirectState{operation.ExpectedPrestate, operation.ExpectedPoststate}
 			closed = false

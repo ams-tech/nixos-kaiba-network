@@ -253,11 +253,12 @@ in
           '';
         }
         {
-          assertion = cfg.mode == "execute";
+          assertion = cfg.mode != "reconcile" || cfg.enableMutations;
           message = ''
-            services.kaiba-provisioning-lane-guard.mode must remain "execute";
-            the authenticated bridge deliberately rejects reconciliation until
-            a separate reconciliation authority contract is implemented.
+            services.kaiba-provisioning-lane-guard.mode = "reconcile" requires
+            enableMutations so the one-shot is allowed to open the durable
+            journal and observe the fixed lane. Reconciliation remains
+            observation-only and cannot dispatch a hardware mutation.
           '';
         }
       ];
