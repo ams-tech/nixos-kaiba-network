@@ -34,6 +34,22 @@ func (store *countingStore) Put(Attempt) error {
 	return nil
 }
 
+type hookStore struct {
+	AttemptStore
+	afterFirstGet func()
+	once          sync.Once
+}
+
+func (store *hookStore) Get(key string) (Attempt, bool, error) {
+	attempt, found, err := store.AttemptStore.Get(key)
+	store.once.Do(store.afterFirstGet)
+	return attempt, found, err
+}
+
+type mutableClock struct{ now time.Time }
+
+func (clock *mutableClock) Now() time.Time { return clock.now }
+
 type fakeHardware struct {
 	mu            sync.Mutex
 	observation   Observation
@@ -155,12 +171,43 @@ func TestGuardNeverRepeatsUncertainIrreversibleOperation(t *testing.T) {
 	// The fake changed to the approved poststate before losing its response;
 	// direct reconciliation can therefore verify the attempt without replay.
 	hardware.executeErr = nil
-	reconciled, err := guard.Reconcile(context.Background(), request)
+	reconciled, err := guard.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
 	if err != nil || reconciled.Status != AttemptVerified {
 		t.Fatalf("reconcile = %#v, %v", reconciled, err)
 	}
 	if hardware.executeCount != 1 {
 		t.Fatalf("reconciliation executed hardware; count = %d", hardware.executeCount)
+	}
+}
+
+func TestReconcileConfirmsExactOriginalPrestateWithoutRedispatch(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	hardware.after[plan.Operations[0].Operation] = plan.Operations[0].ExpectedPrestate
+	hardware.executeErr = errors.New("response lost before target commit")
+	original := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), original); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("uncertain execute = %v", err)
+	}
+	reconcile := reconcileRequest(plan, original, now.Add(10*time.Minute))
+	attempt, err := guard.Reconcile(context.Background(), reconcile)
+	if err != nil || attempt.Status != AttemptConfirmedNotApplied || attempt.ObservedState != plan.Operations[0].ExpectedPrestate {
+		t.Fatalf("confirmed-not-applied reconciliation = %#v, %v", attempt, err)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("reconciliation redispatched hardware %d times", hardware.executeCount)
+	}
+	persisted, found, err := store.Get(attempt.Key)
+	if err != nil || !found || persisted != attempt {
+		t.Fatalf("persisted confirmed-not-applied attempt = %#v, %t, %v", persisted, found, err)
+	}
+	if replayed, err := guard.Reconcile(context.Background(), reconcile); err != nil || replayed != attempt {
+		t.Fatalf("idempotent reconciliation = %#v, %v", replayed, err)
+	}
+	if replayed, err := guard.Execute(context.Background(), original); !errors.Is(err, ErrConfirmedNotApplied) || replayed != attempt {
+		t.Fatalf("old execute request after confirmed no-op = %#v, %v", replayed, err)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("old execute request redispatched hardware %d times", hardware.executeCount)
 	}
 }
 
@@ -192,7 +239,7 @@ func TestGuardAllowsReconciliationAfterApprovalExpiry(t *testing.T) {
 	}
 
 	guard.clock = fakeClock{now: plan.ApprovalExpiresAt.Add(time.Second)}
-	reconciled, err := guard.Reconcile(context.Background(), request)
+	reconciled, err := guard.Reconcile(context.Background(), reconcileRequest(plan, request, plan.ApprovalExpiresAt.Add(10*time.Minute)))
 	if err != nil || reconciled.Status != AttemptVerified {
 		t.Fatalf("expired reconciliation = %#v, %v", reconciled, err)
 	}
@@ -223,12 +270,159 @@ func TestRestartLoadsUncertainAttemptForObservationOnly(t *testing.T) {
 	if _, err := restarted.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
 		t.Fatalf("restart execute error = %v", err)
 	}
-	attempt, err := restarted.Reconcile(context.Background(), request)
+	attempt, err := restarted.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
 	if err != nil || attempt.Status != AttemptVerified {
 		t.Fatalf("restart reconcile = %#v, %v", attempt, err)
 	}
 	if restartedHardware.executeCount != 0 {
 		t.Fatalf("restart replayed hardware %d times", restartedHardware.executeCount)
+	}
+}
+
+func TestReconcileRequiresFreshBoundClaimBeforeObservation(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*ReconcileRequest, Plan, time.Time)
+		want   error
+	}{
+		{"schema", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.SchemaVersion = "other" }, ErrReconciliationAuthority},
+		{"station", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.Claim.StationID = "other-station" }, ErrReconciliationAuthority},
+		{"lane", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.Claim.LaneID = "other-lane" }, ErrReconciliationAuthority},
+		{"transaction", func(request *ReconcileRequest, _ Plan, _ time.Time) {
+			request.Claim.TransactionID = "other-transaction"
+		}, ErrReconciliationAuthority},
+		{"target", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.Claim.TargetFingerprint = "other-target" }, ErrReconciliationAuthority},
+		{"claim", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.Claim.ClaimID = "" }, ErrReconciliationAuthority},
+		{"stale fence", func(request *ReconcileRequest, plan Plan, _ time.Time) { request.Claim.FenceEpoch = plan.FenceEpoch }, ErrReconciliationAuthority},
+		{"missing expiry", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.Claim.ExpiresAt = time.Time{} }, ErrReconciliationAuthority},
+		{"short lease", func(request *ReconcileRequest, _ Plan, now time.Time) {
+			request.Claim.ExpiresAt = now.Add(ReconciliationObservationBudget + testConfig().LeaseSafetyMargin - time.Nanosecond)
+		}, ErrLeaseInvalid},
+		{"changed original intent", func(request *ReconcileRequest, _ Plan, _ time.Time) {
+			request.OriginalRequest.IntentReceipt = "other-intent"
+		}, ErrPlanMismatch},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			guard, hardware, store, plan, now := newTestGuard(t)
+			hardware.executeErr = errors.New("response lost")
+			original := requestFor(plan, 1, now.Add(10*time.Minute))
+			if _, err := guard.Execute(context.Background(), original); !errors.Is(err, ErrReconciliationRequired) {
+				t.Fatal(err)
+			}
+			key := attemptKey(plan, 1)
+			before, ok, err := store.Get(key)
+			if err != nil || !ok {
+				t.Fatalf("stored attempt = %#v, %t, %v", before, ok, err)
+			}
+			observations := hardware.observeCount
+			request := reconcileRequest(plan, original, now.Add(10*time.Minute))
+			test.change(&request, plan, now)
+			if _, err := guard.Reconcile(context.Background(), request); !errors.Is(err, test.want) {
+				t.Fatalf("Reconcile() error = %v, want %v", err, test.want)
+			}
+			if hardware.observeCount != observations || hardware.executeCount != 1 {
+				t.Fatalf("invalid claim reached hardware: observations %d -> %d; executions %d", observations, hardware.observeCount, hardware.executeCount)
+			}
+			after, ok, err := store.Get(key)
+			if err != nil || !ok || after != before {
+				t.Fatalf("invalid claim changed attempt: before=%#v after=%#v found=%t err=%v", before, after, ok, err)
+			}
+		})
+	}
+}
+
+func TestRestartReconcilesOriginalPlanAfterClaimTransfersLanes(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	hardware.executeErr = errors.New("response lost after command")
+	original := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), original); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatal(err)
+	}
+
+	currentConfig := testConfig()
+	currentConfig.StationID = "station-2"
+	currentConfig.LaneID = "lane-2"
+	restartedHardware := &fakeHardware{observation: Observation{
+		EligibleTargets: 1, RPIBootSysfsPath: currentConfig.RPIBootSysfsPath,
+		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
+	}}
+	restarted, err := NewWithClock(currentConfig, restartedHardware, store, fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.LoadPlan(context.Background(), plan); !errors.Is(err, ErrPlanMismatch) {
+		t.Fatalf("execution load after transfer = %v, want plan mismatch", err)
+	}
+	reconcile := reconcileRequest(plan, original, now.Add(10*time.Minute))
+	reconcile.Claim.StationID = currentConfig.StationID
+	reconcile.Claim.LaneID = currentConfig.LaneID
+	if err := ValidateReconcileRequest(currentConfig, plan, reconcile); err != nil {
+		t.Fatalf("validate transferred claim: %v", err)
+	}
+	attempt, err := restarted.ReconcilePlan(context.Background(), plan, reconcile)
+	if err != nil || attempt.Status != AttemptVerified {
+		t.Fatalf("transferred reconciliation = %#v, %v", attempt, err)
+	}
+	if restartedHardware.observeCount != 1 {
+		t.Fatalf("reconciliation observed target %d times, want exactly once", restartedHardware.observeCount)
+	}
+	if restartedHardware.executeCount != 0 || hardware.executeCount != 1 {
+		t.Fatalf("reconciliation redispatched hardware: original=%d restarted=%d", hardware.executeCount, restartedHardware.executeCount)
+	}
+}
+
+func TestRestartReconciliationRechecksClaimAfterJournalRecovery(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	hardware.executeErr = errors.New("response lost after command")
+	original := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), original); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatal(err)
+	}
+
+	clock := &mutableClock{now: now}
+	expiresAt := now.Add(ReconciliationObservationBudget + testConfig().LeaseSafetyMargin)
+	restartedStore := &hookStore{AttemptStore: store}
+	restartedStore.afterFirstGet = func() { clock.now = clock.now.Add(time.Nanosecond) }
+	restartedHardware := &fakeHardware{observation: Observation{
+		EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath,
+		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
+	}}
+	restarted, err := NewWithClock(testConfig(), restartedHardware, restartedStore, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconcile := reconcileRequest(plan, original, expiresAt)
+	if _, err := restarted.ReconcilePlan(context.Background(), plan, reconcile); !errors.Is(err, ErrLeaseInvalid) {
+		t.Fatalf("claim expiring during journal recovery = %v, want lease invalid", err)
+	}
+	if restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+		t.Fatalf("expired restart authority reached hardware: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
+	}
+}
+
+func TestReconciliationPlanWithMissingJournalPermanentlyDisarmsExecute(t *testing.T) {
+	config := testConfig()
+	plan := testPlan()
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	hardware := &fakeHardware{observation: Observation{
+		EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+	}}
+	guard, err := NewWithClock(config, hardware, NewMemoryStore(), fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := requestFor(plan, 1, now.Add(10*time.Minute))
+	reconcile := reconcileRequest(plan, original, now.Add(10*time.Minute))
+	if _, err := guard.ReconcilePlan(context.Background(), plan, reconcile); err == nil || !strings.Contains(err.Error(), "no operation attempt") {
+		t.Fatalf("missing-journal reconciliation = %v", err)
+	}
+	if _, err := guard.Execute(context.Background(), original); !errors.Is(err, ErrReconciliationAuthority) {
+		t.Fatalf("execute after reconciliation-only load = %v", err)
+	}
+	if hardware.observeCount != 0 || hardware.executeCount != 0 {
+		t.Fatalf("missing journal reached hardware: observations=%d executions=%d", hardware.observeCount, hardware.executeCount)
 	}
 }
 
@@ -289,7 +483,7 @@ func TestReconcileKeepsIndistinguishableOperationUncertain(t *testing.T) {
 	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
 		t.Fatalf("execute indistinguishable operation: %v", err)
 	}
-	attempt, err := guard.Reconcile(context.Background(), request)
+	attempt, err := guard.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
 	if !errors.Is(err, ErrReconciliationRequired) || attempt.Status != AttemptUncertain || !strings.Contains(attempt.Detail, "cannot distinguish") {
 		t.Fatalf("indistinguishable reconcile = %#v, %v", attempt, err)
 	}
@@ -337,7 +531,7 @@ func TestRestartFailsClosedForUnknownOrQuarantinedState(t *testing.T) {
 		if _, err := restarted.Execute(context.Background(), request); !errors.Is(err, ErrQuarantined) {
 			t.Fatalf("execute after quarantine = %v", err)
 		}
-		if _, err := restarted.Reconcile(context.Background(), request); !errors.Is(err, ErrQuarantined) {
+		if _, err := restarted.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute))); !errors.Is(err, ErrQuarantined) {
 			t.Fatalf("reconcile after quarantine = %v", err)
 		}
 		if restartedHardware.executeCount != 0 {
@@ -618,7 +812,7 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 	}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	attempt := Attempt{
-		SchemaVersion: ContractSchemaVersion, Key: "transaction/plan/1/1",
+		SchemaVersion: AttemptSchemaVersion, Key: "transaction/plan/1/1",
 		TransactionID: "transaction", PlanDigest: digest("a"), TargetFingerprint: "target",
 		FenceEpoch: 1, ApprovalID: "approval", IntentReceipt: "intent", IntentSequence: 1,
 		Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM,
@@ -649,9 +843,9 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 	}
 }
 
-func TestFileStoreRejectsPreIntentBindingJournalSchema(t *testing.T) {
+func TestFileStoreRejectsPreAttemptStoreSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "attempts.json")
-	if err := os.WriteFile(path, []byte(`{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha2","attempts":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha3","attempts":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := NewFileStore(path)
@@ -698,6 +892,18 @@ func loadTestIntent(t *testing.T, config Config, hardware Hardware, store Attemp
 		t.Fatal(err)
 	}
 	return guard, plan
+}
+
+func reconcileRequest(plan Plan, original ExecuteRequest, expiresAt time.Time) ReconcileRequest {
+	return ReconcileRequest{
+		SchemaVersion:   ReconcileRequestSchemaVersion,
+		OriginalRequest: original,
+		Claim: ReconciliationClaim{
+			StationID: plan.StationID, LaneID: plan.LaneID, TransactionID: plan.TransactionID,
+			TargetFingerprint: plan.TargetFingerprint, ClaimID: "reconciliation-claim",
+			FenceEpoch: plan.FenceEpoch + 1, ExpiresAt: expiresAt,
+		},
+	}
 }
 
 func testConfig() Config {

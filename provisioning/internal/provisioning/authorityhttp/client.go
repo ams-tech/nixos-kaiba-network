@@ -257,6 +257,31 @@ func (reader *ControlReader) GetTransaction(ctx context.Context, transactionID s
 
 // GetRecords returns the strict audit record set for one transaction.
 func (reader *AuditReader) GetRecords(ctx context.Context, transactionID string) ([]auditlog.Record, error) {
+	return reader.getRecords(ctx, transactionID, nil)
+}
+
+// GetRecordsByReceiptIDs returns only the records named by the supplied
+// durable receipt IDs.  This exact, capability-like read lets a freshly fenced
+// reconciliation claim authenticate the original approval and intent without
+// granting it transaction-wide visibility into another lane's audit stream.
+func (reader *AuditReader) GetRecordsByReceiptIDs(ctx context.Context, transactionID string, receiptIDs []string) ([]auditlog.Record, error) {
+	if len(receiptIDs) == 0 || len(receiptIDs) > 8 {
+		return nil, errors.New("audit receipt selection must contain between one and eight receipt IDs")
+	}
+	seen := make(map[string]struct{}, len(receiptIDs))
+	for _, receiptID := range receiptIDs {
+		if !canonicalDigest(receiptID) {
+			return nil, errors.New("audit receipt ID is invalid")
+		}
+		if _, duplicate := seen[receiptID]; duplicate {
+			return nil, errors.New("audit receipt selection contains a duplicate")
+		}
+		seen[receiptID] = struct{}{}
+	}
+	return reader.getRecords(ctx, transactionID, receiptIDs)
+}
+
+func (reader *AuditReader) getRecords(ctx context.Context, transactionID string, receiptIDs []string) ([]auditlog.Record, error) {
 	if reader == nil || reader.client == nil || !transactionIDPattern.MatchString(transactionID) {
 		return nil, errors.New("audit transaction ID is invalid")
 	}
@@ -264,6 +289,9 @@ func (reader *AuditReader) GetRecords(ctx context.Context, transactionID string)
 	endpoint.Path = "/api/v1/events"
 	query := endpoint.Query()
 	query.Set("transaction_id", transactionID)
+	for _, receiptID := range receiptIDs {
+		query.Add("receipt_id", receiptID)
+	}
 	endpoint.RawQuery = query.Encode()
 	response := struct {
 		SchemaVersion string            `json:"schema_version"`
@@ -283,6 +311,18 @@ func (reader *AuditReader) GetRecords(ctx context.Context, transactionID string)
 		}
 	}
 	return response.Records, nil
+}
+
+func canonicalDigest(value string) bool {
+	if len(value) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	for _, character := range value[len("sha256:"):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func getJSON(ctx context.Context, client *http.Client, endpoint string, decode func([]byte) error) error {

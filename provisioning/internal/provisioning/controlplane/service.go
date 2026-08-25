@@ -168,6 +168,9 @@ func (s *Service) AcquireClaim(_ context.Context, request AcquireClaimRequest) (
 		if transaction.ActiveClaim != nil && transaction.ActiveClaim.Status == ClaimActive && transaction.ActiveClaim.ExpiresAt.After(now) {
 			return fmt.Errorf("%w: transaction already has an active claim", ErrConflict)
 		}
+		if request.Mode == ClaimModeMutation && hasConfirmedNotAppliedOperation(transaction.Operations) {
+			return fmt.Errorf("%w: confirmed-not-applied operations require a separately reviewed retry protocol", ErrIllegalTransition)
+		}
 		if err := validateClaimModeForStatus(request.Mode, transaction.Status); err != nil {
 			return err
 		}
@@ -234,6 +237,9 @@ func (s *Service) TransferClaim(_ context.Context, request TransferClaimRequest)
 		}
 		if transaction.Status == StatusMutationInProgress && request.Mode != ClaimModeReconciliation {
 			return fmt.Errorf("%w: an in-flight mutation must be reconciled before claim transfer", ErrIllegalTransition)
+		}
+		if request.Mode == ClaimModeMutation && hasConfirmedNotAppliedOperation(transaction.Operations) {
+			return fmt.Errorf("%w: confirmed-not-applied operations require a separately reviewed retry protocol", ErrIllegalTransition)
 		}
 		if err := validateClaimModeForStatus(request.Mode, transaction.Status); err != nil {
 			return err
@@ -408,6 +414,15 @@ func validateClaimModeForStatus(mode ClaimMode, status TransactionStatus) error 
 		}
 	}
 	return fmt.Errorf("%w: claim mode %q is not allowed for status %q", ErrIllegalTransition, mode, status)
+}
+
+func hasConfirmedNotAppliedOperation(operations []OperationRecord) bool {
+	for _, operation := range operations {
+		if operation.Status == OperationConfirmedNotApplied {
+			return true
+		}
+	}
+	return false
 }
 
 func randomID(prefix string) (string, error) {

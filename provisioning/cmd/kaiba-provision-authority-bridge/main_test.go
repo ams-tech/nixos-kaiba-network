@@ -24,7 +24,7 @@ func (fakeControlReader) GetTransaction(context.Context, string) (controlplane.T
 
 type fakeAuditReader struct{}
 
-func (fakeAuditReader) GetRecords(context.Context, string) ([]auditlog.Record, error) {
+func (fakeAuditReader) GetRecordsByReceiptIDs(context.Context, string, []string) ([]auditlog.Record, error) {
 	return nil, nil
 }
 

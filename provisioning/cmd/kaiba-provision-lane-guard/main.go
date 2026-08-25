@@ -162,7 +162,7 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		return err
 	}
 	bridgeMode := authoritybridge.Mode(*mode)
-	execution, err := requestAuthority(ctx, *bridgeSocket, authoritybridge.BridgeRequest{
+	binding, err := requestAuthority(ctx, *bridgeSocket, authoritybridge.BridgeRequest{
 		SchemaVersion: authoritybridge.RequestSchemaVersion,
 		Mode:          bridgeMode,
 		TransactionID: draft.TransactionID,
@@ -171,9 +171,28 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("obtain authenticated lane authority: %w", err)
 	}
-	plan, request := execution.Plan, execution.Request
-	if err := laneguard.ValidatePlanRequest(laneConfig, plan, request); err != nil {
-		return fmt.Errorf("validate authenticated plan and operation request: %w", err)
+	plan := binding.Plan
+	var executeRequest laneguard.ExecuteRequest
+	var reconcileRequest laneguard.ReconcileRequest
+	var originalRequest laneguard.ExecuteRequest
+	if *mode == "reconcile" {
+		if binding.ExecuteRequest != nil || binding.ReconcileRequest == nil {
+			return errors.New("authority bridge returned the wrong request variant for reconciliation")
+		}
+		reconcileRequest = *binding.ReconcileRequest
+		originalRequest = reconcileRequest.OriginalRequest
+		if err := laneguard.ValidateReconcileRequest(laneConfig, plan, reconcileRequest); err != nil {
+			return fmt.Errorf("validate authenticated plan and reconciliation request: %w", err)
+		}
+	} else {
+		if binding.ExecuteRequest == nil || binding.ReconcileRequest != nil {
+			return errors.New("authority bridge returned the wrong request variant for execution")
+		}
+		executeRequest = *binding.ExecuteRequest
+		originalRequest = executeRequest
+		if err := laneguard.ValidatePlanRequest(laneConfig, plan, executeRequest); err != nil {
+			return fmt.Errorf("validate authenticated plan and operation request: %w", err)
+		}
 	}
 	if *mode == "execute" && !time.Now().UTC().Before(plan.ApprovalExpiresAt) {
 		return laneguard.ErrApprovalExpired
@@ -184,7 +203,7 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	initialMode := physicalrpi5.ModeFresh
 	if *mode == "reconcile" {
 		initialMode = physicalrpi5.ModeAuto
-	} else if plan.Operations[request.Sequence-1].ExpectedPrestate.CustomerKeyHash != zeroHash {
+	} else if plan.Operations[originalRequest.Sequence-1].ExpectedPrestate.CustomerKeyHash != zeroHash {
 		initialMode = physicalrpi5.ModeOwned
 	}
 	physicalConfig := physicalrpi5.Config{
@@ -209,14 +228,16 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	if err := guard.LoadPlan(ctx, plan); err != nil {
-		return fmt.Errorf("load approved plan into fixed lane: %w", err)
+	if *mode != "reconcile" {
+		if err := guard.LoadPlan(ctx, plan); err != nil {
+			return fmt.Errorf("load approved plan into fixed lane: %w", err)
+		}
 	}
 	var attempt laneguard.Attempt
 	if *mode == "reconcile" {
-		attempt, err = guard.Reconcile(ctx, request)
+		attempt, err = guard.ReconcilePlan(ctx, plan, reconcileRequest)
 	} else {
-		attempt, err = guard.Execute(ctx, request)
+		attempt, err = guard.Execute(ctx, executeRequest)
 	}
 	if attempt.Key != "" {
 		encoder := json.NewEncoder(os.Stdout)

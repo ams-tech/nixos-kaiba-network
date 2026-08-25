@@ -436,6 +436,263 @@ func TestBindRejectsAlteredReceiptAndAuditRecord(t *testing.T) {
 	}
 }
 
+func TestBindReconciliationSeparatesOriginalAttemptFromCurrentClaim(t *testing.T) {
+	fixture := newFixture(t)
+	authority := transferFixtureToReconciliation(t, fixture, "station-recovery", "lane-recovery")
+	// Forward approval expiry does not constrain observation-only reconciliation.
+	authority.Now = fixture.authority.Transaction.Approval.ExpiresAt.Add(time.Minute)
+	if !authority.Now.After(authority.Transaction.Operations[0].Approval.ExpiresAt) {
+		t.Fatal("test did not exercise an expired original approval")
+	}
+
+	bound, err := BindReconciliation(fixture.draft, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, request, err := bound.Reconciliation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authority.Transaction.Approval != nil {
+		t.Fatal("reconciliation unexpectedly retained a current forward approval")
+	}
+	if plan.FenceEpoch != 1 || plan.StationID != "station-fixture" || plan.LaneID != "lane-fixture" ||
+		plan.ApprovalID != "approval-fixture" || plan.IntentReceipt != fixture.authority.IntentReceipt.ReceiptID {
+		t.Fatalf("reconstructed original plan = %#v", plan)
+	}
+	if request.OriginalRequest.FenceEpoch != plan.FenceEpoch ||
+		request.OriginalRequest.ApprovalID != plan.ApprovalID ||
+		request.OriginalRequest.IntentReceipt != plan.IntentReceipt ||
+		request.Claim.StationID != "station-recovery" || request.Claim.LaneID != "lane-recovery" ||
+		request.Claim.FenceEpoch != 2 || request.Claim.ClaimID != authority.Transaction.ActiveClaim.ID ||
+		!request.Claim.ExpiresAt.Equal(authority.Transaction.ActiveClaim.ExpiresAt) {
+		t.Fatalf("separate reconciliation request = %#v", request)
+	}
+	config := laneguard.Config{
+		SchemaVersion: laneguard.ContractSchemaVersion,
+		StationID:     request.Claim.StationID, LaneID: request.Claim.LaneID,
+		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", UARTPath: "/dev/serial/by-id/reconciliation-test",
+		PowerGPIO: laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17},
+	}
+	if err := laneguard.ValidateReconcileRequest(config, plan, request); err != nil {
+		t.Fatalf("validate reconciliation request: %v", err)
+	}
+}
+
+func TestBindReconciliationRejectsStaleOrIncompleteAuthority(t *testing.T) {
+	fixture := newFixture(t)
+	base := transferFixtureToReconciliation(t, fixture, "station-recovery", "lane-recovery")
+	tests := map[string]func(*Authority){
+		"current forward approval": func(value *Authority) {
+			approval := value.Transaction.Operations[0].Approval
+			value.Transaction.Approval = &approval
+		},
+		"mutation claim": func(value *Authority) {
+			value.Transaction.ActiveClaim.Mode = controlplane.ClaimModeMutation
+		},
+		"stale current claim": func(value *Authority) {
+			value.Transaction.ActiveClaim.ExpiresAt = value.Now
+		},
+		"old fence": func(value *Authority) {
+			value.Transaction.ActiveClaim.FenceEpoch = 1
+			value.Transaction.FenceEpoch = 1
+		},
+		"wrong claim stage": func(value *Authority) {
+			value.Transaction.ActiveClaim.AllowedStages = []string{"program_customer_key_and_eeprom"}
+		},
+		"missing original claim": func(value *Authority) {
+			value.Transaction.ClaimHistory = nil
+		},
+		"duplicate original claim": func(value *Authority) {
+			value.Transaction.ClaimHistory = append(value.Transaction.ClaimHistory, value.Transaction.ClaimHistory[0])
+		},
+		"original claim released without transfer": func(value *Authority) {
+			value.Transaction.ClaimHistory[0].Status = controlplane.ClaimReleased
+		},
+		"original claim missing close": func(value *Authority) {
+			value.Transaction.ClaimHistory[0].ClosedAt = nil
+		},
+		"original claim closed before intent": func(value *Authority) {
+			at := value.Transaction.Operations[0].IntentAt.Add(-time.Nanosecond)
+			value.Transaction.ClaimHistory[0].ClosedAt = &at
+		},
+		"original claim overlaps current claim": func(value *Authority) {
+			at := value.Transaction.ActiveClaim.AcquiredAt.Add(time.Nanosecond)
+			value.Transaction.ClaimHistory[0].ClosedAt = &at
+		},
+		"original claim ended before intent": func(value *Authority) {
+			value.Transaction.ClaimHistory[0].ExpiresAt = value.Transaction.Operations[0].IntentAt
+		},
+		"changed target fingerprint": func(value *Authority) {
+			value.Transaction.Target.Fingerprint = digest("e")
+		},
+		"changed target prestate": func(value *Authority) {
+			value.Transaction.Target.CustomerKeyHash = digest("e")
+		},
+		"missing approval snapshot": func(value *Authority) {
+			value.Transaction.Operations[0].Approval = controlplane.Approval{}
+		},
+		"changed approval campaign": func(value *Authority) {
+			value.Transaction.Operations[0].Approval.AllowedOperations[0] = "other"
+		},
+		"changed approval release": func(value *Authority) {
+			value.Transaction.Operations[0].Approval.Release.ExpectedEEPROMDigest = digest("e")
+		},
+		"changed approval receipt": func(value *Authority) {
+			value.Transaction.Operations[0].Approval.AuditReceiptID = digest("e")
+		},
+		"changed approval audit record": func(value *Authority) {
+			value.ApprovalRecord.Event.Stage = "other"
+		},
+		"changed intent receipt": func(value *Authority) {
+			value.Transaction.Operations[0].IntentAuditReceiptID = digest("e")
+		},
+		"changed intent audit record": func(value *Authority) {
+			value.IntentRecord.Event.Stage = "other"
+		},
+		"short current lease": func(value *Authority) {
+			value.Now = value.Transaction.ActiveClaim.ExpiresAt.Add(-30 * time.Second)
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			authority := cloneAuthority(t, base)
+			mutate(&authority)
+			if _, err := BindReconciliation(fixture.draft, authority); err == nil {
+				t.Fatal("BindReconciliation accepted altered authority")
+			}
+		})
+	}
+}
+
+func TestBindReconciliationValidatesFinalUnresolvedEvidenceShape(t *testing.T) {
+	t.Run("intent recorded", func(t *testing.T) {
+		fixture := newFixture(t)
+		base := transferFixtureToReconciliation(t, fixture, "station-recovery", "lane-recovery")
+		tests := map[string]func(*controlplane.OperationRecord){
+			"output":                 func(value *controlplane.OperationRecord) { value.OutputDigest = digest("c") },
+			"observation":            func(value *controlplane.OperationRecord) { value.ObservationDigest = digest("d") },
+			"evidence receipt":       func(value *controlplane.OperationRecord) { value.EvidenceAuditReceiptID = digest("e") },
+			"evidence time":          func(value *controlplane.OperationRecord) { at := base.Now; value.EvidenceAt = &at },
+			"reconciliation receipt": func(value *controlplane.OperationRecord) { value.ReconciliationAuditReceiptID = digest("f") },
+		}
+		for name, mutate := range tests {
+			t.Run(name, func(t *testing.T) {
+				authority := cloneAuthority(t, base)
+				mutate(&authority.Transaction.Operations[0])
+				if _, err := BindReconciliation(fixture.draft, authority); err == nil {
+					t.Fatal("BindReconciliation accepted evidence on a clean intent")
+				}
+			})
+		}
+	})
+
+	t.Run("uncertain", func(t *testing.T) {
+		fixture := newFixture(t)
+		base := uncertainFixtureToReconciliation(t, fixture)
+		if _, err := BindReconciliation(fixture.draft, base); err != nil {
+			t.Fatalf("valid uncertain authority: %v", err)
+		}
+		tests := map[string]func(*Authority){
+			"output missing": func(value *Authority) {
+				value.Transaction.Operations[0].OutputDigest = ""
+			},
+			"observation missing": func(value *Authority) {
+				value.Transaction.Operations[0].ObservationDigest = ""
+			},
+			"evidence receipt missing": func(value *Authority) {
+				value.Transaction.Operations[0].EvidenceAuditReceiptID = ""
+			},
+			"evidence time missing": func(value *Authority) {
+				value.Transaction.Operations[0].EvidenceAt = nil
+			},
+			"evidence before intent": func(value *Authority) {
+				at := value.Transaction.Operations[0].IntentAt.Add(-time.Second)
+				value.Transaction.Operations[0].EvidenceAt = &at
+			},
+			"evidence after now": func(value *Authority) {
+				at := value.Now.Add(time.Second)
+				value.Transaction.Operations[0].EvidenceAt = &at
+			},
+			"unexpected reconciliation receipt": func(value *Authority) {
+				value.Transaction.Operations[0].ReconciliationAuditReceiptID = digest("f")
+			},
+		}
+		for name, mutate := range tests {
+			t.Run(name, func(t *testing.T) {
+				authority := cloneAuthority(t, base)
+				mutate(&authority)
+				if _, err := BindReconciliation(fixture.draft, authority); err == nil {
+					t.Fatal("BindReconciliation accepted incomplete uncertain evidence")
+				}
+			})
+		}
+	})
+}
+
+func TestBindReconciliationValidatesSuccessfulPrefix(t *testing.T) {
+	fixture := newFixture(t)
+	advanced := advanceFixtureToSecondIntent(t, fixture)
+	base := transferAuthorityToReconciliation(t, fixture, advanced, "station-recovery", "lane-recovery")
+	if _, err := BindReconciliation(fixture.draft, base); err != nil {
+		t.Fatalf("valid succeeded prefix: %v", err)
+	}
+
+	confirmed := cloneAuthority(t, base)
+	confirmed.Transaction.Operations[0].Status = controlplane.OperationConfirmedApplied
+	confirmed.Transaction.Operations[0].ReconciliationAuditReceiptID = digest("e")
+	if _, err := BindReconciliation(fixture.draft, confirmed); err != nil {
+		t.Fatalf("valid confirmed-applied prefix: %v", err)
+	}
+
+	tests := map[string]func(*Authority){
+		"prior status": func(value *Authority) {
+			value.Transaction.Operations[0].Status = controlplane.OperationFailed
+		},
+		"output missing": func(value *Authority) {
+			value.Transaction.Operations[0].OutputDigest = ""
+		},
+		"observation missing": func(value *Authority) {
+			value.Transaction.Operations[0].ObservationDigest = ""
+		},
+		"evidence time missing": func(value *Authority) {
+			value.Transaction.Operations[0].EvidenceAt = nil
+		},
+		"succeeded evidence receipt missing": func(value *Authority) {
+			value.Transaction.Operations[0].EvidenceAuditReceiptID = ""
+		},
+		"succeeded has reconciliation receipt": func(value *Authority) {
+			value.Transaction.Operations[0].ReconciliationAuditReceiptID = digest("e")
+		},
+		"confirmed-applied reconciliation receipt missing": func(value *Authority) {
+			value.Transaction.Operations[0].Status = controlplane.OperationConfirmedApplied
+			value.Transaction.Operations[0].ReconciliationAuditReceiptID = ""
+		},
+		"confirmed-applied malformed evidence receipt": func(value *Authority) {
+			value.Transaction.Operations[0].Status = controlplane.OperationConfirmedApplied
+			value.Transaction.Operations[0].ReconciliationAuditReceiptID = digest("e")
+			value.Transaction.Operations[0].EvidenceAuditReceiptID = "bad"
+		},
+		"next intent predates evidence": func(value *Authority) {
+			value.Now = value.Now.Add(time.Second)
+			at := value.Transaction.Operations[1].IntentAt.Add(time.Millisecond)
+			value.Transaction.Operations[0].EvidenceAt = &at
+		},
+		"duplicate operation ID": func(value *Authority) {
+			value.Transaction.Operations[1].ID = value.Transaction.Operations[0].ID
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			authority := cloneAuthority(t, base)
+			mutate(&authority)
+			if _, err := BindReconciliation(fixture.draft, authority); err == nil {
+				t.Fatal("BindReconciliation accepted an invalid successful prefix")
+			}
+		})
+	}
+}
+
 type fixture struct {
 	draft     Draft
 	authority Authority
@@ -613,6 +870,46 @@ func mutationContext(transaction controlplane.Transaction) controlplane.Mutation
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
 	}
+}
+
+func transferFixtureToReconciliation(t *testing.T, fixture fixture, stationID, laneID string) Authority {
+	t.Helper()
+	return transferAuthorityToReconciliation(t, fixture, fixture.authority, stationID, laneID)
+}
+
+func transferAuthorityToReconciliation(t *testing.T, fixture fixture, authority Authority, stationID, laneID string) Authority {
+	t.Helper()
+	transaction := authority.Transaction
+	transferred, err := fixture.control.TransferClaim(context.Background(), controlplane.TransferClaimRequest{
+		SchemaVersion:  controlplane.TransferClaimRequestSchemaVersion,
+		IdempotencyKey: "transfer-to-reconciliation",
+		TransactionID:  transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
+		NewStationID: stationID, NewLaneID: laneID, Mode: controlplane.ClaimModeReconciliation,
+		AllowedStages: []string{"reconciliation"}, LeaseDurationSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority.Transaction = transferred
+	return authority
+}
+
+func uncertainFixtureToReconciliation(t *testing.T, fixture fixture) Authority {
+	t.Helper()
+	transaction, err := fixture.control.RecordEvidence(context.Background(), controlplane.RecordEvidenceRequest{
+		SchemaVersion:  controlplane.RecordEvidenceRequestSchemaVersion,
+		IdempotencyKey: "uncertain-evidence-fixture", MutationContext: mutationContext(fixture.authority.Transaction),
+		OperationID: fixture.authority.Transaction.Operations[0].ID,
+		Result:      controlplane.EvidenceUncertain, OutputDigest: digest("c"), ObservationDigest: digest("d"),
+		AuditReceiptID: digest("e"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := fixture.authority
+	authority.Transaction = transaction
+	return transferAuthorityToReconciliation(t, fixture, authority, "station-recovery", "lane-recovery")
 }
 
 func cloneAuthority(t *testing.T, authority Authority) Authority {

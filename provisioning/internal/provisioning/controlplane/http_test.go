@@ -81,6 +81,66 @@ func TestMutualTLSHandlerBindsAcquireClaimStationAndLane(t *testing.T) {
 	}
 }
 
+func TestMutualTLSControlReadRemainsScopedAfterClaimRelease(t *testing.T) {
+	fixture := newTestFixture(t, &MemoryStore{})
+	neverClaimed, err := fixture.service.CreateTransaction(context.Background(), CreateTransactionRequest{
+		SchemaVersion: CreateTransactionRequestSchemaVersion, IdempotencyKey: "create-never-claimed",
+		TransactionID: "transaction-never-claimed", AssetID: "asset-never-claimed", IntendedLogicalID: "device-never-claimed",
+		ProfileID: "rpi5-v1", BundleDigest: digest("0"), PolicyDigest: digest("1"),
+		ExpectedPrestateCustomerKeyHash: UnownedCustomerKeyHash, ExpectedCustomerKeyHash: digest("2"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction := fixture.create()
+	transaction, err = fixture.service.AcquireClaim(context.Background(), AcquireClaimRequest{
+		SchemaVersion: AcquireClaimRequestSchemaVersion, IdempotencyKey: "claim-read-owner",
+		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+		StationID: "station-1", LaneID: "lane-1", Mode: ClaimModeMutation,
+		AllowedStages: developmentCampaignNames(), LeaseDurationSeconds: 300,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = fixture.service.AbortTransaction(context.Background(), AbortRequest{
+		SchemaVersion: AbortRequestSchemaVersion, IdempotencyKey: "abort-read-owner",
+		MutationContext: contextFor(transaction), ReusableBaselineDigest: digest("a"), AuditReceiptID: digest("b"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = fixture.service.ReleaseClaim(context.Background(), ReleaseClaimRequest{
+		SchemaVersion: ReleaseClaimRequestSchemaVersion, IdempotencyKey: "release-read-owner",
+		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name          string
+		transactionID string
+		identity      string
+		want          int
+	}{
+		{name: "latest historical claimant", transactionID: transaction.ID, identity: "spiffe://kaiba.network/station/station-1/lane/lane-1", want: http.StatusOK},
+		{name: "other station after release", transactionID: transaction.ID, identity: "spiffe://kaiba.network/station/station-2/lane/lane-2", want: http.StatusForbidden},
+		{name: "never-claimed transaction", transactionID: neverClaimed.ID, identity: "spiffe://kaiba.network/station/station-1/lane/lane-1", want: http.StatusForbidden},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/transactions/"+test.transactionID, nil)
+			request.TLS = controlVerifiedTLSState(t, "ignored", test.identity)
+			response := httptest.NewRecorder()
+			Handler(fixture.service, mtls.MutualTLSIdentityPolicy()).ServeHTTP(response, request)
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestMutualTLSHandlerRequiresIndependentApproverForRecordApproval(t *testing.T) {
 	tests := []struct {
 		name         string

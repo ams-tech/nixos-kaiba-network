@@ -25,9 +25,9 @@ func TestUnixBridgeRoundTripReturnsRevalidatedBoundExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if execution.Plan.PlanDigest != fixture.request.DraftSnapshot.PlanDigest ||
-		execution.Request.IntentReceipt != fixture.intentReceiptID || execution.Request.Sequence != 1 {
-		t.Fatalf("wire execution = %#v / %#v", execution.Plan, execution.Request)
+	if execution.Plan.PlanDigest != fixture.request.DraftSnapshot.PlanDigest || execution.ExecuteRequest == nil ||
+		execution.ExecuteRequest.IntentReceipt != fixture.intentReceiptID || execution.ExecuteRequest.Sequence != 1 {
+		t.Fatalf("wire execution = %#v / %#v", execution.Plan, execution.ExecuteRequest)
 	}
 	encoded, err := json.Marshal(fixture.request)
 	if err != nil {
@@ -37,6 +37,21 @@ func TestUnixBridgeRoundTripReturnsRevalidatedBoundExecution(t *testing.T) {
 		if bytes.Contains(bytes.ToLower(encoded), []byte(forbidden)) {
 			t.Fatalf("wire request contains forbidden selector %q", forbidden)
 		}
+	}
+}
+
+func TestUnixBridgeRoundTripReturnsOnlyReconciliationAuthority(t *testing.T) {
+	fixture := newReconciliationBridgeFixture(t, "station-reconcile", "lane-reconcile")
+	socketPath, stop := startBridgeServer(t, fixedBinder(fixture, fixture.records))
+	defer stop()
+	binding, err := Request(context.Background(), socketPath, fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.ExecuteRequest != nil || binding.ReconcileRequest == nil ||
+		binding.ReconcileRequest.Claim.ClaimID != fixture.transaction.ActiveClaim.ID ||
+		binding.ReconcileRequest.OriginalRequest.IntentReceipt != fixture.intentReceiptID {
+		t.Fatalf("wire reconciliation = %#v", binding)
 	}
 }
 
@@ -112,12 +127,12 @@ func TestUnixBridgeRejectsMalformedOversizedAndReconcileInputs(t *testing.T) {
 		{name: "unknown field", body: bytes.Replace(valid, []byte(`"mode"`), []byte(`"unknown":true,"mode"`), 1), code: ErrorCodeInvalidRequest},
 		{name: "duplicate field", body: bytes.Replace(valid, []byte(`"mode":"execute"`), []byte(`"mode":"execute","mode":"execute"`), 1), code: ErrorCodeInvalidRequest},
 		{name: "oversized", body: bytes.Repeat([]byte("x"), maxWireRequestBytes+1), code: ErrorCodeInvalidRequest},
-		{name: "reconciliation", body: reconcileJSON, code: ErrorCodeReconciliationUnsupported},
+		{name: "reconciliation without claim", body: reconcileJSON, code: ErrorCodeAuthorityRejected},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response := rawBridgeRequest(t, socketPath, test.body)
-			if response.Status != responseStatusError || response.ErrorCode != test.code || response.Plan != nil || response.Request != nil {
+			if response.Status != responseStatusError || response.ErrorCode != test.code || response.Plan != nil || response.ExecuteRequest != nil || response.ReconcileRequest != nil {
 				t.Fatalf("response = %#v", response)
 			}
 		})
@@ -132,7 +147,7 @@ func TestClientRejectsMalformedOversizedOrMismatchedSuccess(t *testing.T) {
 	}
 	valid := BridgeResponse{
 		SchemaVersion: ResponseSchemaVersion, Status: responseStatusOK,
-		Plan: &execution.Plan, Request: &execution.Request,
+		Plan: &execution.Plan, ExecuteRequest: execution.ExecuteRequest,
 	}
 	tests := []struct {
 		name string
@@ -145,9 +160,9 @@ func TestClientRejectsMalformedOversizedOrMismatchedSuccess(t *testing.T) {
 		{name: "oversized response", body: func() []byte { return bytes.Repeat([]byte("x"), maxWireResponseBytes+1) }},
 		{name: "changed operation request", body: func() []byte {
 			changed := valid
-			request := *valid.Request
+			request := *valid.ExecuteRequest
 			request.OperationDigest = bridgeDigest("f")
-			changed.Request = &request
+			changed.ExecuteRequest = &request
 			encoded, _ := json.Marshal(changed)
 			return encoded
 		}},
@@ -157,6 +172,12 @@ func TestClientRejectsMalformedOversizedOrMismatchedSuccess(t *testing.T) {
 			plan.Operations = append([]laneguard.OperationSpec(nil), valid.Plan.Operations...)
 			plan.Operations[0].MaximumDuration++
 			changed.Plan = &plan
+			encoded, _ := json.Marshal(changed)
+			return encoded
+		}},
+		{name: "both request variants", body: func() []byte {
+			changed := valid
+			changed.ReconcileRequest = &laneguard.ReconcileRequest{}
 			encoded, _ := json.Marshal(changed)
 			return encoded
 		}},

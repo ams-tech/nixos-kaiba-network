@@ -9,12 +9,15 @@ one-time setting. Its terminal result is deliberately non-authoritative.
 
 Choose a new state path for each run. Reusing a prior path fails closed.
 
-The current control store is `v1alpha3`: it requires the all-zero unowned
-customer-key prestate and a distinct nonzero intended owned key. Older control
-stores are not auto-migrated into this stronger authority model. Archive and
-remove old software-only rehearsal directories before rerunning. If an older
-store was ever associated with physical work, do not convert or resume it;
-retain it as evidence and require manual reconciliation or quarantine.
+The current control store is `v1alpha4`: it requires the all-zero unowned
+customer-key prestate and a distinct nonzero intended owned key, and it retains
+the original approval snapshot with each recorded operation so authenticated
+restart reconciliation can reconstruct the exact non-repeatable attempt.
+Older control stores are not auto-migrated into this stronger authority model.
+Archive and remove old software-only rehearsal directories before rerunning.
+If an older store was ever associated with physical work, do not convert or
+resume it; retain it as evidence and require manual reconciliation or
+quarantine.
 
 ```console
 nix run ./nix/provisioning#kaiba-provision-integrated-rehearsal -- \

@@ -14,10 +14,14 @@ import (
 type AttemptStatus string
 
 const (
-	AttemptStarted     AttemptStatus = "started"
-	AttemptUncertain   AttemptStatus = "uncertain"
-	AttemptVerified    AttemptStatus = "verified"
-	AttemptQuarantined AttemptStatus = "quarantined"
+	AttemptSchemaVersion      = "provisioning.kaiba.network/lane-guard-attempt/v1alpha1"
+	AttemptStoreSchemaVersion = "provisioning.kaiba.network/lane-guard-attempt-store/v1alpha1"
+
+	AttemptStarted             AttemptStatus = "started"
+	AttemptUncertain           AttemptStatus = "uncertain"
+	AttemptVerified            AttemptStatus = "verified"
+	AttemptConfirmedNotApplied AttemptStatus = "confirmed_not_applied"
+	AttemptQuarantined         AttemptStatus = "quarantined"
 )
 
 // Attempt is the durable execute-once record. Started is persisted before the
@@ -146,7 +150,7 @@ func (store *FileStore) load() (map[string]Attempt, error) {
 	if err := decoder.Decode(&envelope); err != nil {
 		return nil, fmt.Errorf("decode attempt journal: %w", err)
 	}
-	if envelope.SchemaVersion != ContractSchemaVersion || envelope.Attempts == nil {
+	if envelope.SchemaVersion != AttemptStoreSchemaVersion || envelope.Attempts == nil {
 		return nil, errors.New("attempt journal has an unsupported schema or missing records")
 	}
 	for key, attempt := range envelope.Attempts {
@@ -185,7 +189,7 @@ func (store *FileStore) save(attempts map[string]Attempt) error {
 	if err := encoder.Encode(struct {
 		SchemaVersion string             `json:"schema_version"`
 		Attempts      map[string]Attempt `json:"attempts"`
-	}{ContractSchemaVersion, attempts}); err != nil {
+	}{AttemptStoreSchemaVersion, attempts}); err != nil {
 		return fmt.Errorf("encode attempt journal: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
@@ -210,14 +214,14 @@ func (store *FileStore) save(attempts map[string]Attempt) error {
 }
 
 func validateAttempt(attempt Attempt) error {
-	if attempt.SchemaVersion != ContractSchemaVersion || attempt.Key == "" || attempt.TransactionID == "" || attempt.PlanDigest == "" || attempt.TargetFingerprint == "" || attempt.FenceEpoch == 0 || attempt.ApprovalID == "" || attempt.IntentReceipt == "" || attempt.IntentSequence == 0 || attempt.IntentSequence != attempt.Sequence || attempt.Sequence == 0 || attempt.OperationDigest == "" {
+	if attempt.SchemaVersion != AttemptSchemaVersion || attempt.Key == "" || attempt.TransactionID == "" || attempt.PlanDigest == "" || attempt.TargetFingerprint == "" || attempt.FenceEpoch == 0 || attempt.ApprovalID == "" || attempt.IntentReceipt == "" || attempt.IntentSequence == 0 || attempt.IntentSequence != attempt.Sequence || attempt.Sequence == 0 || attempt.OperationDigest == "" {
 		return errors.New("attempt is missing required immutable bindings")
 	}
 	if _, allowed := operationClass(attempt.Operation); !allowed {
 		return errors.New("attempt contains an unknown operation")
 	}
 	switch attempt.Status {
-	case AttemptStarted, AttemptUncertain, AttemptVerified, AttemptQuarantined:
+	case AttemptStarted, AttemptUncertain, AttemptVerified, AttemptConfirmedNotApplied, AttemptQuarantined:
 	default:
 		return errors.New("attempt has an invalid status")
 	}
@@ -231,7 +235,7 @@ func validAttemptTransition(existing, next Attempt) error {
 	if existing.Key != next.Key || existing.TransactionID != next.TransactionID || existing.PlanDigest != next.PlanDigest || existing.TargetFingerprint != next.TargetFingerprint || existing.FenceEpoch != next.FenceEpoch || existing.ApprovalID != next.ApprovalID || existing.IntentReceipt != next.IntentReceipt || existing.IntentSequence != next.IntentSequence || existing.Sequence != next.Sequence || existing.Operation != next.Operation || existing.OperationDigest != next.OperationDigest || existing.StartedAt != next.StartedAt {
 		return errors.New("attempt immutable bindings cannot change")
 	}
-	if existing.Status == AttemptVerified || existing.Status == AttemptQuarantined {
+	if existing.Status == AttemptVerified || existing.Status == AttemptConfirmedNotApplied || existing.Status == AttemptQuarantined {
 		if existing != next {
 			return errors.New("terminal attempt record cannot change")
 		}

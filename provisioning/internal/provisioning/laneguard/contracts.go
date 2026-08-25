@@ -16,24 +16,30 @@ import (
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
-const ContractSchemaVersion = "provisioning.kaiba.network/lane-guard/v1alpha3"
+const (
+	ContractSchemaVersion           = "provisioning.kaiba.network/lane-guard/v1alpha3"
+	ReconcileRequestSchemaVersion   = "provisioning.kaiba.network/lane-guard-reconcile-request/v1alpha1"
+	ReconciliationObservationBudget = 5 * time.Minute
+)
 
 var (
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	digestPattern     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
-	ErrNoPlan                 = errors.New("no approved plan is loaded")
-	ErrPlanMismatch           = errors.New("request does not match the approved plan")
-	ErrDigestMismatch         = errors.New("derived digest does not match the approved plan")
-	ErrPlanLocked             = errors.New("the approved plan is locked")
-	ErrTargetContinuity       = errors.New("target continuity check failed")
-	ErrPrestateMismatch       = errors.New("direct target prestate does not match the approved plan")
-	ErrPoststateMismatch      = errors.New("direct target poststate does not match the approved plan")
-	ErrOutOfOrder             = errors.New("operation is out of order")
-	ErrApprovalExpired        = errors.New("approved plan has expired")
-	ErrLeaseInvalid           = errors.New("claim lease has insufficient remaining lifetime")
-	ErrReconciliationRequired = errors.New("operation outcome requires direct reconciliation")
-	ErrQuarantined            = errors.New("operation or target is quarantined")
+	ErrNoPlan                  = errors.New("no approved plan is loaded")
+	ErrPlanMismatch            = errors.New("request does not match the approved plan")
+	ErrDigestMismatch          = errors.New("derived digest does not match the approved plan")
+	ErrPlanLocked              = errors.New("the approved plan is locked")
+	ErrTargetContinuity        = errors.New("target continuity check failed")
+	ErrPrestateMismatch        = errors.New("direct target prestate does not match the approved plan")
+	ErrPoststateMismatch       = errors.New("direct target poststate does not match the approved plan")
+	ErrOutOfOrder              = errors.New("operation is out of order")
+	ErrApprovalExpired         = errors.New("approved plan has expired")
+	ErrLeaseInvalid            = errors.New("claim lease has insufficient remaining lifetime")
+	ErrConfirmedNotApplied     = errors.New("operation conclusively did not apply")
+	ErrReconciliationAuthority = errors.New("reconciliation authority is invalid")
+	ErrReconciliationRequired  = errors.New("operation outcome requires direct reconciliation")
+	ErrQuarantined             = errors.New("operation or target is quarantined")
 )
 
 // Operation is a closed allowlist. The hardware adapter maps these values to
@@ -185,13 +191,28 @@ type Plan struct {
 }
 
 func (plan Plan) Validate(config Config) error {
+	return plan.validate(config, true)
+}
+
+// ValidateReconciliationPlan validates an original execution plan against the
+// current physical-lane configuration without requiring the original station
+// and lane identities to equal the current reconciliation claim's location.
+// All original plan identities and digests remain unchanged and validated.
+func ValidateReconciliationPlan(config Config, plan Plan) error {
+	return plan.validate(config, false)
+}
+
+func (plan Plan) validate(config Config, requireExecutionLane bool) error {
 	if err := config.Validate(); err != nil {
 		return fmt.Errorf("lane config: %w", err)
 	}
 	if plan.SchemaVersion != ContractSchemaVersion {
 		return fmt.Errorf("unsupported plan schema version %q", plan.SchemaVersion)
 	}
-	if plan.StationID != config.StationID || plan.LaneID != config.LaneID {
+	if !identifierPattern.MatchString(plan.StationID) || !identifierPattern.MatchString(plan.LaneID) {
+		return errors.New("plan station or lane identity is invalid")
+	}
+	if requireExecutionLane && (plan.StationID != config.StationID || plan.LaneID != config.LaneID) {
 		return fmt.Errorf("%w: station or lane identity", ErrPlanMismatch)
 	}
 	if !identifierPattern.MatchString(plan.TransactionID) || !identifierPattern.MatchString(plan.TargetFingerprint) {
@@ -274,6 +295,19 @@ func ValidatePlanRequest(config Config, plan Plan, request ExecuteRequest) error
 	return err
 }
 
+// ValidateReconcileRequest validates the original authority-bound execution
+// identity and the separate, current read-only reconciliation claim. It does
+// not enforce claim freshness; Guard checks the claim lifetime against its
+// trusted clock immediately before direct observation.
+func ValidateReconcileRequest(config Config, plan Plan, request ReconcileRequest) error {
+	plan = clonePlan(plan)
+	if err := ValidateReconciliationPlan(config, plan); err != nil {
+		return err
+	}
+	_, err := matchReconcileRequest(config, plan, request)
+	return err
+}
+
 // ExecuteRequest repeats every security-relevant binding. Physical paths and
 // payload selectors are intentionally not request fields.
 type ExecuteRequest struct {
@@ -293,6 +327,28 @@ type ExecuteRequest struct {
 	AuthorizationID   string                 `json:"authorization_id"`
 	ExpectedPrestate  DirectState            `json:"expected_prestate"`
 	ClaimExpiresAt    time.Time              `json:"claim_expires_at"`
+}
+
+// ReconciliationClaim is fresh read-only authority for observing one target
+// after an earlier execution became uncertain. It is deliberately separate
+// from the original mutation fence and approval carried by ExecuteRequest.
+type ReconciliationClaim struct {
+	StationID         string    `json:"station_id"`
+	LaneID            string    `json:"lane_id"`
+	TransactionID     string    `json:"transaction_id"`
+	TargetFingerprint string    `json:"target_fingerprint"`
+	ClaimID           string    `json:"claim_id"`
+	FenceEpoch        uint64    `json:"fence_epoch"`
+	ExpiresAt         time.Time `json:"expires_at"`
+}
+
+// ReconcileRequest combines the immutable identity of the original attempted
+// operation with a freshly authenticated reconciliation claim. It contains no
+// executable path, physical selector, or mutation authority.
+type ReconcileRequest struct {
+	SchemaVersion   string              `json:"schema_version"`
+	OriginalRequest ExecuteRequest      `json:"original_request"`
+	Claim           ReconciliationClaim `json:"claim"`
 }
 
 type OperationResult struct {

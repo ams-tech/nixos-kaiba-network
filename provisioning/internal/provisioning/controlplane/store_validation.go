@@ -76,12 +76,16 @@ func validateTransaction(transaction Transaction, fenceEpochs map[string]uint64)
 		}
 	}
 	if transaction.Approval != nil {
-		if err := validateStoredApproval(*transaction.Approval, transaction); err != nil {
+		if err := validateStoredApproval(*transaction.Approval, transaction, transaction.FenceEpoch); err != nil {
 			return err
 		}
 	}
 	operationIDs := make(map[string]struct{}, len(transaction.Operations))
+	confirmedNotApplied := false
 	for index, operation := range transaction.Operations {
+		if confirmedNotApplied {
+			return corrupt("operation history continues after confirmed-not-applied reconciliation")
+		}
 		if _, duplicate := operationIDs[operation.ID]; duplicate {
 			return corrupt("duplicate operation ID")
 		}
@@ -96,6 +100,10 @@ func validateTransaction(transaction Transaction, fenceEpochs map[string]uint64)
 				return corrupt("operation plan bindings are inconsistent")
 			}
 		}
+		confirmedNotApplied = operation.Status == OperationConfirmedNotApplied
+	}
+	if confirmedNotApplied && transaction.ActiveClaim != nil && transaction.ActiveClaim.Mode == ClaimModeMutation {
+		return corrupt("confirmed-not-applied transaction has a mutation claim")
 	}
 	if (transaction.Status == StatusQuarantined) != (transaction.Quarantine != nil) {
 		return corrupt("quarantine terminal record does not match status")
@@ -158,10 +166,10 @@ func validateClaim(claim Claim, transaction Transaction, active bool) error {
 	return nil
 }
 
-func validateStoredApproval(approval Approval, transaction Transaction) error {
+func validateStoredApproval(approval Approval, transaction Transaction, expectedFenceEpoch uint64) error {
 	if !validIdentifier(approval.ID) || !validIdentifier(approval.ApproverID) || approval.TransactionDigest != transaction.TransactionDigest ||
 		!validDigest(approval.PlanDigest) || !validIdentifier(approval.StationID) || !validIdentifier(approval.LaneID) ||
-		approval.FenceEpoch != transaction.FenceEpoch || transaction.Target == nil ||
+		approval.FenceEpoch != expectedFenceEpoch || transaction.Target == nil ||
 		approval.TargetFingerprint != transaction.Target.Fingerprint ||
 		approval.Release.SignedReleaseManifestDigest != transaction.BundleDigest ||
 		approval.Release.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash ||
@@ -193,6 +201,15 @@ func validateStoredOperation(operation OperationRecord, transaction Transaction)
 	}
 	if err := operation.Release.Validate(); err != nil {
 		return corrupt("invalid operation release binding")
+	}
+	if err := validateStoredApproval(operation.Approval, transaction, operation.IntentFenceEpoch); err != nil {
+		return corrupt("invalid operation approval snapshot")
+	}
+	if operation.Approval.PlanDigest != operation.PlanDigest || operation.Approval.Release != operation.Release ||
+		!operation.Approval.ExpiresAt.Equal(operation.ApprovalExpiresAt) || operation.IntentAt.Before(operation.Approval.ApprovedAt) ||
+		transaction.Target == nil ||
+		!claimIdentityExists(transaction, operation.Approval.StationID, operation.Approval.LaneID, operation.IntentFenceEpoch) {
+		return corrupt("operation approval snapshot does not match its original plan, target, and claim")
 	}
 	switch operation.Status {
 	case OperationIntentRecorded:
@@ -227,6 +244,18 @@ func validateStoredOperation(operation OperationRecord, transaction Transaction)
 		return corrupt("unsupported operation status")
 	}
 	return nil
+}
+
+func claimIdentityExists(transaction Transaction, stationID, laneID string, fenceEpoch uint64) bool {
+	if claim := transaction.ActiveClaim; claim != nil && claim.StationID == stationID && claim.LaneID == laneID && claim.FenceEpoch == fenceEpoch {
+		return true
+	}
+	for _, claim := range transaction.ClaimHistory {
+		if claim.StationID == stationID && claim.LaneID == laneID && claim.FenceEpoch == fenceEpoch {
+			return true
+		}
+	}
+	return false
 }
 
 func corrupt(message string) error {

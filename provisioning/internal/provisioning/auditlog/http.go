@@ -4,12 +4,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mtls"
 )
 
 const maxRequestBytes = 1 << 20
+
+var receiptIDPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // Handler exposes the reference JSON/HTTP surface. The supplied identity
 // policy is selected by the server deployment: mutual TLS binds station/lane
@@ -62,8 +65,39 @@ func Handler(service *Service, identityPolicy mtls.IdentityPolicy) http.Handler 
 				return
 			}
 		}
-		records := service.Records(request.URL.Query().Get("transaction_id"))
-		if identityPolicy.RequiresClientIdentity() {
+		query := request.URL.Query()
+		receiptIDs := query["receipt_id"]
+		transactionID := query.Get("transaction_id")
+		if len(receiptIDs) > 8 {
+			writeError(writer, http.StatusBadRequest, invalid("at most eight receipt_id values are allowed"))
+			return
+		}
+		selectedReceipts := make(map[string]struct{}, len(receiptIDs))
+		if len(receiptIDs) != 0 && transactionID == "" {
+			writeError(writer, http.StatusBadRequest, invalid("transaction_id is required for exact receipt selection"))
+			return
+		}
+		for _, receiptID := range receiptIDs {
+			if !receiptIDPattern.MatchString(receiptID) {
+				writeError(writer, http.StatusBadRequest, invalid("receipt_id is invalid"))
+				return
+			}
+			if _, duplicate := selectedReceipts[receiptID]; duplicate {
+				writeError(writer, http.StatusBadRequest, invalid("receipt_id values must be unique"))
+				return
+			}
+			selectedReceipts[receiptID] = struct{}{}
+		}
+		records := service.Records(transactionID)
+		if len(selectedReceipts) != 0 {
+			exact := make([]Record, 0, len(selectedReceipts))
+			for _, record := range records {
+				if _, selected := selectedReceipts[receiptFor(record).ReceiptID]; selected {
+					exact = append(exact, record)
+				}
+			}
+			records = exact
+		} else if identityPolicy.RequiresClientIdentity() {
 			visible := make([]Record, 0, len(records))
 			for _, record := range records {
 				if record.Event.StationID == identity.StationID && record.Event.LaneID == identity.LaneID {
