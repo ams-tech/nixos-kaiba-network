@@ -170,6 +170,10 @@ type approvalRecorder interface {
 	RecordApproval(context.Context, controlplane.RecordApprovalRequest) (controlplane.Transaction, error)
 }
 
+type approvalPreflighter interface {
+	PreflightApproval(context.Context, controlplane.ApprovalPreflightRequest) (controlplane.Transaction, error)
+}
+
 type intentRecorder interface {
 	RecordIntent(context.Context, controlplane.RecordIntentRequest) (controlplane.Transaction, error)
 }
@@ -387,13 +391,17 @@ func (proposal ApprovalProposal) requests(receiptID string) (auditlog.AppendRequ
 
 // ApplyApproval appends the approver-authenticated audit event before the
 // compare-and-set control approval. Replaying the same proposal is idempotent.
-func ApplyApproval(ctx context.Context, proposal ApprovalProposal, current transactionReader, audit auditAppender, control approvalRecorder) (controlplane.Transaction, error) {
-	if current == nil || audit == nil || control == nil {
+func ApplyApproval(ctx context.Context, proposal ApprovalProposal, preflight approvalPreflighter, audit auditAppender, control approvalRecorder) (controlplane.Transaction, error) {
+	if preflight == nil || audit == nil || control == nil {
 		return controlplane.Transaction{}, fmt.Errorf("%w: approval clients are required", ErrInvalidInput)
 	}
-	transaction, err := current.GetTransaction(ctx, proposal.DraftSnapshot.TransactionID)
+	_, recordRequest, err := proposal.requests(validPlaceholderDigest)
 	if err != nil {
-		return controlplane.Transaction{}, fmt.Errorf("read transaction before approval append: %w", err)
+		return controlplane.Transaction{}, err
+	}
+	transaction, err := preflight.PreflightApproval(ctx, approvalPreflightRequest(proposal, recordRequest))
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("preflight approval before audit append: %w", err)
 	}
 	if err := proposalMatchesCurrentApproval(proposal, transaction); err != nil {
 		return controlplane.Transaction{}, err
@@ -418,6 +426,19 @@ func ApplyApproval(ctx context.Context, proposal ApprovalProposal, current trans
 		return controlplane.Transaction{}, fmt.Errorf("record control approval: %w", err)
 	}
 	return transaction, nil
+}
+
+func approvalPreflightRequest(proposal ApprovalProposal, record controlplane.RecordApprovalRequest) controlplane.ApprovalPreflightRequest {
+	return controlplane.ApprovalPreflightRequest{
+		SchemaVersion:   controlplane.ApprovalPreflightRequestSchemaVersion,
+		MutationContext: record.MutationContext,
+		ApprovalID:      record.ApprovalID, ApproverID: record.ApproverID,
+		TransactionDigest: record.TransactionDigest, PlanDigest: record.PlanDigest,
+		StationID: proposal.DraftSnapshot.StationID, LaneID: proposal.DraftSnapshot.LaneID,
+		TargetFingerprint: record.TargetFingerprint, Release: record.Release,
+		AllowedOperations: append([]string(nil), record.AllowedOperations...),
+		ApprovedAt:        proposal.EventTime, ExpiresAt: record.ExpiresAt,
+	}
 }
 
 func proposalMatchesCurrentApproval(proposal ApprovalProposal, transaction controlplane.Transaction) error {

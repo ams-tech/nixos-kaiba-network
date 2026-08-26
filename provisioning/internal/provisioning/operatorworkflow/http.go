@@ -21,9 +21,9 @@ import (
 
 const authorityResponseLimit = 1 << 20
 
-// HTTPControlClient is the narrow typed writer used by the operator CLI. Its
-// methods correspond to explicit workflow transitions; it exposes no raw
-// command method to callers.
+// HTTPControlClient is the narrow typed authority client used by the operator
+// CLI. Its methods correspond to explicit workflow reads and transitions; it
+// exposes no raw command method to callers.
 type HTTPControlClient struct {
 	client *http.Client
 	origin url.URL
@@ -133,6 +133,10 @@ func (client *HTTPControlClient) BindTarget(ctx context.Context, request control
 
 func (client *HTTPControlClient) RecordApproval(ctx context.Context, request controlplane.RecordApprovalRequest) (controlplane.Transaction, error) {
 	return client.command(ctx, "record_approval", request.TransactionID, request)
+}
+
+func (client *HTTPControlClient) PreflightApproval(ctx context.Context, request controlplane.ApprovalPreflightRequest) (controlplane.Transaction, error) {
+	return client.command(ctx, "preflight_approval", request.TransactionID, request)
 }
 
 func (client *HTTPControlClient) RecordIntent(ctx context.Context, request controlplane.RecordIntentRequest) (controlplane.Transaction, error) {

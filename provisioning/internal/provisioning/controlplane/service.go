@@ -27,9 +27,10 @@ var (
 )
 
 const (
-	minimumLease            = 30 * time.Second
-	maximumLease            = time.Hour
-	maximumApprovalLifetime = 24 * time.Hour
+	minimumLease             = 30 * time.Second
+	maximumLease             = time.Hour
+	maximumApprovalLifetime  = 24 * time.Hour
+	maximumApprovalClockSkew = time.Minute
 )
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)

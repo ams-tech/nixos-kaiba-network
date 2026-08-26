@@ -6,10 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/controlplane"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 )
 
 func TestParseAuthorityOriginAcceptsOnlyAnHTTPSOrigin(t *testing.T) {
@@ -173,6 +176,59 @@ func TestHTTPControlClientMarkSecurityAppliedUsesFixedTypedOperation(t *testing.
 		client: httpClient, origin: url.URL{Scheme: "https", Host: "control.example.test"},
 	}
 	if _, err := client.MarkSecurityApplied(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHTTPControlClientApprovalPreflightUsesFixedTypedOperation(t *testing.T) {
+	want := controlplane.ApprovalPreflightRequest{
+		SchemaVersion: controlplane.ApprovalPreflightRequestSchemaVersion,
+		MutationContext: controlplane.MutationContext{
+			TransactionID: "transaction-1", ExpectedResourceVersion: 3,
+			ClaimID: "claim-1", FenceEpoch: 2,
+		},
+		ApprovalID: "approval-1", ApproverID: "approver-1",
+		TransactionDigest: testDigest("a"), PlanDigest: testDigest("b"),
+		StationID: "station-1", LaneID: "lane-1", TargetFingerprint: testDigest("c"),
+		Release: releasebinding.Binding{
+			SignedReleaseManifestDigest: testDigest("d"), LaneGuardPackageDigest: testDigest("e"),
+			CompiledArtifactSetDigest: testDigest("f"), ExpectedCustomerKeyHash: testDigest("1"),
+			ExpectedEEPROMDigest: testDigest("2"), ExpectedBootImageDigest: testDigest("3"),
+		},
+		AllowedOperations: []string{"stage-1", "stage-2"},
+		ApprovedAt:        time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC),
+		ExpiresAt:         time.Date(2026, 8, 15, 12, 30, 0, 0, time.UTC),
+	}
+	responseBody, err := json.Marshal(controlplane.Transaction{
+		SchemaVersion: controlplane.TransactionSchemaVersion, ID: want.TransactionID, ResourceVersion: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var command controlplane.Command
+		if err := json.NewDecoder(request.Body).Decode(&command); err != nil {
+			t.Fatal(err)
+		}
+		if command.SchemaVersion != controlplane.CommandSchemaVersion || command.Operation != "preflight_approval" {
+			t.Fatalf("control command = %#v", command)
+		}
+		var got controlplane.ApprovalPreflightRequest
+		if err := controlplane.DecodeStrict(command.Request, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("typed approval preflight = %#v, want %#v", got, want)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(string(responseBody))),
+		}, nil
+	})}
+	client := &HTTPControlClient{
+		client: httpClient, origin: url.URL{Scheme: "https", Host: "control.example.test"},
+	}
+	if _, err := client.PreflightApproval(context.Background(), want); err != nil {
 		t.Fatal(err)
 	}
 }

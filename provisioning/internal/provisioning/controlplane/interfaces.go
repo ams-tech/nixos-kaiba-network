@@ -12,6 +12,7 @@ type Coordinator interface {
 	TransferClaim(context.Context, TransferClaimRequest) (Transaction, error)
 	ReleaseClaim(context.Context, ReleaseClaimRequest) (Transaction, error)
 	BindTarget(context.Context, BindTargetRequest) (Transaction, error)
+	PreflightApproval(context.Context, ApprovalPreflightRequest) (Transaction, error)
 	RecordApproval(context.Context, RecordApprovalRequest) (Transaction, error)
 	RecordStageIntent(context.Context, RecordIntentRequest) (Transaction, error)
 	RecordStageEvidence(context.Context, RecordEvidenceRequest) (Transaction, error)

@@ -20,6 +20,7 @@ const (
 	TransferClaimRequestSchemaVersion        = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
 	ReleaseClaimRequestSchemaVersion         = "provisioning.kaiba.network/release-claim-request/v1alpha1"
 	BindTargetRequestSchemaVersion           = "provisioning.kaiba.network/bind-target-request/v1alpha1"
+	ApprovalPreflightRequestSchemaVersion    = "provisioning.kaiba.network/approval-preflight-request/v1alpha1"
 	RecordApprovalRequestSchemaVersion       = "provisioning.kaiba.network/record-approval-request/v1alpha2"
 	RecordIntentRequestSchemaVersion         = "provisioning.kaiba.network/record-intent-request/v1alpha1"
 	RecordEvidenceRequestSchemaVersion       = "provisioning.kaiba.network/record-evidence-request/v1alpha1"
@@ -284,6 +285,27 @@ type RecordApprovalRequest struct {
 	AllowedOperations []string               `json:"allowed_operations"`
 	AuditReceiptID    string                 `json:"audit_receipt_id"`
 	ExpiresAt         time.Time              `json:"expires_at"`
+}
+
+// ApprovalPreflightRequest is the complete, receipt-free approval proposal an
+// independent approver asks the control plane to validate before appending an
+// audit event. It grants no mutation authority and contains no station secret.
+type ApprovalPreflightRequest struct {
+	SchemaVersion string `json:"schema_version"`
+	MutationContext
+	ApprovalID        string                 `json:"approval_id"`
+	ApproverID        string                 `json:"approver_id"`
+	TransactionDigest string                 `json:"transaction_digest"`
+	PlanDigest        string                 `json:"plan_digest"`
+	StationID         string                 `json:"station_id"`
+	LaneID            string                 `json:"lane_id"`
+	TargetFingerprint string                 `json:"target_fingerprint"`
+	Release           releasebinding.Binding `json:"release"`
+	AllowedOperations []string               `json:"allowed_operations"`
+	// ApprovedAt is the proposal's approval-event time. The control plane's
+	// durable Approval.ApprovedAt remains the server-side apply time.
+	ApprovedAt time.Time `json:"approved_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 type RecordIntentRequest struct {

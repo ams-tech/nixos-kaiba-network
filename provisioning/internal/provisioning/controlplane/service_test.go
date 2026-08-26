@@ -149,6 +149,107 @@ func TestFreshTargetPrestateIsDistinctFromApprovedPoststate(t *testing.T) {
 	}
 }
 
+func TestApprovalPreflightIsReadOnlyAndAcceptsOnlyExactStateOrReplay(t *testing.T) {
+	fixture := newTestFixture(t, &MemoryStore{})
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBind(operations)
+	record := fixture.approvalRequest(transaction, operations, "approval-1")
+	preflight := fixture.approvalPreflight(transaction, record)
+
+	checked, err := fixture.service.PreflightApproval(context.Background(), preflight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked.ResourceVersion != transaction.ResourceVersion || checked.Status != StatusTargetBound || checked.Approval != nil {
+		t.Fatalf("preflight changed target-bound transaction: %#v", checked)
+	}
+	persisted, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ResourceVersion != transaction.ResourceVersion || persisted.Status != StatusTargetBound || persisted.Approval != nil {
+		t.Fatalf("preflight mutated durable transaction: %#v", persisted)
+	}
+
+	tests := map[string]func(*ApprovalPreflightRequest){
+		"resource version": func(value *ApprovalPreflightRequest) { value.ExpectedResourceVersion++ },
+		"claim":            func(value *ApprovalPreflightRequest) { value.ClaimID = "claim-other" },
+		"fence":            func(value *ApprovalPreflightRequest) { value.FenceEpoch++ },
+		"transaction":      func(value *ApprovalPreflightRequest) { value.TransactionDigest = digest("f") },
+		"station":          func(value *ApprovalPreflightRequest) { value.StationID = "station-other" },
+		"lane":             func(value *ApprovalPreflightRequest) { value.LaneID = "lane-other" },
+		"target":           func(value *ApprovalPreflightRequest) { value.TargetFingerprint = digest("f") },
+		"release": func(value *ApprovalPreflightRequest) {
+			value.Release.SignedReleaseManifestDigest = digest("f")
+		},
+		"ordered operations": func(value *ApprovalPreflightRequest) {
+			value.AllowedOperations[0], value.AllowedOperations[1] = value.AllowedOperations[1], value.AllowedOperations[0]
+		},
+		"approval before target binding": func(value *ApprovalPreflightRequest) {
+			value.ApprovedAt = transaction.Target.BoundAt.Add(-time.Second)
+		},
+		"expired": func(value *ApprovalPreflightRequest) { value.ExpiresAt = fixture.now },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			changed := preflight
+			changed.AllowedOperations = append([]string(nil), preflight.AllowedOperations...)
+			mutate(&changed)
+			if _, err := fixture.service.PreflightApproval(context.Background(), changed); err == nil {
+				t.Fatal("mismatched approval preflight was accepted")
+			}
+		})
+	}
+
+	approved, err := fixture.service.RecordApproval(context.Background(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := fixture.service.PreflightApproval(context.Background(), preflight)
+	if err != nil {
+		t.Fatalf("exact committed approval replay: %v", err)
+	}
+	if replayed.ResourceVersion != approved.ResourceVersion || replayed.Approval == nil ||
+		!replayed.Approval.ApprovedAt.Equal(fixture.now) {
+		t.Fatalf("committed approval replay = %#v", replayed)
+	}
+	replayTests := map[string]func(*ApprovalPreflightRequest){
+		"approval": func(value *ApprovalPreflightRequest) { value.ApprovalID = "approval-other" },
+		"approver": func(value *ApprovalPreflightRequest) { value.ApproverID = "approver-other" },
+		"plan":     func(value *ApprovalPreflightRequest) { value.PlanDigest = digest("f") },
+		"release detail": func(value *ApprovalPreflightRequest) {
+			value.Release.ExpectedEEPROMDigest = digest("f")
+		},
+		"expiry": func(value *ApprovalPreflightRequest) { value.ExpiresAt = value.ExpiresAt.Add(time.Minute) },
+	}
+	for name, mutate := range replayTests {
+		t.Run("committed "+name, func(t *testing.T) {
+			changed := preflight
+			changed.AllowedOperations = append([]string(nil), preflight.AllowedOperations...)
+			mutate(&changed)
+			if _, err := fixture.service.PreflightApproval(context.Background(), changed); err == nil {
+				t.Fatal("changed committed approval replay was accepted")
+			}
+		})
+	}
+}
+
+func TestApprovalPreflightAllowsOnlyBoundedFutureClockSkew(t *testing.T) {
+	fixture := newTestFixture(t, &MemoryStore{})
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBind(operations)
+	request := fixture.approvalPreflight(transaction, fixture.approvalRequest(transaction, operations, "approval-1"))
+
+	request.ApprovedAt = fixture.now.Add(maximumApprovalClockSkew)
+	if _, err := fixture.service.PreflightApproval(context.Background(), request); err != nil {
+		t.Fatalf("preflight rejected exact clock-skew boundary: %v", err)
+	}
+	request.ApprovedAt = fixture.now.Add(maximumApprovalClockSkew + time.Nanosecond)
+	if _, err := fixture.service.PreflightApproval(context.Background(), request); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("preflight beyond clock-skew boundary error = %v, want ErrInvalid", err)
+	}
+}
+
 func TestCreateTransactionRequiresAllZeroFreshAndNonzeroOwnedKey(t *testing.T) {
 	fixture := newTestFixture(t, &MemoryStore{})
 	base := CreateTransactionRequest{
@@ -1046,6 +1147,18 @@ func (fixture *testFixture) approvalRequest(transaction Transaction, operations 
 		TransactionDigest: transaction.TransactionDigest, PlanDigest: digest("5"),
 		TargetFingerprint: transaction.Target.Fingerprint, Release: approvalRelease(transaction),
 		AllowedOperations: operations, AuditReceiptID: digest("a"), ExpiresAt: fixture.now.Add(30 * time.Minute),
+	}
+}
+
+func (fixture *testFixture) approvalPreflight(transaction Transaction, record RecordApprovalRequest) ApprovalPreflightRequest {
+	return ApprovalPreflightRequest{
+		SchemaVersion: ApprovalPreflightRequestSchemaVersion, MutationContext: record.MutationContext,
+		ApprovalID: record.ApprovalID, ApproverID: record.ApproverID,
+		TransactionDigest: record.TransactionDigest, PlanDigest: record.PlanDigest,
+		StationID: transaction.ActiveClaim.StationID, LaneID: transaction.ActiveClaim.LaneID,
+		TargetFingerprint: record.TargetFingerprint, Release: record.Release,
+		AllowedOperations: append([]string(nil), record.AllowedOperations...),
+		ApprovedAt:        fixture.now, ExpiresAt: record.ExpiresAt,
 	}
 }
 

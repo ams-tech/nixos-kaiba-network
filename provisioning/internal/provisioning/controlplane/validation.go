@@ -144,6 +144,46 @@ func validateRecordApprovalRequest(request RecordApprovalRequest, now time.Time)
 	return nil
 }
 
+func validateApprovalPreflightRequest(request ApprovalPreflightRequest, now time.Time) error {
+	if request.SchemaVersion != ApprovalPreflightRequestSchemaVersion {
+		return invalid("schema_version is unsupported")
+	}
+	if err := validateMutationContext(request.MutationContext); err != nil {
+		return err
+	}
+	if !validIdentifier(request.ApprovalID) || !validIdentifier(request.ApproverID) ||
+		!validIdentifier(request.StationID) || !validIdentifier(request.LaneID) {
+		return invalid("approval, approver, station, or lane identity is invalid")
+	}
+	for _, digest := range []string{request.TransactionDigest, request.PlanDigest, request.TargetFingerprint} {
+		if !validDigest(digest) {
+			return invalid("approval preflight digest is invalid")
+		}
+	}
+	if err := request.Release.Validate(); err != nil {
+		return invalid("release binding is invalid: " + err.Error())
+	}
+	if err := validateStringSet("allowed_operations", request.AllowedOperations, 1, 32); err != nil {
+		return err
+	}
+	if err := validateDevelopmentOperationNames(request.AllowedOperations); err != nil {
+		return invalid("allowed_operations: " + err.Error())
+	}
+	return validateApprovalTimes(request.ApprovedAt, request.ExpiresAt, now)
+}
+
+func validateApprovalTimes(approvedAt, expiresAt, now time.Time) error {
+	if approvedAt.IsZero() || approvedAt.After(now.Add(maximumApprovalClockSkew)) {
+		return invalid("approved_at must be non-zero and no more than one minute in the future")
+	}
+	if !expiresAt.After(now) || !expiresAt.After(approvedAt) ||
+		expiresAt.After(approvedAt.Add(maximumApprovalLifetime)) ||
+		expiresAt.After(now.Add(maximumApprovalLifetime)) {
+		return invalid("approval expiry must be in the future and no more than 24 hours after approval")
+	}
+	return nil
+}
+
 func validateRecordIntentRequest(request RecordIntentRequest) error {
 	if err := validateEnvelope(request.SchemaVersion, RecordIntentRequestSchemaVersion, request.IdempotencyKey); err != nil {
 		return err

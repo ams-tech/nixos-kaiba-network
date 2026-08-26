@@ -532,14 +532,83 @@ func TestApprovalRejectsStaleControlStateBeforeAudit(t *testing.T) {
 			changed := transaction
 			mutate(&changed)
 			audit := &countingAudit{}
+			preflight := &countingApprovalPreflighter{transaction: changed}
 			control := &countingApprovalRecorder{transaction: changed}
-			if _, err := ApplyApproval(context.Background(), proposal, staticReader{changed}, audit, control); err == nil {
+			if _, err := ApplyApproval(context.Background(), proposal, preflight, audit, control); err == nil {
 				t.Fatal("stale approval proposal was accepted")
 			}
-			if audit.calls != 0 || control.calls != 0 {
-				t.Fatalf("stale approval crossed authority boundary: audit=%d control=%d", audit.calls, control.calls)
+			if preflight.calls != 1 || audit.calls != 0 || control.calls != 0 {
+				t.Fatalf("stale approval boundary calls: preflight=%d audit=%d control=%d", preflight.calls, audit.calls, control.calls)
 			}
 		})
+	}
+}
+
+func TestApprovalPreflightBindsProposalAndAuditFailurePreventsControl(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := NewApprovalProposal(snapshot, transaction, "approver-1", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight := &countingApprovalPreflighter{transaction: transaction}
+	audit := &countingAudit{err: errors.New("audit unavailable")}
+	control := &countingApprovalRecorder{transaction: transaction}
+	if _, err := ApplyApproval(context.Background(), proposal, preflight, audit, control); err == nil {
+		t.Fatal("ApplyApproval() succeeded with failed audit append")
+	}
+	if preflight.calls != 1 || audit.calls != 1 || control.calls != 0 {
+		t.Fatalf("approval boundary calls: preflight=%d audit=%d control=%d", preflight.calls, audit.calls, control.calls)
+	}
+	want := controlplane.ApprovalPreflightRequest{
+		SchemaVersion: controlplane.ApprovalPreflightRequestSchemaVersion,
+		MutationContext: controlplane.MutationContext{
+			TransactionID:           proposal.DraftSnapshot.TransactionID,
+			ExpectedResourceVersion: proposal.ExpectedResourceVersion,
+			ClaimID:                 proposal.ClaimID, FenceEpoch: proposal.FenceEpoch,
+		},
+		ApprovalID: proposal.ApprovalID, ApproverID: proposal.ApproverID,
+		TransactionDigest: proposal.TransactionDigest, PlanDigest: proposal.DraftSnapshot.PlanDigest,
+		StationID: proposal.DraftSnapshot.StationID, LaneID: proposal.DraftSnapshot.LaneID,
+		TargetFingerprint: proposal.DraftSnapshot.TargetFingerprint, Release: proposal.DraftSnapshot.Release,
+		AllowedOperations: planOperations(proposal.DraftSnapshot),
+		ApprovedAt:        proposal.EventTime, ExpiresAt: proposal.DraftSnapshot.ApprovalExpiresAt,
+	}
+	if !reflect.DeepEqual(preflight.request, want) {
+		t.Fatalf("approval preflight = %#v, want %#v", preflight.request, want)
+	}
+}
+
+func TestApprovalReplayCannotChangeAuditedProposalTime(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := NewApprovalProposal(snapshot, transaction, "approver-1", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = ApplyApproval(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantVersion := transaction.ResourceVersion
+	fixture.now = fixture.now.Add(time.Second)
+	changed := proposal
+	changed.EventTime = fixture.now
+	if _, err := ApplyApproval(context.Background(), changed, fixture.control, fixture.audit, fixture.control); err == nil {
+		t.Fatal("approval replay changed its audited event time")
+	}
+	persisted, err := fixture.control.GetTransaction(context.Background(), transaction.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ResourceVersion != wantVersion || len(fixture.audit.service.Records(transaction.ID)) != 1 {
+		t.Fatal("changed approval replay mutated control or appended another audit event")
 	}
 }
 
@@ -993,6 +1062,19 @@ type countingEvidenceRecorder struct {
 type countingApprovalRecorder struct {
 	calls       int
 	transaction controlplane.Transaction
+}
+
+type countingApprovalPreflighter struct {
+	calls       int
+	request     controlplane.ApprovalPreflightRequest
+	transaction controlplane.Transaction
+	err         error
+}
+
+func (control *countingApprovalPreflighter) PreflightApproval(_ context.Context, request controlplane.ApprovalPreflightRequest) (controlplane.Transaction, error) {
+	control.calls++
+	control.request = request
+	return control.transaction, control.err
 }
 
 func (control *countingApprovalRecorder) RecordApproval(context.Context, controlplane.RecordApprovalRequest) (controlplane.Transaction, error) {

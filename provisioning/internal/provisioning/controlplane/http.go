@@ -161,6 +161,15 @@ func dispatchCommand(httpRequest *http.Request, service *Service, identityPolicy
 			return Transaction{}, err
 		}
 		return service.RecordApproval(ctx, request)
+	case "preflight_approval":
+		var request ApprovalPreflightRequest
+		if err := DecodeStrict(command.Request, &request); err != nil {
+			return Transaction{}, err
+		}
+		if err := identityPolicy.AuthorizeApprover(httpRequest, request.ApproverID); err != nil {
+			return Transaction{}, err
+		}
+		return service.PreflightApproval(ctx, request)
 	case "record_intent":
 		var request RecordIntentRequest
 		if err := DecodeStrict(command.Request, &request); err != nil {
