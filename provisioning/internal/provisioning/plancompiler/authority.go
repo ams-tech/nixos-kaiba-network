@@ -206,8 +206,9 @@ func (bound BoundPlan) ExecuteRequest() (laneguard.ExecuteRequest, error) {
 		FenceEpoch: bound.plan.FenceEpoch, ApprovalID: bound.plan.ApprovalID,
 		ApprovalExpiresAt: bound.plan.ApprovalExpiresAt, IntentReceipt: bound.plan.IntentReceipt,
 		Sequence: operation.Sequence, OperationDigest: operation.OperationDigest,
-		AuthorizationID: operation.AuthorizationID, ExpectedPrestate: operation.ExpectedPrestate,
-		ClaimExpiresAt: bound.claimExpiresAt,
+		AuthorizationID: operation.AuthorizationID, RequiredBootMode: operation.RequiredBootMode,
+		ExpectedPrestate: operation.ExpectedPrestate,
+		ClaimExpiresAt:   bound.claimExpiresAt,
 	}, nil
 }
 

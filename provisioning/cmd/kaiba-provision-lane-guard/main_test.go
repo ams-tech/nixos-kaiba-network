@@ -188,7 +188,7 @@ func TestCommandReconcilesRestartWithModeAutoAndNoRedispatch(t *testing.T) {
 	if authorityCalls != 2 || len(adapterModes) != 2 || adapterModes[0] != physicalrpi5.ModeFresh || adapterModes[1] != physicalrpi5.ModeAuto {
 		t.Fatalf("dispatch = authority:%d modes:%#v", authorityCalls, adapterModes)
 	}
-	if hardware.executions != 1 || hardware.observations != 3 {
+	if hardware.executions != 1 || hardware.observations != 2 {
 		t.Fatalf("reconciliation redispatch/double observation: executions=%d observations=%d", hardware.executions, hardware.observations)
 	}
 }
@@ -302,43 +302,43 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 		Operations: []laneguard.OperationSpec{
 			{
 				Sequence: 1, Operation: laneguard.OperationProgramCustomerKeyAndEEPROM,
-				Classification:  laneguard.ClassIrreversible,
+				Classification: laneguard.ClassIrreversible, RequiredBootMode: laneguard.BootModeRPIBoot,
 				AuthorizationID: "authorization-1", ExpectedPrestate: prestate,
 				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 2, Operation: laneguard.OperationColdPowerCycle,
-				Classification:  laneguard.ClassReversible,
+				Classification: laneguard.ClassReversible, RequiredBootMode: laneguard.BootModeNormal,
 				AuthorizationID: "authorization-2", ExpectedPrestate: poststate,
 				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 3, Operation: laneguard.OperationOwnedReadback,
-				Classification:  laneguard.ClassReadOnly,
+				Classification: laneguard.ClassReadOnly, RequiredBootMode: laneguard.BootModeRPIBoot,
 				AuthorizationID: "authorization-3", ExpectedPrestate: poststate,
 				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 4, Operation: laneguard.OperationTestOwnedRecovery,
-				Classification:  laneguard.ClassReversible,
+				Classification: laneguard.ClassReversible, RequiredBootMode: laneguard.BootModeRPIBoot,
 				AuthorizationID: "authorization-4", ExpectedPrestate: poststate,
 				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 5, Operation: laneguard.OperationPostRecoveryReadback,
-				Classification:  laneguard.ClassReadOnly,
+				Classification: laneguard.ClassReadOnly, RequiredBootMode: laneguard.BootModeRPIBoot,
 				AuthorizationID: "authorization-5", ExpectedPrestate: poststate,
 				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 6, Operation: laneguard.OperationTestNegativeBoot,
-				Classification:  laneguard.ClassReversible,
+				Classification: laneguard.ClassReversible, RequiredBootMode: laneguard.BootModeRPIBoot,
 				AuthorizationID: "authorization-6", ExpectedPrestate: poststate,
 				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 7, Operation: laneguard.OperationTestRootIntegrity,
-				Classification:  laneguard.ClassReversible,
+				Classification: laneguard.ClassReversible, RequiredBootMode: laneguard.BootModeRPIBoot,
 				AuthorizationID: "authorization-7", ExpectedPrestate: poststate,
 				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
 			},
@@ -354,7 +354,7 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest, Release: plan.Release, TargetFingerprint: plan.TargetFingerprint,
 		FenceEpoch: plan.FenceEpoch, ApprovalID: plan.ApprovalID, ApprovalExpiresAt: plan.ApprovalExpiresAt, IntentReceipt: plan.IntentReceipt,
 		Sequence: 1, OperationDigest: plan.Operations[0].OperationDigest,
-		AuthorizationID: plan.Operations[0].AuthorizationID, ExpectedPrestate: prestate,
+		AuthorizationID: plan.Operations[0].AuthorizationID, RequiredBootMode: plan.Operations[0].RequiredBootMode, ExpectedPrestate: prestate,
 		ClaimExpiresAt: time.Now().Add(10 * time.Minute),
 	}
 	return plan, request

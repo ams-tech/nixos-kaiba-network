@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	RequestSchemaVersion  = "provisioning.kaiba.network/authority-bridge-request/v1alpha2"
-	ResponseSchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha2"
+	RequestSchemaVersion  = "provisioning.kaiba.network/authority-bridge-request/v1alpha3"
+	ResponseSchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha3"
 
 	// AuthorityReadTimeout is the maximum duration expected from each
 	// authenticated control or audit read. Network adapters must enforce this
@@ -47,10 +47,12 @@ const (
 	ModeReconcile Mode = "reconcile"
 )
 
-// BridgeRequest deliberately contains no executable, artifact path, device,
-// GPIO, UART, or operation selector. DraftSnapshot is authority-free material
-// whose complete digest must already be present in authenticated control and
-// audit state.
+// BridgeRequest deliberately contains no executable, artifact or bundle path,
+// device, USB, GPIO, UART, or caller-selected physical boot selector.
+// DraftSnapshot is authority-free material whose complete digest must already
+// be present in authenticated control and audit state. Its RequiredBootMode
+// values are compiler-owned closed policy, not physical selectors supplied by
+// the bridge caller.
 type BridgeRequest struct {
 	SchemaVersion string         `json:"schema_version"`
 	Mode          Mode           `json:"mode"`

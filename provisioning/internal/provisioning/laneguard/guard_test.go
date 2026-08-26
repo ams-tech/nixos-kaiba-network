@@ -267,15 +267,21 @@ func TestRestartLoadsUncertainAttemptForObservationOnly(t *testing.T) {
 	if err := restarted.LoadPlan(context.Background(), plan); err != nil {
 		t.Fatalf("reload uncertain plan: %v", err)
 	}
+	if restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+		t.Fatalf("LoadPlan reached hardware: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
+	}
 	if _, err := restarted.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
 		t.Fatalf("restart execute error = %v", err)
+	}
+	if restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+		t.Fatalf("restart execute replay reached hardware: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
 	}
 	attempt, err := restarted.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
 	if err != nil || attempt.Status != AttemptVerified {
 		t.Fatalf("restart reconcile = %#v, %v", attempt, err)
 	}
-	if restartedHardware.executeCount != 0 {
-		t.Fatalf("restart replayed hardware %d times", restartedHardware.executeCount)
+	if restartedHardware.observeCount != 1 || restartedHardware.executeCount != 0 {
+		t.Fatalf("restart reconciliation calls: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
 	}
 }
 
@@ -285,7 +291,10 @@ func TestReconcileRequiresFreshBoundClaimBeforeObservation(t *testing.T) {
 		change func(*ReconcileRequest, Plan, time.Time)
 		want   error
 	}{
-		{"schema", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.SchemaVersion = "other" }, ErrReconciliationAuthority},
+		{"previous schema", func(request *ReconcileRequest, _ Plan, _ time.Time) {
+			request.SchemaVersion = "provisioning.kaiba.network/lane-guard-reconcile-request/v1alpha1"
+		}, ErrReconciliationAuthority},
+		{"unknown schema", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.SchemaVersion = "other" }, ErrReconciliationAuthority},
 		{"station", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.Claim.StationID = "other-station" }, ErrReconciliationAuthority},
 		{"lane", func(request *ReconcileRequest, _ Plan, _ time.Time) { request.Claim.LaneID = "other-lane" }, ErrReconciliationAuthority},
 		{"transaction", func(request *ReconcileRequest, _ Plan, _ time.Time) {
@@ -506,8 +515,18 @@ func TestRestartFailsClosedForUnknownOrQuarantinedState(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := restarted.LoadPlan(context.Background(), plan); !errors.Is(err, ErrPrestateMismatch) {
-			t.Fatalf("unknown state load error = %v", err)
+		if err := restarted.LoadPlan(context.Background(), plan); err != nil {
+			t.Fatalf("load uncertain restart: %v", err)
+		}
+		if restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+			t.Fatalf("LoadPlan reached hardware: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
+		}
+		attempt, err := restarted.Reconcile(context.Background(), reconcileRequest(plan, requestFor(plan, 1, now.Add(10*time.Minute)), now.Add(10*time.Minute)))
+		if !errors.Is(err, ErrQuarantined) || !errors.Is(err, ErrPoststateMismatch) || attempt.Status != AttemptQuarantined {
+			t.Fatalf("unknown state reconciliation = %#v, %v", attempt, err)
+		}
+		if restartedHardware.observeCount != 1 || restartedHardware.executeCount != 0 {
+			t.Fatalf("reconciliation hardware calls: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
 		}
 	})
 
@@ -528,14 +547,17 @@ func TestRestartFailsClosedForUnknownOrQuarantinedState(t *testing.T) {
 		if err := restarted.LoadPlan(context.Background(), plan); err != nil {
 			t.Fatalf("reload quarantine: %v", err)
 		}
+		if restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+			t.Fatalf("LoadPlan reached hardware: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
+		}
 		if _, err := restarted.Execute(context.Background(), request); !errors.Is(err, ErrQuarantined) {
 			t.Fatalf("execute after quarantine = %v", err)
 		}
 		if _, err := restarted.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute))); !errors.Is(err, ErrQuarantined) {
 			t.Fatalf("reconcile after quarantine = %v", err)
 		}
-		if restartedHardware.executeCount != 0 {
-			t.Fatal("quarantined journal reopened execution")
+		if restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+			t.Fatalf("quarantined journal reached hardware: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
 		}
 	})
 }
@@ -582,6 +604,7 @@ func TestGuardRejectsStaleBindingsBeforeHardware(t *testing.T) {
 		{"sequence", func(request *ExecuteRequest) { request.Sequence = 2 }},
 		{"operation", func(request *ExecuteRequest) { request.OperationDigest = digest("8") }},
 		{"authorization", func(request *ExecuteRequest) { request.AuthorizationID = "other-authorization" }},
+		{"required boot mode", func(request *ExecuteRequest) { request.RequiredBootMode = BootModeNormal }},
 		{"prestate", func(request *ExecuteRequest) { request.ExpectedPrestate.SecurityState = "changed" }},
 	}
 	for _, test := range tests {
@@ -644,6 +667,60 @@ func TestGuardRejectsOutOfOrderAndShortLease(t *testing.T) {
 	}
 }
 
+func TestGuardRechecksAuthorityAfterDirectPrestateObservation(t *testing.T) {
+	initial := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name       string
+		after      time.Time
+		want       error
+		claimUntil time.Time
+	}{
+		{
+			name:       "approval expired",
+			after:      testPlan().ApprovalExpiresAt,
+			want:       ErrApprovalExpired,
+			claimUntil: initial.Add(10 * time.Minute),
+		},
+		{
+			name:       "claim no longer covers operation",
+			after:      initial.Add(8*time.Minute + 31*time.Second),
+			want:       ErrLeaseInvalid,
+			claimUntil: initial.Add(10 * time.Minute),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := testConfig()
+			plan := testPlan()
+			clock := &mutableClock{now: initial}
+			hardware := &fakeHardware{
+				observation: Observation{
+					EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+					TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+				},
+			}
+			hardware.beforeObserve = func() { clock.now = test.after }
+			store := NewMemoryStore()
+			guard, err := NewWithClock(config, hardware, store, clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := guard.LoadPlan(context.Background(), plan); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := guard.Execute(context.Background(), requestFor(plan, 1, test.claimUntil)); !errors.Is(err, test.want) {
+				t.Fatalf("execute error = %v, want %v", err, test.want)
+			}
+			if hardware.observeCount != 1 || hardware.executeCount != 0 {
+				t.Fatalf("hardware calls: observations=%d executions=%d", hardware.observeCount, hardware.executeCount)
+			}
+			if _, found, err := store.Get(attemptKey(plan, 1)); err != nil || found {
+				t.Fatalf("expired authority recorded intent: found=%t err=%v", found, err)
+			}
+		})
+	}
+}
+
 func TestGuardRejectsExpiredClaimWhenDurationArithmeticWouldOverflow(t *testing.T) {
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	for name, expiry := range map[string]time.Time{
@@ -686,7 +763,7 @@ func TestGuardRejectsExpiredClaimWhenDurationArithmeticWouldOverflow(t *testing.
 	}
 }
 
-func TestLoadPlanRequiresExactLaneAndFreshTarget(t *testing.T) {
+func TestLoadPlanPerformsNoTargetIO(t *testing.T) {
 	config := testConfig()
 	plan := testPlan()
 	for _, test := range []struct {
@@ -699,13 +776,16 @@ func TestLoadPlanRequiresExactLaneAndFreshTarget(t *testing.T) {
 		{"wrong target", Observation{EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath, TargetFingerprint: "replacement-target"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			hardware := &fakeHardware{observation: test.obs}
+			hardware := &fakeHardware{observation: test.obs, observeErr: errors.New("target I/O must not be attempted")}
 			guard, err := New(config, hardware, NewMemoryStore())
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := guard.LoadPlan(context.Background(), plan); !errors.Is(err, ErrTargetContinuity) {
-				t.Fatalf("load error = %v", err)
+			if err := guard.LoadPlan(context.Background(), plan); err != nil {
+				t.Fatalf("load plan: %v", err)
+			}
+			if hardware.observeCount != 0 || hardware.executeCount != 0 {
+				t.Fatalf("LoadPlan reached hardware: observations=%d executions=%d", hardware.observeCount, hardware.executeCount)
 			}
 		})
 	}
@@ -937,13 +1017,13 @@ func testPlanBody() Plan {
 		FenceEpoch: 7, ApprovalID: "approval-1",
 		ApprovalExpiresAt: time.Date(2026, 8, 16, 12, 0, 0, 123456789, time.UTC), IntentReceipt: "receipt-1", IntentSequence: 1,
 		Operations: []OperationSpec{
-			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: owned, MaximumDuration: time.Minute},
-			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, AuthorizationID: "authorization-2", ExpectedPrestate: owned, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 3, Operation: OperationOwnedReadback, Classification: ClassReadOnly, AuthorizationID: "authorization-3", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 4, Operation: OperationTestOwnedRecovery, Classification: ClassReversible, AuthorizationID: "authorization-4", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 5, Operation: OperationPostRecoveryReadback, Classification: ClassReadOnly, AuthorizationID: "authorization-5", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 6, Operation: OperationTestNegativeBoot, Classification: ClassReversible, AuthorizationID: "authorization-6", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 7, Operation: OperationTestRootIntegrity, Classification: ClassReversible, AuthorizationID: "authorization-7", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: owned, MaximumDuration: time.Minute},
+			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, RequiredBootMode: BootModeNormal, AuthorizationID: "authorization-2", ExpectedPrestate: owned, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 3, Operation: OperationOwnedReadback, Classification: ClassReadOnly, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-3", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 4, Operation: OperationTestOwnedRecovery, Classification: ClassReversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-4", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 5, Operation: OperationPostRecoveryReadback, Classification: ClassReadOnly, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-5", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 6, Operation: OperationTestNegativeBoot, Classification: ClassReversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-6", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 7, Operation: OperationTestRootIntegrity, Classification: ClassReversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-7", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
 		},
 	}
 }
@@ -957,8 +1037,9 @@ func requestFor(plan Plan, sequence uint32, expiry time.Time) ExecuteRequest {
 		TargetFingerprint: plan.TargetFingerprint, FenceEpoch: plan.FenceEpoch,
 		ApprovalID: plan.ApprovalID, ApprovalExpiresAt: plan.ApprovalExpiresAt, IntentReceipt: plan.IntentReceipt,
 		Sequence: sequence, OperationDigest: operation.OperationDigest,
-		AuthorizationID: operation.AuthorizationID, ExpectedPrestate: operation.ExpectedPrestate,
-		ClaimExpiresAt: expiry,
+		AuthorizationID: operation.AuthorizationID, RequiredBootMode: operation.RequiredBootMode,
+		ExpectedPrestate: operation.ExpectedPrestate,
+		ClaimExpiresAt:   expiry,
 	}
 }
 

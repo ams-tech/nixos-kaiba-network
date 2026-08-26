@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	goldenOperationMaterial  = `{"sequence":3,"operation":"owned_readback","classification":"read_only","authorization_id":"authorization-golden","expected_prestate":{"customer_key_hash":"customer-before","eeprom_hash":"eeprom-before","security_state":"owned","power_state":"signed_os"},"expected_poststate":{"customer_key_hash":"customer-after","eeprom_hash":"eeprom-after","security_state":"owned_verified","power_state":"signed_os"},"maximum_duration_nanoseconds":90000000000}`
-	goldenOperationDigest    = "sha256:a29d5dd8d0c217289c0cf5d095d0db0fe6dbe134790e72ba6e793f7db28096be"
-	goldenPlanMaterial       = `{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha3","station_id":"golden-station","lane_id":"golden-lane","transaction_id":"golden-transaction","release":{"signed_release_manifest_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","lane_guard_package_digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","compiled_artifact_set_digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","expected_customer_key_hash":"sha256:4444444444444444444444444444444444444444444444444444444444444444","expected_eeprom_digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555","expected_boot_image_digest":"sha256:6666666666666666666666666666666666666666666666666666666666666666"},"target_fingerprint":"golden-target","fence_epoch":42,"approval_expires_at":"2026-08-15T12:34:56.123456789Z","operation_digests":["sha256:a29d5dd8d0c217289c0cf5d095d0db0fe6dbe134790e72ba6e793f7db28096be"]}`
-	goldenPlanDigest         = "sha256:bc2cfd4fd92b8a085d894c3da6bd2b04de8906dab149dcb61bbdb5b11088fc33"
-	escapedOperationMaterial = `{"sequence":4,"operation":"test_owned_recovery","classification":"reversible","authorization_id":"auth\u003c\u003e\u0026\"\\雪\u2028","expected_prestate":{"customer_key_hash":"line\nbreak","eeprom_hash":"tab\tvalue","security_state":"café","power_state":"slash/ok"},"expected_poststate":{"customer_key_hash":"quote\"value","eeprom_hash":"backslash\\value","security_state":"owned","power_state":"signed_os"},"maximum_duration_nanoseconds":1}`
-	escapedOperationDigest   = "sha256:431d52f56a9ba6193514dffddb5e1e9e8eb8c72f9468f5456d9b33fb3ff72340"
+	goldenOperationMaterial  = `{"sequence":3,"operation":"owned_readback","classification":"read_only","required_boot_mode":"rpiboot","authorization_id":"authorization-golden","expected_prestate":{"customer_key_hash":"customer-before","eeprom_hash":"eeprom-before","security_state":"owned","power_state":"signed_os"},"expected_poststate":{"customer_key_hash":"customer-after","eeprom_hash":"eeprom-after","security_state":"owned_verified","power_state":"signed_os"},"maximum_duration_nanoseconds":90000000000}`
+	goldenOperationDigest    = "sha256:268a64e43bbc3c637553d4bc33432e61f521ed6d2f3caa947cdf07d36e2a80dd"
+	goldenPlanMaterial       = `{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha4","station_id":"golden-station","lane_id":"golden-lane","transaction_id":"golden-transaction","release":{"signed_release_manifest_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","lane_guard_package_digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","compiled_artifact_set_digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","expected_customer_key_hash":"sha256:4444444444444444444444444444444444444444444444444444444444444444","expected_eeprom_digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555","expected_boot_image_digest":"sha256:6666666666666666666666666666666666666666666666666666666666666666"},"target_fingerprint":"golden-target","fence_epoch":42,"approval_expires_at":"2026-08-15T12:34:56.123456789Z","operation_digests":["sha256:268a64e43bbc3c637553d4bc33432e61f521ed6d2f3caa947cdf07d36e2a80dd"]}`
+	goldenPlanDigest         = "sha256:b1b5ffaa9a564e79dea8d25b5c53029a524164f06c4215ac17ecb93cc9851b5b"
+	escapedOperationMaterial = `{"sequence":4,"operation":"test_owned_recovery","classification":"reversible","required_boot_mode":"rpiboot","authorization_id":"auth\u003c\u003e\u0026\"\\雪\u2028","expected_prestate":{"customer_key_hash":"line\nbreak","eeprom_hash":"tab\tvalue","security_state":"café","power_state":"slash/ok"},"expected_poststate":{"customer_key_hash":"quote\"value","eeprom_hash":"backslash\\value","security_state":"owned","power_state":"signed_os"},"maximum_duration_nanoseconds":1}`
+	escapedOperationDigest   = "sha256:76d7bc9b0862809c00ead43b370b0456f27082971a5798307898165053b775f9"
 )
 
 func TestOperationDigestGoldenVector(t *testing.T) {
@@ -39,7 +39,8 @@ func TestOperationDigestGoldenVector(t *testing.T) {
 func TestOperationDigestEscapingGoldenVector(t *testing.T) {
 	operation := OperationSpec{
 		Sequence: 4, Operation: OperationTestOwnedRecovery, Classification: ClassReversible,
-		AuthorizationID: "auth<>&\"\\雪\u2028",
+		RequiredBootMode: BootModeRPIBoot,
+		AuthorizationID:  "auth<>&\"\\雪\u2028",
 		ExpectedPrestate: DirectState{
 			CustomerKeyHash: "line\nbreak", EEPROMHash: "tab\tvalue",
 			SecurityState: "café", PowerState: "slash/ok",
@@ -79,6 +80,7 @@ func TestOperationDigestCoversEveryBodyField(t *testing.T) {
 		{"sequence", func(value *OperationSpec) { value.Sequence++ }},
 		{"operation", func(value *OperationSpec) { value.Operation = OperationPostRecoveryReadback }},
 		{"classification", func(value *OperationSpec) { value.Classification = ClassReversible }},
+		{"required boot mode", func(value *OperationSpec) { value.RequiredBootMode = BootModeNormal }},
 		{"authorization ID", func(value *OperationSpec) { value.AuthorizationID = "authorization-changed" }},
 		{"prestate customer key", func(value *OperationSpec) { value.ExpectedPrestate.CustomerKeyHash = "changed" }},
 		{"prestate EEPROM", func(value *OperationSpec) { value.ExpectedPrestate.EEPROMHash = "changed" }},
@@ -357,15 +359,7 @@ func TestLoadPlanRetainsTheValidatedPlanSnapshot(t *testing.T) {
 	config := testConfig()
 	plan := testPlan()
 	validated := clonePlan(plan)
-	hardware := &fakeHardware{
-		observation: Observation{
-			EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
-			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
-		},
-		beforeObserve: func() {
-			plan.Operations[0].AuthorizationID = "changed-after-validation"
-		},
-	}
+	hardware := &fakeHardware{}
 	guard, err := New(config, hardware, NewMemoryStore())
 	if err != nil {
 		t.Fatal(err)
@@ -373,6 +367,7 @@ func TestLoadPlanRetainsTheValidatedPlanSnapshot(t *testing.T) {
 	if err := guard.LoadPlan(context.Background(), plan); err != nil {
 		t.Fatalf("load validated plan: %v", err)
 	}
+	plan.Operations[0].AuthorizationID = "changed-after-validation"
 	if !samePlan(*guard.plan, validated) {
 		t.Fatal("loaded plan changed after trusted-boundary validation")
 	}
@@ -384,7 +379,8 @@ func TestLoadPlanRetainsTheValidatedPlanSnapshot(t *testing.T) {
 func goldenOperation() OperationSpec {
 	return OperationSpec{
 		Sequence: 3, Operation: OperationOwnedReadback, Classification: ClassReadOnly,
-		OperationDigest: digest("e"), AuthorizationID: "authorization-golden",
+		RequiredBootMode: BootModeRPIBoot,
+		OperationDigest:  digest("e"), AuthorizationID: "authorization-golden",
 		ExpectedPrestate: DirectState{
 			CustomerKeyHash: "customer-before", EEPROMHash: "eeprom-before",
 			SecurityState: "owned", PowerState: "signed_os",

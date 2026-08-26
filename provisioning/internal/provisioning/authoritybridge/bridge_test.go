@@ -71,6 +71,10 @@ func TestBinderReturnsOnlyTheCurrentAuthenticatedExecution(t *testing.T) {
 	if execution.ExecuteRequest.ClaimExpiresAt != fixture.transaction.ActiveClaim.ExpiresAt {
 		t.Fatalf("claim expiry = %s", execution.ExecuteRequest.ClaimExpiresAt)
 	}
+	if execution.ExecuteRequest.RequiredBootMode != laneguard.BootModeRPIBoot ||
+		execution.ExecuteRequest.RequiredBootMode != execution.Plan.Operations[0].RequiredBootMode {
+		t.Fatalf("bound boot mode = %q / %q", execution.ExecuteRequest.RequiredBootMode, execution.Plan.Operations[0].RequiredBootMode)
+	}
 	if execution.Plan.PlanDigest != fixture.request.DraftSnapshot.PlanDigest {
 		t.Fatal("bridge changed the approved plan digest")
 	}
@@ -81,6 +85,9 @@ func TestBinderRejectsTamperedOrAuthoritativeDraftSnapshot(t *testing.T) {
 	tests := map[string]func(*BridgeRequest){
 		"operation body": func(request *BridgeRequest) {
 			request.DraftSnapshot.Operations[0].MaximumDuration++
+		},
+		"required boot mode": func(request *BridgeRequest) {
+			request.DraftSnapshot.Operations[0].RequiredBootMode = laneguard.BootModeNormal
 		},
 		"operation digest": func(request *BridgeRequest) {
 			request.DraftSnapshot.Operations[0].OperationDigest = bridgeDigest("f")
@@ -117,6 +124,30 @@ func TestBinderRejectsTamperedOrAuthoritativeDraftSnapshot(t *testing.T) {
 				t.Fatalf("Bind() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestBridgeSchemaVersionsTrackDigestBoundBootModeWireChange(t *testing.T) {
+	if RequestSchemaVersion != "provisioning.kaiba.network/authority-bridge-request/v1alpha3" ||
+		ResponseSchemaVersion != "provisioning.kaiba.network/authority-bridge-response/v1alpha3" {
+		t.Fatalf("authority bridge schemas = %q / %q", RequestSchemaVersion, ResponseSchemaVersion)
+	}
+
+	fixture := newBridgeFixture(t)
+	request := cloneBridgeRequest(fixture.request)
+	request.SchemaVersion = "provisioning.kaiba.network/authority-bridge-request/v1alpha2"
+	binder := Binder{
+		Control: controlReaderFunc(func(context.Context, string) (controlplane.Transaction, error) {
+			t.Fatal("previous wire schema reached the authority source")
+			return controlplane.Transaction{}, nil
+		}),
+		Audit: auditReaderFunc(func(context.Context, string) ([]auditlog.Record, error) {
+			t.Fatal("previous wire schema reached the authority source")
+			return nil, nil
+		}),
+	}
+	if _, err := binder.Bind(context.Background(), request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Bind() error = %v", err)
 	}
 }
 

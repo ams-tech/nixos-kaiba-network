@@ -2009,7 +2009,7 @@ let
     }
     {
       id = "authenticated-authority-bridge";
-      description = "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, and lane-guard contract revalidation fail closed without exposing physical selectors or a generic mutation primitive.";
+      description = "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, the v1alpha4 lane plan, and the v1alpha3 authority bridge fail closed against boot-mode or authority tampering. The digest-bound policy requires normal for cold_power_cycle and rpiboot for the other six operations without exposing physical paths, an operator-selected mode, or a generic mutation primitive. This is software-only contract evidence; it does not claim a manual BOOTSEL handshake, direct mode observation, or hardware enforcement.";
     }
     {
       id = "authenticated-restart-reconciliation";
@@ -2910,7 +2910,7 @@ let
           exit 1
         fi
         if strings ${built.eepromSigningTool}/bin/kaiba-provision-sign-eeprom \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/bin/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
           echo 'EEPROM signing adapter links a physical provisioning capability' >&2
           exit 1
         fi
@@ -4971,13 +4971,17 @@ let
           and .authority.pending_sequence == 1
           and .simulation.outcome == "rehearsal_passed"
         ' "$TMPDIR/integrated-rehearsal.json" > /dev/null
+        # Match linked implementation packages and concrete executable/device
+        # paths, not closed contract vocabulary such as the "rpiboot" boot
+        # mode. Go may coalesce adjacent string data into text like
+        # "http://rpiboot", so a bare /rpiboot pattern is not a path test.
         if strings ${built.integratedRehearsal}/bin/kaiba-provision-integrated-rehearsal \
-          | grep -E 'internal/provisioning/(physicalrpi5|rpi5)([./]|$)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|rpi5)([./]|$)|/bin/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
           echo 'integrated rehearsal links a live physical provisioning capability' >&2
           exit 1
         fi
         if strings ${built.serviceSuite}/bin/kaiba-provision-authority-bridge \
-          | grep -E 'internal/provisioning/physicalrpi5([./]|$)|/rpiboot|/gpioset'; then
+          | grep -E 'internal/provisioning/physicalrpi5([./]|$)|/bin/rpiboot|/gpioset'; then
           echo 'authority bridge links a live physical provisioning capability' >&2
           exit 1
         fi
@@ -4990,7 +4994,7 @@ let
         test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.securityEnforcementClaim}' = 'false'
         test '${builtins.toJSON built.unfusedCompat.kaibaUnfusedCompatibility.signerTrustAnchored}' = 'false'
         if strings ${built.unfusedCompat}/bin/kaiba-provision-unfused-compat \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/bin/rpiboot|/gpioset'; then
           echo 'unfused compatibility verifier links a physical provisioning capability' >&2
           exit 1
         fi
@@ -5006,7 +5010,7 @@ let
         test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.securityEnforcementClaim}' = 'false'
         test '${builtins.toJSON built.unfusedEvidence.kaibaUnfusedEvidence.signerTrustAnchored}' = 'false'
         if strings ${built.unfusedEvidence}/bin/kaiba-provision-unfused-evidence \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/bin/rpiboot|/gpioset|/dev/serial|/dev/gpio'; then
           echo 'unfused evidence verifier links a live physical provisioning capability' >&2
           exit 1
         fi
@@ -5028,7 +5032,7 @@ let
         test '${builtins.toJSON built.mediaStager.kaibaMediaStager.eepromProgrammingCapable}' = 'false'
         test '${builtins.toJSON built.mediaStager.kaibaMediaStager.fixtureModeAvailable}' = 'true'
         if strings ${built.mediaStager}/bin/kaiba-provision-media-stager \
-          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/rpiboot|/gpioset'; then
+          | grep -E 'internal/provisioning/(physicalrpi5|laneguard|rpi5)([./]|$)|/bin/rpiboot|/gpioset'; then
           echo 'media stager links a Pi ownership or lane-control capability' >&2
           exit 1
         fi

@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	ContractSchemaVersion           = "provisioning.kaiba.network/lane-guard/v1alpha3"
-	ReconcileRequestSchemaVersion   = "provisioning.kaiba.network/lane-guard-reconcile-request/v1alpha1"
+	ContractSchemaVersion           = "provisioning.kaiba.network/lane-guard/v1alpha4"
+	ReconcileRequestSchemaVersion   = "provisioning.kaiba.network/lane-guard-reconcile-request/v1alpha2"
 	ReconciliationObservationBudget = 5 * time.Minute
 )
 
@@ -77,6 +77,34 @@ func operationClass(operation Operation) (OperationClass, bool) {
 		return ClassReversible, true
 	case OperationOwnedReadback, OperationPostRecoveryReadback:
 		return ClassReadOnly, true
+	default:
+		return "", false
+	}
+}
+
+// BootMode is a closed allowlist of the two physical boot selections the lane
+// can request before an operation. The physical adapter must directly observe
+// that the requested mode was selected before advancing the operation.
+type BootMode string
+
+const (
+	BootModeRPIBoot BootMode = "rpiboot"
+	BootModeNormal  BootMode = "normal"
+)
+
+// RequiredBootModeForOperation returns the fixed boot-selection policy for an
+// accepted development operation. Callers cannot choose a different mode.
+func RequiredBootModeForOperation(operation Operation) (BootMode, bool) {
+	switch operation {
+	case OperationColdPowerCycle:
+		return BootModeNormal, true
+	case OperationProgramCustomerKeyAndEEPROM,
+		OperationOwnedReadback,
+		OperationTestOwnedRecovery,
+		OperationPostRecoveryReadback,
+		OperationTestNegativeBoot,
+		OperationTestRootIntegrity:
+		return BootModeRPIBoot, true
 	default:
 		return "", false
 	}
@@ -165,6 +193,7 @@ type OperationSpec struct {
 	Sequence          uint32         `json:"sequence"`
 	Operation         Operation      `json:"operation"`
 	Classification    OperationClass `json:"classification"`
+	RequiredBootMode  BootMode       `json:"required_boot_mode"`
 	OperationDigest   string         `json:"operation_digest"`
 	AuthorizationID   string         `json:"authorization_id"`
 	ExpectedPrestate  DirectState    `json:"expected_prestate"`
@@ -254,6 +283,10 @@ func (plan Plan) validate(config Config, requireExecutionLane bool) error {
 		if operation.Classification != class {
 			return errors.New("operation classification does not match the closed allowlist")
 		}
+		requiredBootMode, _ := RequiredBootModeForOperation(operation.Operation)
+		if operation.RequiredBootMode != requiredBootMode {
+			return errors.New("operation required boot mode does not match the closed allowlist")
+		}
 		if !digestPattern.MatchString(operation.OperationDigest) || operation.AuthorizationID == "" {
 			return errors.New("every operation requires a canonical digest and authorization")
 		}
@@ -325,6 +358,7 @@ type ExecuteRequest struct {
 	Sequence          uint32                 `json:"sequence"`
 	OperationDigest   string                 `json:"operation_digest"`
 	AuthorizationID   string                 `json:"authorization_id"`
+	RequiredBootMode  BootMode               `json:"required_boot_mode"`
 	ExpectedPrestate  DirectState            `json:"expected_prestate"`
 	ClaimExpiresAt    time.Time              `json:"claim_expires_at"`
 }

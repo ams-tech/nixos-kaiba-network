@@ -48,6 +48,9 @@ func TestHappyPathBuildsExactPlanAndBindsCurrentRequest(t *testing.T) {
 	if request.Sequence != 1 || plan.Operations[0].Operation != wantOperations[0] {
 		t.Fatal("current request is not the first approved operation")
 	}
+	if request.RequiredBootMode != laneguard.BootModeRPIBoot {
+		t.Fatalf("current request boot mode = %q, want %q", request.RequiredBootMode, laneguard.BootModeRPIBoot)
+	}
 	if request.ClaimExpiresAt != fixture.authority.Transaction.ActiveClaim.ExpiresAt {
 		t.Fatalf("request claim expiry = %s", request.ClaimExpiresAt)
 	}
@@ -60,6 +63,13 @@ func TestHappyPathBuildsExactPlanAndBindsCurrentRequest(t *testing.T) {
 		}
 		if plan.Operations[index].ExpectedPoststate != wantOwnedState {
 			t.Fatalf("operation %d poststate = %#v, want release-bound powered-off state", index+1, plan.Operations[index].ExpectedPoststate)
+		}
+		wantBootMode := laneguard.BootModeRPIBoot
+		if plan.Operations[index].Operation == laneguard.OperationColdPowerCycle {
+			wantBootMode = laneguard.BootModeNormal
+		}
+		if plan.Operations[index].RequiredBootMode != wantBootMode {
+			t.Fatalf("operation %d boot mode = %q, want %q", index+1, plan.Operations[index].RequiredBootMode, wantBootMode)
 		}
 	}
 	request.ApprovalID = "changed"
@@ -138,6 +148,7 @@ func TestGuardRejectsSynthesizedLaterSequenceWhenBoundEnvelopeIsPreserved(t *tes
 	request.Sequence = later.Sequence
 	request.OperationDigest = later.OperationDigest
 	request.AuthorizationID = later.AuthorizationID
+	request.RequiredBootMode = later.RequiredBootMode
 	request.ExpectedPrestate = later.ExpectedPrestate
 	config := laneguard.Config{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
@@ -160,7 +171,7 @@ func TestBindAdvancesOnlyAfterSuccessfulEvidenceAndANewIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Sequence != 2 || request.IntentReceipt != authority.IntentReceipt.ReceiptID {
+	if request.Sequence != 2 || request.IntentReceipt != authority.IntentReceipt.ReceiptID || request.RequiredBootMode != laneguard.BootModeNormal {
 		t.Fatalf("second bound request = %#v", request)
 	}
 	for name, status := range map[string]controlplane.OperationStatus{
@@ -287,7 +298,10 @@ func TestDraftFromSnapshotReconstructsOnlyAuthorityFreePolicyPlan(t *testing.T) 
 		"intent sequence": func(value *laneguard.Plan) { value.IntentSequence = 1 },
 		"operation":       func(value *laneguard.Plan) { value.Operations[2].Operation = laneguard.OperationColdPowerCycle },
 		"classification":  func(value *laneguard.Plan) { value.Operations[0].Classification = laneguard.ClassReadOnly },
-		"sequence":        func(value *laneguard.Plan) { value.Operations[4].Sequence = 2 },
+		"required boot mode": func(value *laneguard.Plan) {
+			value.Operations[0].RequiredBootMode = laneguard.BootModeNormal
+		},
+		"sequence": func(value *laneguard.Plan) { value.Operations[4].Sequence = 2 },
 		"poststate": func(value *laneguard.Plan) {
 			value.Operations[1].ExpectedPoststate.PowerState = "powered_on"
 		},
@@ -463,6 +477,7 @@ func TestBindReconciliationSeparatesOriginalAttemptFromCurrentClaim(t *testing.T
 	if request.OriginalRequest.FenceEpoch != plan.FenceEpoch ||
 		request.OriginalRequest.ApprovalID != plan.ApprovalID ||
 		request.OriginalRequest.IntentReceipt != plan.IntentReceipt ||
+		request.OriginalRequest.RequiredBootMode != plan.Operations[0].RequiredBootMode ||
 		request.Claim.StationID != "station-recovery" || request.Claim.LaneID != "lane-recovery" ||
 		request.Claim.FenceEpoch != 2 || request.Claim.ClaimID != authority.Transaction.ActiveClaim.ID ||
 		!request.Claim.ExpiresAt.Equal(authority.Transaction.ActiveClaim.ExpiresAt) {

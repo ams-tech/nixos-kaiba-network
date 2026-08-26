@@ -51,16 +51,17 @@ type Draft struct {
 }
 
 var operations = [7]struct {
-	operation      laneguard.Operation
-	classification laneguard.OperationClass
+	operation        laneguard.Operation
+	classification   laneguard.OperationClass
+	requiredBootMode laneguard.BootMode
 }{
-	{laneguard.OperationProgramCustomerKeyAndEEPROM, laneguard.ClassIrreversible},
-	{laneguard.OperationColdPowerCycle, laneguard.ClassReversible},
-	{laneguard.OperationOwnedReadback, laneguard.ClassReadOnly},
-	{laneguard.OperationTestOwnedRecovery, laneguard.ClassReversible},
-	{laneguard.OperationPostRecoveryReadback, laneguard.ClassReadOnly},
-	{laneguard.OperationTestNegativeBoot, laneguard.ClassReversible},
-	{laneguard.OperationTestRootIntegrity, laneguard.ClassReversible},
+	{laneguard.OperationProgramCustomerKeyAndEEPROM, laneguard.ClassIrreversible, laneguard.BootModeRPIBoot},
+	{laneguard.OperationColdPowerCycle, laneguard.ClassReversible, laneguard.BootModeNormal},
+	{laneguard.OperationOwnedReadback, laneguard.ClassReadOnly, laneguard.BootModeRPIBoot},
+	{laneguard.OperationTestOwnedRecovery, laneguard.ClassReversible, laneguard.BootModeRPIBoot},
+	{laneguard.OperationPostRecoveryReadback, laneguard.ClassReadOnly, laneguard.BootModeRPIBoot},
+	{laneguard.OperationTestNegativeBoot, laneguard.ClassReversible, laneguard.BootModeRPIBoot},
+	{laneguard.OperationTestRootIntegrity, laneguard.ClassReversible, laneguard.BootModeRPIBoot},
 }
 
 // BuildDraft constructs and hashes the exact seven-operation plan. It never
@@ -120,6 +121,7 @@ func BuildDraft(input DraftInput) (Draft, error) {
 			Sequence:          uint32(index + 1),
 			Operation:         policy.operation,
 			Classification:    policy.classification,
+			RequiredBootMode:  policy.requiredBootMode,
 			AuthorizationID:   input.AuthorizationIDs[index],
 			ExpectedPrestate:  prestate,
 			ExpectedPoststate: expectedOwnedState,
@@ -235,7 +237,8 @@ func validateDraft(draft Draft) error {
 	}
 	for index, policy := range operations {
 		operation := plan.Operations[index]
-		if operation.Sequence != uint32(index+1) || operation.Operation != policy.operation || operation.Classification != policy.classification {
+		if operation.Sequence != uint32(index+1) || operation.Operation != policy.operation || operation.Classification != policy.classification ||
+			operation.RequiredBootMode != policy.requiredBootMode {
 			return fmt.Errorf("%w: operation %d differs from policy", ErrInvalidDraft, index+1)
 		}
 		if index > 0 && operation.ExpectedPrestate != plan.Operations[index-1].ExpectedPoststate {

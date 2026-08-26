@@ -312,12 +312,18 @@ private Unix socket. The bridge authenticates the control and audit services
 with TLS 1.3, a fixed station/lane client certificate, and separate exclusive
 server trust roots. It double-reads control around the audit read and rejects a
 changed snapshot before binding the current operation. The lane guard then
-recomputes the domain-separated digest of every operation and of the ordered
-plan, reopens and hashes the actual guard executable and eight immutable
-artifact paths, and requires the plan's six-field release binding to match the
-derived result before constructing the hardware adapter. The physical package
-can print both the public binding and the complete canonical review material.
-A byte, path, mode, size, directory-tree, or release-expectation mismatch
+recomputes the `v1alpha4` domain-separated digest of every operation and of the
+ordered plan, reopens and hashes the actual guard executable and eight
+immutable artifact paths, and requires the plan's six-field release binding to
+match the derived result before constructing the hardware adapter. Each
+operation's digest-bound `required_boot_mode` follows a closed policy:
+`cold_power_cycle` requires `normal`, while the other six development
+operations require `rpiboot`. Loading that validated plan only snapshots its
+contents and restores durable journal lockout state; it neither powers nor
+observes the target. Execution or reconciliation owns the first target-facing
+observation and continues to perform physical I/O. The physical package can
+print both the public binding and the complete canonical review material. A
+byte, path, mode, size, directory-tree, or release-expectation mismatch
 therefore fails closed; package and artifact-set digests are never accepted as
 opaque factory arguments.
 
@@ -339,10 +345,13 @@ outcome authorizes replay of the old request, and current policy refuses a new
 mutation claim after confirmed-not-applied until a separate retry protocol is
 reviewed. The combined authenticated restart test exercises both outcomes
 through reopened control, audit, and dedicated v1alpha1 attempt-journal stores
-and the real physical adapter with only target-facing I/O simulated. Prior
-`lane-guard/v1alpha3` journal envelopes are not auto-migrated. This remains
-software-only evidence: uncertain live mutation recovery still requires the
-documented sacrificial-hardware qualification before production use.
+and the real physical adapter with only target-facing I/O simulated. The
+current plan contract is `lane-guard/v1alpha4`; old plans, approvals, intents,
+requests, and attempt records bound to `v1alpha3` digests are not reusable.
+Prior shared `lane-guard/v1alpha3` journal envelopes are not auto-migrated.
+This remains software-only evidence: uncertain live mutation recovery still
+requires the documented sacrificial-hardware qualification before production
+use.
 
 The live station uses the following order for every irreversible operation:
 

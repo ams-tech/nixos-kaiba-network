@@ -26,14 +26,23 @@ func TestUnixBridgeRoundTripReturnsRevalidatedBoundExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	if execution.Plan.PlanDigest != fixture.request.DraftSnapshot.PlanDigest || execution.ExecuteRequest == nil ||
-		execution.ExecuteRequest.IntentReceipt != fixture.intentReceiptID || execution.ExecuteRequest.Sequence != 1 {
+		execution.ExecuteRequest.IntentReceipt != fixture.intentReceiptID || execution.ExecuteRequest.Sequence != 1 ||
+		execution.ExecuteRequest.RequiredBootMode != laneguard.BootModeRPIBoot {
 		t.Fatalf("wire execution = %#v / %#v", execution.Plan, execution.ExecuteRequest)
 	}
 	encoded, err := json.Marshal(fixture.request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"rpiboot", "gpio", "uart", "executable", "artifact_path", "device_selector"} {
+	if !bytes.Contains(encoded, []byte(`"required_boot_mode":"rpiboot"`)) {
+		t.Fatalf("wire request omitted digest-bound boot policy: %s", encoded)
+	}
+	for _, forbidden := range []string{
+		`"executable"`, `"executable_path"`, `"artifact_path"`, `"bundle_path"`,
+		`"device_selector"`, `"rpiboot_sysfs_path"`, `"usb_path"`, `"usb_selector"`,
+		`"power_gpio"`, `"gpio"`, `"uart_path"`, `"uart_selector"`,
+		`/nix/store/`, `/sys/`, `/dev/`,
+	} {
 		if bytes.Contains(bytes.ToLower(encoded), []byte(forbidden)) {
 			t.Fatalf("wire request contains forbidden selector %q", forbidden)
 		}
@@ -125,6 +134,12 @@ func TestUnixBridgeRejectsMalformedOversizedAndReconcileInputs(t *testing.T) {
 		{name: "malformed", body: []byte(`{"schema_version":`), code: ErrorCodeInvalidRequest},
 		{name: "trailing", body: append(append([]byte(nil), valid...), []byte(` {}`)...), code: ErrorCodeInvalidRequest},
 		{name: "unknown field", body: bytes.Replace(valid, []byte(`"mode"`), []byte(`"unknown":true,"mode"`), 1), code: ErrorCodeInvalidRequest},
+		{name: "caller boot selector", body: injectBridgeField(valid, `"required_boot_mode":"normal"`), code: ErrorCodeInvalidRequest},
+		{name: "caller executable path", body: injectBridgeField(valid, `"executable_path":"/tmp/rpiboot"`), code: ErrorCodeInvalidRequest},
+		{name: "caller bundle path", body: injectBridgeField(valid, `"bundle_path":"/tmp/bundle"`), code: ErrorCodeInvalidRequest},
+		{name: "caller USB selector", body: injectBridgeField(valid, `"rpiboot_sysfs_path":"/sys/bus/usb/devices/9-9"`), code: ErrorCodeInvalidRequest},
+		{name: "caller GPIO selector", body: injectBridgeField(valid, `"power_gpio":"/dev/gpiochip9:2"`), code: ErrorCodeInvalidRequest},
+		{name: "caller UART selector", body: injectBridgeField(valid, `"uart_path":"/dev/serial/by-id/caller"`), code: ErrorCodeInvalidRequest},
 		{name: "duplicate field", body: bytes.Replace(valid, []byte(`"mode":"execute"`), []byte(`"mode":"execute","mode":"execute"`), 1), code: ErrorCodeInvalidRequest},
 		{name: "oversized", body: bytes.Repeat([]byte("x"), maxWireRequestBytes+1), code: ErrorCodeInvalidRequest},
 		{name: "reconciliation without claim", body: reconcileJSON, code: ErrorCodeAuthorityRejected},
@@ -153,6 +168,12 @@ func TestClientRejectsMalformedOversizedOrMismatchedSuccess(t *testing.T) {
 		name string
 		body func() []byte
 	}{
+		{name: "previous response schema", body: func() []byte {
+			changed := valid
+			changed.SchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha2"
+			encoded, _ := json.Marshal(changed)
+			return encoded
+		}},
 		{name: "duplicate response field", body: func() []byte {
 			encoded, _ := json.Marshal(valid)
 			return bytes.Replace(encoded, []byte(`"status":"ok"`), []byte(`"status":"ok","status":"ok"`), 1)
@@ -162,6 +183,14 @@ func TestClientRejectsMalformedOversizedOrMismatchedSuccess(t *testing.T) {
 			changed := valid
 			request := *valid.ExecuteRequest
 			request.OperationDigest = bridgeDigest("f")
+			changed.ExecuteRequest = &request
+			encoded, _ := json.Marshal(changed)
+			return encoded
+		}},
+		{name: "changed required boot mode", body: func() []byte {
+			changed := valid
+			request := *valid.ExecuteRequest
+			request.RequiredBootMode = laneguard.BootModeNormal
 			changed.ExecuteRequest = &request
 			encoded, _ := json.Marshal(changed)
 			return encoded
@@ -191,6 +220,10 @@ func TestClientRejectsMalformedOversizedOrMismatchedSuccess(t *testing.T) {
 			}
 		})
 	}
+}
+
+func injectBridgeField(encoded []byte, field string) []byte {
+	return bytes.Replace(encoded, []byte(`"mode"`), []byte(field+`,"mode"`), 1)
 }
 
 func TestClientRejectsUnknownOrMalformedErrorResponse(t *testing.T) {

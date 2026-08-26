@@ -12,14 +12,15 @@ import (
 )
 
 const (
-	operationDigestDomain = "kaiba.provisioning.lane-guard.operation-digest.v1alpha3"
-	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha3"
+	operationDigestDomain = "kaiba.provisioning.lane-guard.operation-digest.v1alpha4"
+	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha4"
 )
 
 type operationDigestMaterial struct {
 	Sequence                   uint32         `json:"sequence"`
 	Operation                  Operation      `json:"operation"`
 	Classification             OperationClass `json:"classification"`
+	RequiredBootMode           BootMode       `json:"required_boot_mode"`
 	AuthorizationID            string         `json:"authorization_id"`
 	ExpectedPrestate           DirectState    `json:"expected_prestate"`
 	ExpectedPoststate          DirectState    `json:"expected_poststate"`
@@ -45,6 +46,7 @@ func (operation OperationSpec) CanonicalDigestMaterial() ([]byte, error) {
 		Sequence:                   operation.Sequence,
 		Operation:                  operation.Operation,
 		Classification:             operation.Classification,
+		RequiredBootMode:           operation.RequiredBootMode,
 		AuthorizationID:            operation.AuthorizationID,
 		ExpectedPrestate:           operation.ExpectedPrestate,
 		ExpectedPoststate:          operation.ExpectedPoststate,

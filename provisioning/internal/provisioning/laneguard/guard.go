@@ -59,11 +59,14 @@ func NewWithClock(config Config, hardware Hardware, store AttemptStore, clock Cl
 	return &Guard{config: config, hardware: hardware, store: store, clock: clock}, nil
 }
 
-// LoadPlan binds this guard instance to one approved plan. A different plan,
-// target, transaction, or epoch requires a fresh guard after lane teardown.
-func (guard *Guard) LoadPlan(ctx context.Context, plan Plan) error {
+// LoadPlan validates and binds this guard instance to one approved plan, then
+// restores its lockout state from the durable journal. It performs no
+// target-facing I/O; Execute or Reconcile owns the first target observation.
+// A different plan, target, transaction, or epoch requires a fresh guard after
+// lane teardown.
+func (guard *Guard) LoadPlan(_ context.Context, plan Plan) error {
 	// Freeze caller-owned slice storage before validation so the body that is
-	// checked is exactly the body retained after target observation.
+	// checked is exactly the body retained after journal validation.
 	plan = clonePlan(plan)
 	if err := plan.Validate(guard.config); err != nil {
 		return err
@@ -76,16 +79,9 @@ func (guard *Guard) LoadPlan(ctx context.Context, plan Plan) error {
 		}
 		return ErrPlanLocked
 	}
-	expectedStates, lockedOut, err := guard.restartStates(plan)
+	_, lockedOut, err := guard.restartStates(plan)
 	if err != nil {
 		return err
-	}
-	observation, err := guard.observeBoundTarget(ctx, plan.TargetFingerprint)
-	if err != nil {
-		return err
-	}
-	if !stateAllowed(observation.State, expectedStates) {
-		return ErrPrestateMismatch
 	}
 	guard.plan = &plan
 	guard.lockedOut = lockedOut
@@ -173,10 +169,21 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	if err != nil {
 		return Attempt{}, err
 	}
+	// Direct observation may include bounded device waits and, once the manual
+	// BOOTSEL selector is wired in, an operator acknowledgment. Revalidate both
+	// authorities after that delay so the durable execute-once intent is never
+	// recorded under an approval or claim that can no longer cover execution.
+	current = guard.clock.Now()
+	if !current.Before(plan.ApprovalExpiresAt) {
+		return Attempt{}, ErrApprovalExpired
+	}
+	if !LeaseCoversOperation(current, request.ClaimExpiresAt, operation.MaximumDuration, guard.config.LeaseSafetyMargin) {
+		return Attempt{}, ErrLeaseInvalid
+	}
 	if observation.State != operation.ExpectedPrestate {
 		return Attempt{}, ErrPrestateMismatch
 	}
-	now := guard.clock.Now().UTC()
+	now := current.UTC()
 	attempt := Attempt{
 		SchemaVersion: AttemptSchemaVersion, Key: key,
 		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest,
@@ -398,7 +405,8 @@ func matchPlanRequest(plan Plan, request ExecuteRequest) (OperationSpec, error) 
 		return OperationSpec{}, ErrPlanMismatch
 	}
 	operation := plan.Operations[request.Sequence-1]
-	if request.OperationDigest != operation.OperationDigest || request.AuthorizationID != operation.AuthorizationID || request.ExpectedPrestate != operation.ExpectedPrestate {
+	if request.OperationDigest != operation.OperationDigest || request.AuthorizationID != operation.AuthorizationID ||
+		request.RequiredBootMode != operation.RequiredBootMode || request.ExpectedPrestate != operation.ExpectedPrestate {
 		return OperationSpec{}, ErrPlanMismatch
 	}
 	return operation, nil
@@ -504,15 +512,6 @@ func (guard *Guard) restartStates(plan Plan) ([]DirectState, bool, error) {
 func attemptMatchesIntent(attempt Attempt, plan Plan, operation OperationSpec) bool {
 	return attempt.ApprovalID == plan.ApprovalID && attempt.IntentReceipt == plan.IntentReceipt &&
 		attempt.IntentSequence == plan.IntentSequence && attempt.Sequence == operation.Sequence
-}
-
-func stateAllowed(actual DirectState, expected []DirectState) bool {
-	for _, candidate := range expected {
-		if actual == candidate {
-			return true
-		}
-	}
-	return false
 }
 
 func (guard *Guard) observeBoundTarget(ctx context.Context, fingerprint string) (Observation, error) {

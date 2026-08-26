@@ -624,14 +624,17 @@ strings and that no shortened campaign can produce `security_applied`.
   compiler and lane both validate that pair; a root-edited draft cannot replace
   the independently approved digest or durable intent receipt.
 
-The release-bound `v1alpha3` digest contract serializes fixed-order JSON
+The release-bound `v1alpha4` plan and digest contract serializes fixed-order JSON
 structs without whitespace. It deliberately supersedes the earlier pre-release
 contracts rather than changing canonical material under an existing version.
 Operation material contains `sequence`, `operation`,
-`classification`, `authorization_id`, then `customer_key_hash`, `eeprom_hash`,
-`security_state`, and `power_state` within `expected_prestate` and
-`expected_poststate`, followed by `maximum_duration_nanoseconds`; it excludes
-`operation_digest`. Plan material contains `schema_version`, `station_id`,
+`classification`, `required_boot_mode`, `authorization_id`, then
+`customer_key_hash`, `eeprom_hash`, `security_state`, and `power_state` within
+`expected_prestate` and `expected_poststate`, followed by
+`maximum_duration_nanoseconds`; it excludes `operation_digest`.
+`required_boot_mode` is not caller policy: the closed compiler and guard policy
+requires `normal` for `cold_power_cycle` and `rpiboot` for each of the other six
+development operations. Plan material contains `schema_version`, `station_id`,
 `lane_id`, `transaction_id`, the six-field `release` binding,
 `target_fingerprint`, `fence_epoch`, canonical UTC `approval_expires_at`, and
 the ordered operation digests freshly derived from their bodies; it excludes
@@ -639,28 +642,33 @@ the ordered operation digests freshly derived from their bodies; it excludes
 release-binding field is a canonical lowercase SHA-256 value. The lowercase
 plan SHA-256 value is computed over the ASCII domain, one NUL byte, and the
 JSON bytes. The domains are
-`kaiba.provisioning.lane-guard.operation-digest.v1alpha3` and
-`kaiba.provisioning.lane-guard.plan-digest.v1alpha3`. The lane guard snapshots
-the caller-owned operation slice, validates this contract, and compares every
-plan and operation digest claimed by the plan before any target observation.
-The one-shot command also validates all static request bindings against that
-plan before constructing the hardware adapter; the guard repeats the comparison
-and separately checks lease sufficiency immediately before execution. Control
-rejects a reapproval that reuses a plan digest while changing its release or
-expiry. Every operation intent persists that plan/release/expiry anchor, so a
-claim transfer or reconciliation cannot erase it, and persisted approvals fail
-closed if their lifetime exceeds 24 hours.
+`kaiba.provisioning.lane-guard.operation-digest.v1alpha4` and
+`kaiba.provisioning.lane-guard.plan-digest.v1alpha4`. `LoadPlan` snapshots the
+caller-owned operation slice, validates this contract and every claimed plan
+and operation digest, and restores durable journal lockout state. It is a
+validation-only boundary and performs no target-facing I/O; `Execute` or
+`Reconcile` owns the first target observation. The one-shot command also
+validates all static request bindings against that plan before constructing the
+hardware adapter; the guard repeats the comparison and separately checks lease
+sufficiency immediately before execution. Control rejects a reapproval that
+reuses a plan digest while changing its release or expiry. Every operation
+intent persists that plan/release/expiry anchor, so a claim transfer or
+reconciliation cannot erase it, and persisted approvals fail closed if their
+lifetime exceeds 24 hours.
 
 The execute-once journal now uses the dedicated
 `lane-guard-attempt-store/v1alpha1` envelope and
 `lane-guard-attempt/v1alpha1` records. Every attempt persists the approval ID,
 current intent receipt, current intent sequence, and a terminal distinction
 between verified-applied, confirmed-not-applied, and quarantined outcomes. The
-prior shared `lane-guard/v1alpha3` journal envelope and older records are never
-auto-migrated into executable authority. An empty development journal may be
-discarded and recreated. A nonempty older journal must be drained from service
-and handled as a manual reconciliation or quarantine case after direct
-board-state inspection; it must not be replayed through the new guard.
+`v1alpha4` mode field changes every operation and plan digest. A `v1alpha3`
+draft, approval, intent, execute request, or dedicated `v1alpha1` attempt bound
+to an older digest is therefore not reusable. Prior shared `lane-guard/v1alpha3`
+journal envelopes and older records are likewise never auto-migrated into
+executable authority. An empty development journal may be discarded and
+recreated. A nonempty older journal must be drained from service and handled as
+a manual reconciliation or quarantine case after direct board-state
+inspection; it must not be replayed through the new guard.
 
 - [x] Carry and enforce one declared plan binding covering the signed-release
   manifest digest, lane-guard package digest, compiled artifact-set digest,
@@ -785,21 +793,35 @@ terminal classification.
 - one UART adapter selected through `/dev/serial/by-id`;
 - one electrically appropriate, isolated, normally-off target power relay;
 - one fixed GPIO chip and line for that relay; and
-- a deterministic way to select RPIBOOT versus normal boot.
+- a deterministic, directly observed way to select RPIBOOT versus normal boot.
 
-The last item is not currently represented by the lane contract. The physical
-adapter powers the target, expects RPIBOOT for direct observation, removes
-power, and later needs a normal signed cold boot. On Pi 5, RPIBOOT entry requires
-the power-button/BOOTSEL action. That transition must not depend on an operator
-guessing when to press or release a button during an internal guard call.
+The `v1alpha4` lane contract now carries a digest-bound `required_boot_mode`,
+but the physical selection mechanism and observed-mode handshake are not yet
+implemented. The selected sacrificial-development design is an explicit,
+durable, audited operator handshake. A fixed BOOTSEL/power-button actuator
+remains in scope as a later station enhancement, but is not a prerequisite for
+the first sacrificial-board campaign once the manual handshake is implemented
+and qualified. The physical adapter powers the target, expects RPIBOOT for
+direct observation, removes power, and later needs a normal signed cold boot.
+On Pi 5, RPIBOOT entry requires the power-button/BOOTSEL action. The guard must
+first prove the target is unpowered, persist the requested mode and wait state,
+give exact press, hold, release, or no-action instructions, and enforce a safe
+timeout. The operator must never guess when to act during an internal guard
+call. Direct USB and UART observation must confirm the selected mode before the
+operation can advance.
 
 ### Deliverables
 
-- [ ] Add and qualify a fixed BOOTSEL/power-button actuator, or redesign the
-  operation boundary to include an explicit, durable, audited operator
-  handshake with a safe timeout and direct mode observation.
-- [ ] Model the selected boot mode as part of the guard's expected prestate and
-  poststate where it affects execution.
+- [x] Bind a closed `required_boot_mode` policy into each operation, execute
+  request, operation digest, plan digest, and authenticated bridge response.
+  `cold_power_cycle` requires `normal`; the other six operations require
+  `rpiboot`. Keep this transient transition out of powered-off `DirectState`.
+- [ ] Implement and qualify the explicit, durable, audited BOOTSEL/power-button
+  operator handshake with a safe timeout and direct mode observation. Keep a
+  fixed actuator as deferred station automation subject to the same acceptance
+  tests.
+- [ ] Persist the requested transition and directly observed mode evidence with
+  each pre-observation, operation result, post-observation, and reconciliation.
 - [ ] Prove that a normal-boot operation cannot accidentally enter RPIBOOT and
   that an owned readback or recovery operation cannot accidentally normal-boot.
 - [ ] Confirm correct UART voltage, grounding, settings, isolation, and stable
@@ -809,15 +831,15 @@ guessing when to press or release a button during an internal guard call.
 - [ ] Require observed USB disappearance plus the minimum cold interval; a GPIO
   transition alone is not evidence of power removal.
 - [ ] Reject absent, additional, moved, or replaced BCM2712 targets before any
-  plan can load or operation can execute.
+  target-facing operation can execute or reconciliation can advance.
 - [ ] Verify fail-off behavior after process death, station power loss, kernel
   restart, relay-control loss, and emergency stop.
 
 ### Exit criteria
 
 The complete guard-plus-adapter sequence can alternate deterministically
-between RPIBOOT and normal boot without timing-dependent human action, target
-ambiguity, or residual power.
+between RPIBOOT and normal boot without an operator guessing timing or acting
+outside a persisted prompt, target ambiguity, or residual power.
 
 ## Workstream 7: rehearsal and failure campaign
 
@@ -1110,6 +1132,8 @@ The sacrificial milestone does not reduce these production requirements:
   and compromise response, and board-replacement policy;
 - final JTAG, `BOOT_UART`, boot-order, recovery, self-update, and EEPROM
   write-protection policy with post-finalization retests;
+- a production decision on retaining the audited manual BOOTSEL/power-button
+  handshake or replacing it with a fixed, electrically qualified actuator;
 - production station build, monitoring, update, incident, revocation, and
   retirement procedures; and
 - multi-lane isolation and scaling only after the single-lane campaign passes.

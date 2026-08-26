@@ -103,8 +103,9 @@ func BindReconciliation(draft Draft, authority Authority) (BoundReconciliation, 
 		FenceEpoch: boundPlan.FenceEpoch, ApprovalID: boundPlan.ApprovalID,
 		ApprovalExpiresAt: boundPlan.ApprovalExpiresAt, IntentReceipt: boundPlan.IntentReceipt,
 		Sequence: operation.Sequence, OperationDigest: operation.OperationDigest,
-		AuthorizationID: operation.AuthorizationID, ExpectedPrestate: operation.ExpectedPrestate,
-		ClaimExpiresAt: originalClaim.ExpiresAt.UTC(),
+		AuthorizationID: operation.AuthorizationID, RequiredBootMode: operation.RequiredBootMode,
+		ExpectedPrestate: operation.ExpectedPrestate,
+		ClaimExpiresAt:   originalClaim.ExpiresAt.UTC(),
 	}
 	request := laneguard.ReconcileRequest{
 		SchemaVersion:   laneguard.ReconcileRequestSchemaVersion,

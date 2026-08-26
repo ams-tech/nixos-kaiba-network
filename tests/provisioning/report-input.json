@@ -29,7 +29,7 @@
         "id": "authenticated-authority-bridge",
         "system": "aarch64-linux",
         "status": "not-observed",
-        "description": "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, and lane-guard contract revalidation fail closed without exposing physical selectors or a generic mutation primitive.",
+        "description": "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, the v1alpha4 lane plan, and the v1alpha3 authority bridge fail closed against boot-mode or authority tampering. The digest-bound policy requires normal for cold_power_cycle and rpiboot for the other six operations without exposing physical paths, an operator-selected mode, or a generic mutation primitive. This is software-only contract evidence; it does not claim a manual BOOTSEL handshake, direct mode observation, or hardware enforcement.",
         "evidence": []
       },
       {
@@ -141,7 +141,7 @@
         "id": "authenticated-authority-bridge",
         "system": "x86_64-linux",
         "status": "passed",
-        "description": "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, and lane-guard contract revalidation fail closed without exposing physical selectors or a generic mutation primitive.",
+        "description": "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, the v1alpha4 lane plan, and the v1alpha3 authority bridge fail closed against boot-mode or authority tampering. The digest-bound policy requires normal for cold_power_cycle and rpiboot for the other six operations without exposing physical paths, an operator-selected mode, or a generic mutation primitive. This is software-only contract evidence; it does not claim a manual BOOTSEL handshake, direct mode observation, or hardware enforcement.",
         "evidence": []
       },
       {
