@@ -341,6 +341,9 @@ func NewApprovalProposal(snapshot laneguard.Plan, transaction controlplane.Trans
 	if eventTime.Before(transaction.Target.BoundAt) || !transaction.ActiveClaim.ExpiresAt.After(eventTime) {
 		return ApprovalProposal{}, fmt.Errorf("%w: approval event is outside the current target-bound claim", ErrStateMismatch)
 	}
+	if !snapshot.ApprovalExpiresAt.After(eventTime) {
+		return ApprovalProposal{}, fmt.Errorf("%w: approval event is outside the reviewed approval window", ErrStateMismatch)
+	}
 	return ApprovalProposal{
 		SchemaVersion: ApprovalProposalSchemaVersion, DraftSnapshot: clonePlan(snapshot),
 		ApprovalID: workflowID("approval", snapshot.PlanDigest, approverID), ApproverID: approverID,
@@ -496,14 +499,19 @@ func PrepareNextIntent(ctx context.Context, snapshot laneguard.Plan, now time.Ti
 	if _, err := plancompiler.DraftFromSnapshot(snapshot); err != nil {
 		return IntentProposal{}, controlplane.Transaction{}, fmt.Errorf("%w: draft: %v", ErrInvalidInput, err)
 	}
+	now = now.UTC()
 	transaction, err := control.GetTransaction(ctx, snapshot.TransactionID)
 	if err != nil {
 		return IntentProposal{}, controlplane.Transaction{}, fmt.Errorf("read transaction before intent: %w", err)
 	}
-	sequence, err := nextSequence(snapshot, transaction)
+	prefix, err := readyCampaignPrefix(snapshot, transaction, now)
 	if err != nil {
 		return IntentProposal{}, controlplane.Transaction{}, err
 	}
+	if int(prefix) >= len(snapshot.Operations) {
+		return IntentProposal{}, controlplane.Transaction{}, fmt.Errorf("%w: campaign has no remaining operation", ErrStateMismatch)
+	}
+	sequence := prefix + 1
 	transaction, err = control.RenewClaim(ctx, controlplane.RenewClaimRequest{
 		SchemaVersion:  controlplane.RenewClaimRequestSchemaVersion,
 		IdempotencyKey: workflowID("renew", snapshot.PlanDigest, fmt.Sprint(sequence), fmt.Sprint(transaction.ResourceVersion)),
@@ -757,15 +765,12 @@ func NewIntentProposal(snapshot laneguard.Plan, transaction controlplane.Transac
 	if eventTime.IsZero() || sequence == 0 || int(sequence) > len(snapshot.Operations) {
 		return IntentProposal{}, fmt.Errorf("%w: intent sequence or event time", ErrInvalidInput)
 	}
-	wantSequence, err := nextSequence(snapshot, transaction)
+	prefix, err := readyCampaignPrefix(snapshot, transaction, eventTime.UTC())
 	if err != nil {
 		return IntentProposal{}, err
 	}
-	if sequence != wantSequence {
+	if sequence != prefix+1 {
 		return IntentProposal{}, fmt.Errorf("%w: intent is not the next operation", ErrStateMismatch)
-	}
-	if eventTime.Before(transaction.Approval.ApprovedAt) || !transaction.ActiveClaim.ExpiresAt.After(eventTime) {
-		return IntentProposal{}, fmt.Errorf("%w: intent event is outside the current approval and claim", ErrStateMismatch)
 	}
 	operation := snapshot.Operations[sequence-1]
 	return IntentProposal{
@@ -1761,6 +1766,9 @@ func nextSequence(snapshot laneguard.Plan, transaction controlplane.Transaction)
 func matchRenewableTargetBoundCampaign(snapshot laneguard.Plan, transaction controlplane.Transaction, now time.Time) error {
 	if now.IsZero() {
 		return fmt.Errorf("%w: target-bound current time", ErrInvalidInput)
+	}
+	if !snapshot.ApprovalExpiresAt.After(now) {
+		return fmt.Errorf("%w: reviewed approval window has expired", ErrStateMismatch)
 	}
 	if err := matchDraftTransaction(snapshot, transaction, controlplane.StatusTargetBound); err != nil {
 		return err
