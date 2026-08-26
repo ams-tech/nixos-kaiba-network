@@ -147,13 +147,16 @@ setting and production blocker, not an approved production value. EEPROM
 write protection, recovery, and the remaining production policies also require
 their separate production decisions and post-finalization tests.
 
-Because both fallback sources are enabled, the physical acceptance campaign
-must isolate SD and network/TFTP in turn and test each with unsigned and
-wrong-key images plus an older correctly development-key-signed image. The
-unsigned and wrong-key candidates must not execute. Native secure boot may
-accept the correctly signed older candidate; that case must prove the
-anti-rollback limitation is recorded and that enrollment remains blocked,
-rather than being misreported as a secure-boot rejection.
+Because both fallback sources are enabled, the post-commit owned-state
+acceptance campaign in SB-09 must isolate SD and network/TFTP in turn and test
+each with unsigned and wrong-key images plus an older correctly
+development-key-signed image. The unsigned and wrong-key candidates must not
+execute. Native secure boot may accept the correctly signed older candidate;
+that case must prove the anti-rollback limitation is recorded and that
+enrollment remains blocked, rather than being misreported as a secure-boot
+rejection. Pre-SB-08 physical rehearsals exercise the same source-selection,
+isolation, and evidence mechanics only with inert, explicitly non-OTP-capable
+payloads; they make no customer-key-enforcement claim.
 
 ## Safety invariants
 
@@ -191,7 +194,7 @@ These rules apply to every work item and rehearsal:
 | SB-04 | Target-media staging | In progress | The exact NVMe layout is written and cold-read back with matching digests. |
 | SB-05 | Enforced transaction plan | In progress | The control plane and lane guard require the complete ordered campaign and verify all plan, approval, and artifact bindings. |
 | SB-06 | Qualified physical lane | Not started | USB, UART, power, and boot-selection behavior pass the combined physical acceptance tests. |
-| SB-07 | Rehearsal and failure campaign | In progress | Fake-lane and non-OTP physical rehearsals pass every required failure drill. |
+| SB-07 | Rehearsal and failure campaign | In progress | Fake-lane and non-OTP physical rehearsals pass every required pre-commit failure-mechanics drill. |
 | SB-08 | Sacrificial ownership ceremony | Blocked by SB-01 through SB-07 | One approved one-shot commit completes or the target is quarantined; no retry path exists. |
 | SB-09 | Owned-state acceptance | Blocked by SB-08 | All positive, recovery, negative, root-integrity, and evidence-reconciliation gates pass and the board stops at `security_applied`. |
 | SB-10 | Production readiness | Explicitly deferred | Every production gate in the final section is implemented and separately accepted. |
@@ -440,8 +443,9 @@ therefore remains in progress.
 - [ ] Produce the signed EEPROM image with the pinned firmware, configuration,
   signing tools, public key, and customer counter-signature.
 - [x] Pin an EEPROM release with upstream-declared support for the signed
-  boot-image SHA-256 device-tree property. Absence of `boot_img_sha256` on the
-  target is a preflight failure, not an optional capability downgrade.
+  boot-image SHA-256 device-tree property. Missing source/configuration support
+  is a pre-commit failure; absence of `boot_img_sha256` on the owned target is
+  an SB-09 acceptance failure, not an optional capability downgrade.
 
 The public EEPROM contract pins rpi-eeprom tag
 [`v2026.05.17-2711-0138c0`][pinned EEPROM source tag] at commit
@@ -460,9 +464,11 @@ including the `bootsys` signing feature introduced by
 The workflow's rpi-eeprom submodule is separately attributed to
 [rpi-eeprom commit `25f837ab8009a643ed85b9aad94d911baddaf0c4`][EEPROM helper compatibility commit];
 the selected release contains byte-identical helper files.
-This proves public source, digest, and capability contracts only. Actual
-hardware emission of the property remains a cold-boot gate, and the signed
-EEPROM deliverable above remains incomplete.
+This proves public source, digest, and capability contracts only. Actual target
+emission of the property cannot be observed until the post-commit signed cold
+boot in SB-09; it is not a pre-SB-08 gate. Its absence there fails acceptance
+and quarantines the owned board. The signed EEPROM deliverable above remains
+incomplete.
 
 The public EEPROM foundation narrows fresh signing to `-f` and owned recovery
 to a separately authorized `-fr` plan. Owned recovery makes exactly one new
@@ -843,8 +849,19 @@ outside a persisted prompt, target ambiguity, or residual power.
 
 ## Workstream 7: rehearsal and failure campaign
 
-Run the campaign first with a fake lane and then on the qualified physical rig
-without an OTP-capable commit bundle.
+Run the pre-commit campaign first with a fake lane and then on the qualified
+physical rig without an OTP-capable commit bundle. The fake lane exercises the
+complete state machine, including modeled irreversible outcomes and modeled
+negative-source decisions. The pre-SB-08 physical campaign exercises power,
+boot-mode selection, source isolation, topology, UART, restart, and fail-closed
+evidence mechanics only. It must not claim that an unfused board enforced the
+customer key.
+
+Actual customer-key enforcement negatives require an owned board. They run
+only after the SB-08 commit, as part of SB-09 steps 14 through 16, and are not
+prerequisites for authorizing the first ownership mutation. The same is true of
+target-emitted `boot_img_sha256`, which is first observable during the SB-09
+signed cold boot.
 
 ### Required drills
 
@@ -860,10 +877,14 @@ without an OTP-capable commit bundle.
   remaining lease, and control or audit outage;
 - altered manifest, artifact bytes, bundle path, expected key hash, EEPROM
   digest, boot-image digest, operation order, or plan digest;
-- isolated SD and network/TFTP fallback attempts using unsigned, wrong-key,
-  and older correctly development-key-signed images, with an explicit check
-  that the correctly signed rollback case cannot enable enrollment;
-- failure before, during, and after the modeled first OTP write; and
+- fake-lane modeling of isolated SD and network/TFTP fallback attempts using
+  unsigned, wrong-key, and older correctly development-key-signed images,
+  including the rule that the correctly signed rollback case cannot enable
+  enrollment;
+- physical isolation of SD and network/TFTP source-selection and evidence paths
+  using inert, explicitly non-OTP-capable payloads, with no secure-boot
+  enforcement conclusion;
+- fake-lane failure before, during, and after the modeled first OTP write; and
 - reconciliation after every distinguishable and indistinguishable outcome.
 
 ### Acceptance rules
@@ -880,8 +901,15 @@ without an OTP-capable commit bundle.
 - [ ] Restart cannot erase the execute-once journal, restore stale authority, or
   skip a required operation.
 - [ ] A shortened plan cannot reach `security_applied`.
-- [ ] Every negative candidate proves non-execution for its isolated boot
-  source, rather than merely observing that an approved fallback later booted.
+- [ ] Every pre-commit physical source-selection drill proves that only the
+  intended source and evidence path were active and that no OTP-capable payload
+  was available; ambiguity produces a clean abort or quarantine.
+
+The following is an SB-09 acceptance rule, not an SB-07 or pre-SB-08 gate:
+
+- [ ] Every actual unsigned, wrong-key, altered, recovery, and alternate-source
+  negative candidate proves non-execution for its isolated boot source, rather
+  than merely observing that an approved fallback later booted.
 
 ### CI exit gate
 
@@ -907,14 +935,16 @@ The frozen revision must add and pass:
   and
 - x86_64 and native AArch64 builds and checks bound to the exact source
   revision. Automated output continues to label physical enforcement as not
-  observed until the matching rig evidence is attached.
+  observed until the matching post-commit SB-09 rig evidence is attached.
 
 ### Exit criteria
 
 The exact release candidate, station configuration, physical rig, operator
-workflow, and recovery/quarantine procedure pass the full campaign. Any code,
-artifact, wiring, firmware, or policy change invalidates the affected results
-and requires targeted repetition before the go/no-go review.
+workflow, and recovery/quarantine procedure pass the complete pre-commit
+failure-mechanics campaign. This closes SB-07 without claiming customer-key
+enforcement. Any code, artifact, wiring, firmware, or policy change invalidates
+the affected results and requires targeted repetition before the go/no-go
+review. The post-commit enforcement campaign remains an SB-09 acceptance gate.
 
 ## Frozen ceremony deliverable
 
@@ -965,10 +995,12 @@ guard:
   target-bound, lane-bound, and fence-bound.
 - [ ] The RPIBOOT/normal-boot selector and normally-off power lane passed
   qualification without back-power.
-- [ ] The pinned EEPROM release emits `boot_img_sha256`, and the target and
-  physical adapter require it.
-- [ ] The full fake-lane and physical failure campaigns passed on the frozen
-  release.
+- [ ] The pinned EEPROM release and signed configuration support
+  `boot_img_sha256`, the manifest binds its expected value, and the physical
+  adapter treats a missing or mismatched post-commit observation as an SB-09
+  acceptance failure.
+- [ ] The full fake-lane and non-OTP physical failure-mechanics campaigns passed
+  on the frozen release, without claiming customer-key enforcement.
 - [ ] The quarantine and retirement procedures can handle an owned but
   unbootable board without returning it to the fresh path.
 - [ ] No production key, device credential, enrollment secret, or protected
