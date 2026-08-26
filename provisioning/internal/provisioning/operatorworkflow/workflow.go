@@ -514,6 +514,184 @@ func PrepareNextIntent(ctx context.Context, snapshot laneguard.Plan, now time.Ti
 	return proposal, transaction, err
 }
 
+// RenewPendingIntent extends only the claim that already protects the sole
+// compiler-derived operation awaiting evidence. This is intentionally
+// separate from PrepareNextIntent: an operator may review a durable intent for
+// long enough that the original lease no longer covers the operation, but a
+// renewal must never create or select another intent, operation, stage, or
+// duration.
+func RenewPendingIntent(ctx context.Context, snapshot laneguard.Plan, now time.Time, control interface {
+	transactionReader
+	claimRenewer
+}) (controlplane.Transaction, error) {
+	if control == nil || now.IsZero() {
+		return controlplane.Transaction{}, fmt.Errorf("%w: control client or current time", ErrInvalidInput)
+	}
+	if _, err := plancompiler.DraftFromSnapshot(snapshot); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("%w: draft: %v", ErrInvalidInput, err)
+	}
+	now = now.UTC()
+	transaction, err := control.GetTransaction(ctx, snapshot.TransactionID)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("read transaction before pending-intent renewal: %w", err)
+	}
+	sequence, err := pendingIntentSequence(snapshot, transaction, now)
+	if err != nil {
+		return controlplane.Transaction{}, err
+	}
+	if transaction.ResourceVersion == ^uint64(0) {
+		return controlplane.Transaction{}, fmt.Errorf("%w: transaction resource version cannot be renewed", ErrStateMismatch)
+	}
+	renewed, err := control.RenewClaim(ctx, controlplane.RenewClaimRequest{
+		SchemaVersion: controlplane.RenewClaimRequestSchemaVersion,
+		IdempotencyKey: workflowID(
+			"renew-pending-intent",
+			snapshot.PlanDigest,
+			fmt.Sprint(sequence),
+			transaction.ActiveClaim.ID,
+			fmt.Sprint(transaction.ResourceVersion),
+		),
+		TransactionID:           transaction.ID,
+		ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID:                 transaction.ActiveClaim.ID,
+		FenceEpoch:              transaction.FenceEpoch,
+		LeaseDurationSeconds:    claimLeaseSeconds,
+	})
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("renew pending-intent claim: %w", err)
+	}
+	if err := matchPendingIntentRenewal(snapshot, transaction, renewed, sequence, now); err != nil {
+		return controlplane.Transaction{}, err
+	}
+	return renewed, nil
+}
+
+// RenewTargetBoundCampaign extends only the initial fixed claim represented by
+// an authority-free draft while it awaits independent approval. It cannot
+// carry an approval, operation history, or terminal disposition, so a delayed
+// approval review cannot silently resume a different campaign state.
+func RenewTargetBoundCampaign(ctx context.Context, snapshot laneguard.Plan, now time.Time, control interface {
+	transactionReader
+	claimRenewer
+}) (controlplane.Transaction, error) {
+	if control == nil || now.IsZero() {
+		return controlplane.Transaction{}, fmt.Errorf("%w: control client or current time", ErrInvalidInput)
+	}
+	if _, err := plancompiler.DraftFromSnapshot(snapshot); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("%w: draft: %v", ErrInvalidInput, err)
+	}
+	now = now.UTC()
+	transaction, err := control.GetTransaction(ctx, snapshot.TransactionID)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("read transaction before target-bound renewal: %w", err)
+	}
+	if err := matchRenewableTargetBoundCampaign(snapshot, transaction, now); err != nil {
+		return controlplane.Transaction{}, err
+	}
+	if transaction.ResourceVersion == ^uint64(0) {
+		return controlplane.Transaction{}, fmt.Errorf("%w: transaction resource version cannot be renewed", ErrStateMismatch)
+	}
+	renewed, err := control.RenewClaim(ctx, controlplane.RenewClaimRequest{
+		SchemaVersion: controlplane.RenewClaimRequestSchemaVersion,
+		IdempotencyKey: workflowID(
+			"renew-target-bound-campaign",
+			snapshot.PlanDigest,
+			transaction.ActiveClaim.ID,
+			fmt.Sprint(transaction.ResourceVersion),
+		),
+		TransactionID:           transaction.ID,
+		ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID:                 transaction.ActiveClaim.ID,
+		FenceEpoch:              transaction.FenceEpoch,
+		LeaseDurationSeconds:    claimLeaseSeconds,
+	})
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("renew target-bound campaign claim: %w", err)
+	}
+	if err := matchExactClaimRenewal(transaction, renewed); err != nil {
+		return controlplane.Transaction{}, err
+	}
+	if err := matchRenewableTargetBoundCampaign(snapshot, renewed, renewed.UpdatedAt); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("validate renewed target-bound campaign: %w", err)
+	}
+	return renewed, nil
+}
+
+// RenewReadyCampaign extends the same fixed mutation claim only while the
+// transaction is between operations: it must contain an exact directly
+// successful prefix of zero through seven operations and no pending or
+// reconciled result. Calling this immediately after each successful evidence
+// commit prevents review between operations (or before finalization) from
+// consuming the next operation's lease budget.
+func RenewReadyCampaign(ctx context.Context, snapshot laneguard.Plan, now time.Time, control interface {
+	transactionReader
+	claimRenewer
+}) (controlplane.Transaction, error) {
+	if control == nil || now.IsZero() {
+		return controlplane.Transaction{}, fmt.Errorf("%w: control client or current time", ErrInvalidInput)
+	}
+	if _, err := plancompiler.DraftFromSnapshot(snapshot); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("%w: draft: %v", ErrInvalidInput, err)
+	}
+	now = now.UTC()
+	transaction, err := control.GetTransaction(ctx, snapshot.TransactionID)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("read transaction before ready-campaign renewal: %w", err)
+	}
+	prefix, err := readyCampaignPrefix(snapshot, transaction, now)
+	if err != nil {
+		return controlplane.Transaction{}, err
+	}
+	var evidenceDigest string
+	if int(prefix) == len(snapshot.Operations) {
+		evidenceDigest, err = completedCampaignEvidence(snapshot, transaction, now)
+		if err != nil {
+			return controlplane.Transaction{}, err
+		}
+	}
+	if transaction.ResourceVersion == ^uint64(0) {
+		return controlplane.Transaction{}, fmt.Errorf("%w: transaction resource version cannot be renewed", ErrStateMismatch)
+	}
+	renewed, err := control.RenewClaim(ctx, controlplane.RenewClaimRequest{
+		SchemaVersion: controlplane.RenewClaimRequestSchemaVersion,
+		IdempotencyKey: workflowID(
+			"renew-ready-campaign",
+			snapshot.PlanDigest,
+			fmt.Sprint(prefix),
+			transaction.ActiveClaim.ID,
+			fmt.Sprint(transaction.ResourceVersion),
+		),
+		TransactionID:           transaction.ID,
+		ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID:                 transaction.ActiveClaim.ID,
+		FenceEpoch:              transaction.FenceEpoch,
+		LeaseDurationSeconds:    claimLeaseSeconds,
+	})
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("renew ready-campaign claim: %w", err)
+	}
+	if err := matchExactClaimRenewal(transaction, renewed); err != nil {
+		return controlplane.Transaction{}, err
+	}
+	renewedPrefix, err := readyCampaignPrefix(snapshot, renewed, renewed.UpdatedAt)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("validate renewed ready campaign: %w", err)
+	}
+	if renewedPrefix != prefix {
+		return controlplane.Transaction{}, fmt.Errorf("%w: successful campaign prefix changed during claim renewal", ErrStateMismatch)
+	}
+	if evidenceDigest != "" {
+		renewedEvidenceDigest, err := completedCampaignEvidence(snapshot, renewed, renewed.UpdatedAt)
+		if err != nil {
+			return controlplane.Transaction{}, fmt.Errorf("validate renewed completed campaign: %w", err)
+		}
+		if renewedEvidenceDigest != evidenceDigest {
+			return controlplane.Transaction{}, fmt.Errorf("%w: completed campaign evidence changed during claim renewal", ErrStateMismatch)
+		}
+	}
+	return renewed, nil
+}
+
 func NewIntentProposal(snapshot laneguard.Plan, transaction controlplane.Transaction, sequence uint32, eventTime time.Time) (IntentProposal, error) {
 	if _, err := plancompiler.DraftFromSnapshot(snapshot); err != nil {
 		return IntentProposal{}, fmt.Errorf("%w: draft: %v", ErrInvalidInput, err)
@@ -1051,6 +1229,73 @@ func PrepareReconciliationClaim(ctx context.Context, snapshot laneguard.Plan, no
 	return transaction, nil
 }
 
+// RenewReconciliationClaim extends only an already-active, fixed read-only
+// reconciliation claim for the exact unresolved campaign. It is used after a
+// durable local reconciliation receipt and before proposal construction. It
+// deliberately has no acquire or transfer capability: once this lease has
+// expired, a new fence requires the separate preparation and review flow.
+func RenewReconciliationClaim(ctx context.Context, snapshot laneguard.Plan, now time.Time, control interface {
+	transactionReader
+	claimRenewer
+}) (controlplane.Transaction, error) {
+	if control == nil || now.IsZero() {
+		return controlplane.Transaction{}, fmt.Errorf("%w: reconciliation control client or current time", ErrInvalidInput)
+	}
+	if _, err := plancompiler.DraftFromSnapshot(snapshot); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("%w: reconciliation draft: %v", ErrInvalidInput, err)
+	}
+	now = now.UTC()
+	transaction, err := control.GetTransaction(ctx, snapshot.TransactionID)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("read transaction before reconciliation renewal: %w", err)
+	}
+	sequence, err := unresolvedSequence(snapshot, transaction)
+	if err != nil {
+		return controlplane.Transaction{}, err
+	}
+	if transaction.Status != controlplane.StatusReconciliationRequired || transaction.Approval != nil {
+		return controlplane.Transaction{}, fmt.Errorf("%w: transaction is not awaiting read-only reconciliation", ErrStateMismatch)
+	}
+	if err := matchReconciliationClaim(snapshot, transaction, now); err != nil {
+		return controlplane.Transaction{}, err
+	}
+	if transaction.ResourceVersion == ^uint64(0) {
+		return controlplane.Transaction{}, fmt.Errorf("%w: transaction resource version cannot be renewed", ErrStateMismatch)
+	}
+	renewed, err := control.RenewClaim(ctx, controlplane.RenewClaimRequest{
+		SchemaVersion: controlplane.RenewClaimRequestSchemaVersion,
+		IdempotencyKey: workflowID(
+			"renew-reconciliation-observation",
+			snapshot.PlanDigest,
+			fmt.Sprint(sequence),
+			transaction.ActiveClaim.ID,
+			fmt.Sprint(transaction.ResourceVersion),
+		),
+		TransactionID:           transaction.ID,
+		ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID:                 transaction.ActiveClaim.ID,
+		FenceEpoch:              transaction.FenceEpoch,
+		LeaseDurationSeconds:    claimLeaseSeconds,
+	})
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("renew reconciliation observation claim: %w", err)
+	}
+	if err := matchExactClaimRenewal(transaction, renewed); err != nil {
+		return controlplane.Transaction{}, err
+	}
+	renewedSequence, err := unresolvedSequence(snapshot, renewed)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("validate renewed unresolved campaign: %w", err)
+	}
+	if renewedSequence != sequence {
+		return controlplane.Transaction{}, fmt.Errorf("%w: unresolved operation changed during reconciliation renewal", ErrStateMismatch)
+	}
+	if err := matchPreparedReconciliation(snapshot, renewed, renewed.UpdatedAt); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("validate renewed reconciliation claim: %w", err)
+	}
+	return renewed, nil
+}
+
 // NewReconciliationProposal maps the trusted terminal attempt through the
 // closed recovery policy. The caller cannot choose a resolution.
 func NewReconciliationProposal(snapshot laneguard.Plan, transaction controlplane.Transaction, attempt laneguard.Attempt, eventTime time.Time) (ReconciliationProposal, error) {
@@ -1406,6 +1651,205 @@ func nextSequence(snapshot laneguard.Plan, transaction controlplane.Transaction)
 		}
 	}
 	return uint32(len(transaction.Operations) + 1), nil
+}
+
+func matchRenewableTargetBoundCampaign(snapshot laneguard.Plan, transaction controlplane.Transaction, now time.Time) error {
+	if now.IsZero() {
+		return fmt.Errorf("%w: target-bound current time", ErrInvalidInput)
+	}
+	if err := matchDraftTransaction(snapshot, transaction, controlplane.StatusTargetBound); err != nil {
+		return err
+	}
+	claim := transaction.ActiveClaim
+	if claim == nil || !identifierPattern.MatchString(claim.ID) || claim.Mode != controlplane.ClaimModeMutation ||
+		claim.Status != controlplane.ClaimActive || claim.ClosedAt != nil || claim.StationID != snapshot.StationID ||
+		claim.LaneID != snapshot.LaneID || claim.AssetID != transaction.AssetID ||
+		claim.FenceEpoch != snapshot.FenceEpoch || transaction.FenceEpoch != snapshot.FenceEpoch ||
+		!equalStrings(claim.AllowedStages, planOperations(snapshot)) || claim.AcquiredAt.IsZero() ||
+		claim.AcquiredAt.After(now) || !claim.ExpiresAt.After(claim.AcquiredAt) || !claim.ExpiresAt.After(now) {
+		return fmt.Errorf("%w: target-bound claim is not the fixed active mutation claim", ErrStateMismatch)
+	}
+	if transaction.Approval != nil || len(transaction.Operations) != 0 || len(transaction.ClaimHistory) != 0 || transaction.Quarantine != nil ||
+		transaction.SecurityApplied != nil || transaction.Abort != nil || transaction.Target == nil ||
+		transaction.Target.BoundAt.IsZero() || transaction.Target.BoundAt.After(now) ||
+		transaction.UpdatedAt.IsZero() || transaction.UpdatedAt.After(now) {
+		return fmt.Errorf("%w: target-bound campaign contains approval, history, disposition, or invalid ordering", ErrStateMismatch)
+	}
+	return nil
+}
+
+func readyCampaignPrefix(snapshot laneguard.Plan, transaction controlplane.Transaction, now time.Time) (uint32, error) {
+	draft, err := plancompiler.DraftFromSnapshot(snapshot)
+	if err != nil {
+		return 0, fmt.Errorf("%w: ready-campaign draft: %v", ErrInvalidInput, err)
+	}
+	if now.IsZero() {
+		return 0, fmt.Errorf("%w: ready-campaign current time", ErrInvalidInput)
+	}
+	if err := matchDraftTransaction(snapshot, transaction, controlplane.StatusCommitApproved); err != nil {
+		return 0, err
+	}
+	claim := transaction.ActiveClaim
+	if claim == nil || !identifierPattern.MatchString(claim.ID) || claim.Mode != controlplane.ClaimModeMutation ||
+		claim.Status != controlplane.ClaimActive || claim.ClosedAt != nil || claim.StationID != snapshot.StationID ||
+		claim.LaneID != snapshot.LaneID || claim.AssetID != transaction.AssetID ||
+		claim.FenceEpoch != snapshot.FenceEpoch || transaction.FenceEpoch != snapshot.FenceEpoch ||
+		!equalStrings(claim.AllowedStages, planOperations(snapshot)) || claim.AcquiredAt.IsZero() ||
+		claim.AcquiredAt.After(now) || !claim.ExpiresAt.After(claim.AcquiredAt) || !claim.ExpiresAt.After(now) {
+		return 0, fmt.Errorf("%w: current claim is not the fixed active mutation claim", ErrStateMismatch)
+	}
+	if len(transaction.ClaimHistory) != 0 || transaction.Quarantine != nil || transaction.SecurityApplied != nil || transaction.Abort != nil ||
+		transaction.Target == nil || transaction.Target.BoundAt.IsZero() || transaction.Target.BoundAt.After(now) ||
+		transaction.UpdatedAt.IsZero() || transaction.UpdatedAt.After(now) {
+		return 0, fmt.Errorf("%w: ready campaign has a terminal disposition or invalid ordering", ErrStateMismatch)
+	}
+	approval := transaction.Approval
+	if approval == nil || !approvalMatchesCampaign(*approval, snapshot, transaction, now) {
+		return 0, fmt.Errorf("%w: current unexpired approval does not exactly bind the ready campaign", ErrStateMismatch)
+	}
+	if len(transaction.Operations) > len(snapshot.Operations) {
+		return 0, fmt.Errorf("%w: ready campaign exceeds the fixed operation sequence", ErrStateMismatch)
+	}
+
+	var previousEvidenceAt time.Time
+	for index, record := range transaction.Operations {
+		operation := snapshot.Operations[index]
+		prestateDigest, err := draft.PrestateDigest(operation.Sequence)
+		if err != nil {
+			return 0, err
+		}
+		if record.ID != operation.AuthorizationID || record.Operation != string(operation.Operation) ||
+			record.Status != controlplane.OperationSucceeded || record.PlanDigest != snapshot.PlanDigest ||
+			record.Release != snapshot.Release || !record.ApprovalExpiresAt.Equal(snapshot.ApprovalExpiresAt) ||
+			!sameApproval(record.Approval, *approval) || record.InputDigest != snapshot.PlanDigest ||
+			record.PrestateDigest != prestateDigest || !digestPattern.MatchString(record.IntentAuditReceiptID) ||
+			record.IntentFenceEpoch != snapshot.FenceEpoch || record.IntentAt.IsZero() ||
+			record.IntentAt.Before(approval.ApprovedAt) || !approval.ExpiresAt.After(record.IntentAt) ||
+			record.IntentAt.After(now) || (!previousEvidenceAt.IsZero() && record.IntentAt.Before(previousEvidenceAt)) ||
+			record.EvidenceAt == nil || record.EvidenceAt.Before(record.IntentAt) || record.EvidenceAt.After(now) ||
+			!digestPattern.MatchString(record.OutputDigest) || !digestPattern.MatchString(record.ObservationDigest) ||
+			!digestPattern.MatchString(record.EvidenceAuditReceiptID) || record.ReconciliationAuditReceiptID != "" {
+			return 0, fmt.Errorf("%w: ready campaign operation history differs at sequence %d", ErrStateMismatch, index+1)
+		}
+		previousEvidenceAt = *record.EvidenceAt
+	}
+	return uint32(len(transaction.Operations)), nil
+}
+
+func pendingIntentSequence(snapshot laneguard.Plan, transaction controlplane.Transaction, now time.Time) (uint32, error) {
+	draft, err := plancompiler.DraftFromSnapshot(snapshot)
+	if err != nil {
+		return 0, fmt.Errorf("%w: pending-intent draft: %v", ErrInvalidInput, err)
+	}
+	if now.IsZero() {
+		return 0, fmt.Errorf("%w: pending-intent current time", ErrInvalidInput)
+	}
+	if err := matchDraftTransaction(snapshot, transaction, controlplane.StatusMutationInProgress); err != nil {
+		return 0, err
+	}
+	claim := transaction.ActiveClaim
+	if claim == nil || !identifierPattern.MatchString(claim.ID) || claim.Mode != controlplane.ClaimModeMutation ||
+		claim.Status != controlplane.ClaimActive || claim.ClosedAt != nil || claim.StationID != snapshot.StationID ||
+		claim.LaneID != snapshot.LaneID || claim.AssetID != transaction.AssetID ||
+		claim.FenceEpoch != snapshot.FenceEpoch || transaction.FenceEpoch != snapshot.FenceEpoch ||
+		!equalStrings(claim.AllowedStages, planOperations(snapshot)) || claim.AcquiredAt.IsZero() ||
+		claim.AcquiredAt.After(now) || !claim.ExpiresAt.After(claim.AcquiredAt) || !claim.ExpiresAt.After(now) {
+		return 0, fmt.Errorf("%w: current claim is not the fixed active mutation claim", ErrStateMismatch)
+	}
+	if len(transaction.ClaimHistory) != 0 || transaction.Quarantine != nil || transaction.SecurityApplied != nil || transaction.Abort != nil ||
+		transaction.Target == nil || transaction.Target.BoundAt.IsZero() || transaction.Target.BoundAt.After(now) ||
+		transaction.UpdatedAt.IsZero() || transaction.UpdatedAt.After(now) {
+		return 0, fmt.Errorf("%w: pending-intent transaction has a terminal disposition or invalid ordering", ErrStateMismatch)
+	}
+	approval := transaction.Approval
+	if approval == nil || !approvalMatchesCampaign(*approval, snapshot, transaction, now) {
+		return 0, fmt.Errorf("%w: current unexpired approval does not exactly bind the pending campaign", ErrStateMismatch)
+	}
+	if len(transaction.Operations) == 0 || len(transaction.Operations) > len(snapshot.Operations) {
+		return 0, fmt.Errorf("%w: transaction does not contain exactly one pending plan sequence", ErrStateMismatch)
+	}
+
+	var previousEvidenceAt time.Time
+	for index, record := range transaction.Operations {
+		operation := snapshot.Operations[index]
+		prestateDigest, err := draft.PrestateDigest(operation.Sequence)
+		if err != nil {
+			return 0, err
+		}
+		if record.ID != operation.AuthorizationID || record.Operation != string(operation.Operation) ||
+			record.PlanDigest != snapshot.PlanDigest || record.Release != snapshot.Release ||
+			!record.ApprovalExpiresAt.Equal(snapshot.ApprovalExpiresAt) || !sameApproval(record.Approval, *approval) ||
+			record.InputDigest != snapshot.PlanDigest || record.PrestateDigest != prestateDigest ||
+			!digestPattern.MatchString(record.IntentAuditReceiptID) || record.IntentFenceEpoch != snapshot.FenceEpoch ||
+			record.IntentAt.IsZero() || record.IntentAt.Before(approval.ApprovedAt) ||
+			!approval.ExpiresAt.After(record.IntentAt) || record.IntentAt.After(now) ||
+			(!previousEvidenceAt.IsZero() && record.IntentAt.Before(previousEvidenceAt)) {
+			return 0, fmt.Errorf("%w: pending campaign operation history differs at sequence %d", ErrStateMismatch, index+1)
+		}
+
+		last := index == len(transaction.Operations)-1
+		if last {
+			if record.Status != controlplane.OperationIntentRecorded || record.OutputDigest != "" ||
+				record.ObservationDigest != "" || record.EvidenceAuditReceiptID != "" ||
+				record.EvidenceAt != nil || record.ReconciliationAuditReceiptID != "" {
+				return 0, fmt.Errorf("%w: sole pending operation contains a result or reconciliation", ErrStateMismatch)
+			}
+			continue
+		}
+
+		if record.EvidenceAt == nil || record.EvidenceAt.Before(record.IntentAt) || record.EvidenceAt.After(now) ||
+			!digestPattern.MatchString(record.OutputDigest) || !digestPattern.MatchString(record.ObservationDigest) {
+			return 0, fmt.Errorf("%w: prior operation %d lacks exact terminal evidence", ErrStateMismatch, index+1)
+		}
+		if record.Status != controlplane.OperationSucceeded ||
+			!digestPattern.MatchString(record.EvidenceAuditReceiptID) || record.ReconciliationAuditReceiptID != "" {
+			return 0, fmt.Errorf("%w: prior operation %d is not directly and successfully closed", ErrStateMismatch, index+1)
+		}
+		previousEvidenceAt = *record.EvidenceAt
+	}
+	return uint32(len(transaction.Operations)), nil
+}
+
+func matchPendingIntentRenewal(snapshot laneguard.Plan, before, after controlplane.Transaction, sequence uint32, now time.Time) error {
+	if err := matchExactClaimRenewal(before, after); err != nil {
+		return err
+	}
+	afterSequence, err := pendingIntentSequence(snapshot, after, after.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("validate renewed pending intent: %w", err)
+	}
+	if sequence == 0 || afterSequence != sequence || !after.ActiveClaim.ExpiresAt.After(now) {
+		return fmt.Errorf("%w: pending operation changed or renewed lease is not current", ErrStateMismatch)
+	}
+	return nil
+}
+
+func matchExactClaimRenewal(before, after controlplane.Transaction) error {
+	if before.ActiveClaim == nil || after.ActiveClaim == nil || before.ResourceVersion == ^uint64(0) ||
+		after.ResourceVersion != before.ResourceVersion+1 || after.UpdatedAt.IsZero() ||
+		!after.UpdatedAt.After(before.UpdatedAt) || !after.ActiveClaim.ExpiresAt.After(before.ActiveClaim.ExpiresAt) ||
+		!after.ActiveClaim.ExpiresAt.Equal(after.UpdatedAt.Add(time.Duration(claimLeaseSeconds)*time.Second)) {
+		return fmt.Errorf("%w: control response did not extend the exact current claim", ErrStateMismatch)
+	}
+	expected := before
+	expected.ResourceVersion = after.ResourceVersion
+	expected.UpdatedAt = after.UpdatedAt
+	claim := *before.ActiveClaim
+	claim.ExpiresAt = after.ActiveClaim.ExpiresAt
+	expected.ActiveClaim = &claim
+	if digestJSON("fixed-claim-renewal-state", expected) != digestJSON("fixed-claim-renewal-state", after) {
+		return fmt.Errorf("%w: control response changed state beyond the fixed claim renewal", ErrStateMismatch)
+	}
+	return nil
+}
+
+func sameApproval(left, right controlplane.Approval) bool {
+	return left.ID == right.ID && left.ApproverID == right.ApproverID &&
+		left.TransactionDigest == right.TransactionDigest && left.PlanDigest == right.PlanDigest &&
+		left.StationID == right.StationID && left.LaneID == right.LaneID && left.FenceEpoch == right.FenceEpoch &&
+		left.TargetFingerprint == right.TargetFingerprint && left.Release == right.Release &&
+		equalStrings(left.AllowedOperations, right.AllowedOperations) && left.AuditReceiptID == right.AuditReceiptID &&
+		left.ApprovedAt.Equal(right.ApprovedAt) && left.ExpiresAt.Equal(right.ExpiresAt)
 }
 
 func proposalMatchesCurrentIntent(proposal IntentProposal, transaction controlplane.Transaction) error {

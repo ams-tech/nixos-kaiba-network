@@ -369,6 +369,435 @@ func TestDraftPreparationAndClaimRenewalResumeWithoutIdempotencyConflict(t *test
 	}
 }
 
+func TestRenewPendingIntentRefreshesTheExactClaimBeforeExecutionAndEvidence(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+	fixture.input.MaximumSeconds[1] = maximumOperationSeconds
+	snapshot, pending := pendingSecondOperation(t, &fixture)
+	reviewedAt := fixture.now.Add(20 * time.Minute)
+	*fixture.clock = reviewedAt
+
+	renewed, err := RenewPendingIntent(context.Background(), snapshot, reviewedAt, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.ResourceVersion != pending.ResourceVersion+1 || renewed.ActiveClaim.ID != pending.ActiveClaim.ID ||
+		!renewed.ActiveClaim.ExpiresAt.Equal(reviewedAt.Add(time.Duration(claimLeaseSeconds)*time.Second)) ||
+		len(renewed.Operations) != 2 || renewed.Operations[1].Status != controlplane.OperationIntentRecorded {
+		t.Fatalf("renewed pending intent = %#v", renewed)
+	}
+	if !laneguard.LeaseCoversOperation(
+		reviewedAt,
+		renewed.ActiveClaim.ExpiresAt,
+		snapshot.Operations[1].MaximumDuration,
+		5*time.Minute,
+	) {
+		t.Fatal("renewed claim does not cover the maximum fixed operation and safety margin")
+	}
+
+	// A terminal lane receipt is local evidence, so control remains the same
+	// exact pending intent until ApplyEvidence. Re-renewal must extend the lease
+	// without inventing a different operation.
+	afterReceipt := reviewedAt.Add(time.Second)
+	*fixture.clock = afterReceipt
+	again, err := RenewPendingIntent(context.Background(), snapshot, afterReceipt, fixture.control)
+	if err != nil {
+		t.Fatalf("renew pending intent again before evidence: %v", err)
+	}
+	if again.ResourceVersion != renewed.ResourceVersion+1 || again.ActiveClaim.ID != renewed.ActiveClaim.ID ||
+		!again.ActiveClaim.ExpiresAt.Equal(afterReceipt.Add(time.Duration(claimLeaseSeconds)*time.Second)) ||
+		!reflect.DeepEqual(again.Operations, renewed.Operations) {
+		t.Fatalf("repeated pending renewal changed authority: %#v", again)
+	}
+}
+
+func TestRenewTargetBoundCampaignRefreshesOnlyTheUnapprovedCleanDraft(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+	snapshot, before, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewedAt := fixture.now.Add(15 * time.Minute)
+	*fixture.clock = reviewedAt
+	renewed, err := RenewTargetBoundCampaign(context.Background(), snapshot, reviewedAt, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.ResourceVersion != before.ResourceVersion+1 || renewed.Status != controlplane.StatusTargetBound ||
+		renewed.Approval != nil || len(renewed.Operations) != 0 || renewed.ActiveClaim.ID != before.ActiveClaim.ID ||
+		!renewed.ActiveClaim.ExpiresAt.Equal(reviewedAt.Add(time.Duration(claimLeaseSeconds)*time.Second)) {
+		t.Fatalf("renewed target-bound campaign = %#v", renewed)
+	}
+	repeatedAt := reviewedAt.Add(time.Second)
+	*fixture.clock = repeatedAt
+	again, err := RenewTargetBoundCampaign(context.Background(), snapshot, repeatedAt, fixture.control)
+	if err != nil {
+		t.Fatalf("repeat target-bound renewal: %v", err)
+	}
+	if again.ResourceVersion != renewed.ResourceVersion+1 ||
+		!again.ActiveClaim.ExpiresAt.Equal(repeatedAt.Add(time.Duration(claimLeaseSeconds)*time.Second)) {
+		t.Fatalf("repeated target-bound renewal = %#v", again)
+	}
+}
+
+func TestRenewTargetBoundCampaignRejectsApprovalHistoryOrStateDrift(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+	snapshot, base, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := fixture.now.Add(10 * time.Minute)
+	tests := map[string]func(*controlplane.Transaction){
+		"approval appeared": func(value *controlplane.Transaction) {
+			value.Approval = &controlplane.Approval{ID: "approval-other"}
+		},
+		"operation history appeared": func(value *controlplane.Transaction) {
+			value.Operations = append(value.Operations, controlplane.OperationRecord{ID: "authorization-other"})
+		},
+		"claim history appeared": func(value *controlplane.Transaction) {
+			value.ClaimHistory = append(value.ClaimHistory, *value.ActiveClaim)
+		},
+		"status advanced": func(value *controlplane.Transaction) { value.Status = controlplane.StatusCommitApproved },
+		"target changed":  func(value *controlplane.Transaction) { value.Target.Fingerprint = testDigest("d") },
+		"target removed":  func(value *controlplane.Transaction) { value.Target = nil },
+		"claim lane changed": func(value *controlplane.Transaction) {
+			value.ActiveClaim.LaneID = "lane-other"
+		},
+		"claim fence changed": func(value *controlplane.Transaction) { value.ActiveClaim.FenceEpoch++ },
+		"claim expired":       func(value *controlplane.Transaction) { value.ActiveClaim.ExpiresAt = now },
+		"quarantine appeared": func(value *controlplane.Transaction) {
+			value.Quarantine = &controlplane.QuarantineRecord{ReasonCode: "tampered"}
+		},
+		"terminal disposition appeared": func(value *controlplane.Transaction) {
+			value.SecurityApplied = &controlplane.SecurityAppliedRecord{EvidenceDigest: testDigest("e")}
+		},
+		"abort appeared": func(value *controlplane.Transaction) {
+			value.Abort = &controlplane.AbortRecord{ReusableBaselineDigest: testDigest("f")}
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			changed := cloneControlTransaction(t, base)
+			mutate(&changed)
+			control := &recordingClaimRenewer{transaction: changed}
+			if _, err := RenewTargetBoundCampaign(context.Background(), snapshot, now, control); err == nil {
+				t.Fatal("drifted target-bound campaign was renewed")
+			}
+			if len(control.requests) != 0 {
+				t.Fatal("drifted target-bound state crossed the renewal authority boundary")
+			}
+		})
+	}
+}
+
+func TestRenewReadyCampaignAcceptsOnlyExactSuccessfulPrefixes(t *testing.T) {
+	tests := map[string]struct {
+		prefix uint32
+		build  func(*testing.T, *workflowFixture) (laneguard.Plan, controlplane.Transaction)
+	}{
+		"approved empty prefix": {prefix: 0, build: approvedEmptyCampaign},
+		"one successful operation": {
+			prefix: 1,
+			build:  successfulFirstOperation,
+		},
+		"completed campaign": {prefix: 7, build: completedCampaign},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := newWorkflowFixture(t)
+			fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+			snapshot, before := test.build(t, &fixture)
+			reviewedAt := fixture.now.Add(15 * time.Minute)
+			*fixture.clock = reviewedAt
+			var evidenceBefore string
+			if test.prefix == uint32(len(snapshot.Operations)) {
+				var err error
+				evidenceBefore, err = completedCampaignEvidence(snapshot, before, reviewedAt)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			renewed, err := RenewReadyCampaign(context.Background(), snapshot, reviewedAt, fixture.control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefix, err := readyCampaignPrefix(snapshot, renewed, renewed.UpdatedAt)
+			if err != nil || prefix != test.prefix {
+				t.Fatalf("renewed prefix = %d, %v; want %d", prefix, err, test.prefix)
+			}
+			if renewed.ResourceVersion != before.ResourceVersion+1 || renewed.ActiveClaim.ID != before.ActiveClaim.ID ||
+				!renewed.ActiveClaim.ExpiresAt.Equal(reviewedAt.Add(time.Duration(claimLeaseSeconds)*time.Second)) {
+				t.Fatalf("renewed ready campaign = %#v", renewed)
+			}
+			if evidenceBefore != "" {
+				evidenceAfter, err := completedCampaignEvidence(snapshot, renewed, renewed.UpdatedAt)
+				if err != nil || evidenceAfter != evidenceBefore {
+					t.Fatalf("completed evidence changed across renewal: %q -> %q, %v", evidenceBefore, evidenceAfter, err)
+				}
+			}
+
+			repeatedAt := reviewedAt.Add(time.Second)
+			*fixture.clock = repeatedAt
+			again, err := RenewReadyCampaign(context.Background(), snapshot, repeatedAt, fixture.control)
+			if err != nil {
+				t.Fatalf("repeat ready-campaign renewal: %v", err)
+			}
+			if again.ResourceVersion != renewed.ResourceVersion+1 ||
+				!again.ActiveClaim.ExpiresAt.Equal(repeatedAt.Add(time.Duration(claimLeaseSeconds)*time.Second)) ||
+				!reflect.DeepEqual(again.Operations, renewed.Operations) {
+				t.Fatalf("repeated ready renewal changed campaign history: %#v", again)
+			}
+		})
+	}
+}
+
+func TestRenewPendingIntentRejectsStaleTamperedOrClosedState(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+	snapshot, base := pendingSecondOperation(t, &fixture)
+	now := fixture.now.Add(10 * time.Minute)
+	tests := map[string]func(*controlplane.Transaction){
+		"wrong transaction status": func(value *controlplane.Transaction) {
+			value.Status = controlplane.StatusCommitApproved
+		},
+		"missing active claim": func(value *controlplane.Transaction) { value.ActiveClaim = nil },
+		"expired claim":        func(value *controlplane.Transaction) { value.ActiveClaim.ExpiresAt = now },
+		"closed claim": func(value *controlplane.Transaction) {
+			closedAt := now
+			value.ActiveClaim.Status = controlplane.ClaimReleased
+			value.ActiveClaim.ClosedAt = &closedAt
+		},
+		"wrong claim lane":  func(value *controlplane.Transaction) { value.ActiveClaim.LaneID = "lane-other" },
+		"stale claim fence": func(value *controlplane.Transaction) { value.ActiveClaim.FenceEpoch++ },
+		"unexpected claim history": func(value *controlplane.Transaction) {
+			value.ClaimHistory = append(value.ClaimHistory, *value.ActiveClaim)
+		},
+		"missing approval":     func(value *controlplane.Transaction) { value.Approval = nil },
+		"expired approval":     func(value *controlplane.Transaction) { value.Approval.ExpiresAt = now },
+		"replaced approval":    func(value *controlplane.Transaction) { value.Approval.ID = "approval-other" },
+		"tampered prior order": func(value *controlplane.Transaction) { value.Operations[0].ID = "authorization-other" },
+		"unresolved prior operation": func(value *controlplane.Transaction) {
+			value.Operations[0].Status = controlplane.OperationUncertain
+		},
+		"reconciled prior operation": func(value *controlplane.Transaction) {
+			value.Operations[0].Status = controlplane.OperationConfirmedApplied
+			value.Operations[0].ReconciliationAuditReceiptID = testDigest("c")
+		},
+		"missing prior evidence": func(value *controlplane.Transaction) {
+			value.Operations[0].EvidenceAuditReceiptID = ""
+		},
+		"pending result fields": func(value *controlplane.Transaction) {
+			value.Operations[1].OutputDigest = testDigest("d")
+		},
+		"pending operation closed": func(value *controlplane.Transaction) {
+			value.Operations[1].Status = controlplane.OperationSucceeded
+		},
+		"quarantine disposition": func(value *controlplane.Transaction) {
+			value.Quarantine = &controlplane.QuarantineRecord{ReasonCode: "tampered"}
+		},
+		"security-applied disposition": func(value *controlplane.Transaction) {
+			value.SecurityApplied = &controlplane.SecurityAppliedRecord{EvidenceDigest: testDigest("e")}
+		},
+		"abort disposition": func(value *controlplane.Transaction) {
+			value.Abort = &controlplane.AbortRecord{ReusableBaselineDigest: testDigest("f")}
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			changed := cloneControlTransaction(t, base)
+			mutate(&changed)
+			control := &recordingClaimRenewer{transaction: changed}
+			if _, err := RenewPendingIntent(context.Background(), snapshot, now, control); err == nil {
+				t.Fatal("invalid pending state was renewed")
+			}
+			if len(control.requests) != 0 {
+				t.Fatal("invalid pending state crossed the renewal authority boundary")
+			}
+		})
+	}
+}
+
+func TestRenewReadyCampaignRejectsPendingReconciledAndTerminalStates(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+	snapshot, base := successfulFirstOperation(t, &fixture)
+	now := fixture.now.Add(10 * time.Minute)
+	tests := map[string]func(*controlplane.Transaction){
+		"pending": func(value *controlplane.Transaction) {
+			value.Status = controlplane.StatusMutationInProgress
+			value.Operations[0].Status = controlplane.OperationIntentRecorded
+			value.Operations[0].OutputDigest = ""
+			value.Operations[0].ObservationDigest = ""
+			value.Operations[0].EvidenceAuditReceiptID = ""
+			value.Operations[0].EvidenceAt = nil
+		},
+		"reconciled result": func(value *controlplane.Transaction) {
+			value.Operations[0].Status = controlplane.OperationConfirmedApplied
+			value.Operations[0].ReconciliationAuditReceiptID = testDigest("d")
+		},
+		"uncertain result": func(value *controlplane.Transaction) {
+			value.Operations[0].Status = controlplane.OperationUncertain
+		},
+		"failed result": func(value *controlplane.Transaction) {
+			value.Operations[0].Status = controlplane.OperationFailed
+		},
+		"quarantined transaction": func(value *controlplane.Transaction) {
+			value.Status = controlplane.StatusQuarantined
+			value.Quarantine = &controlplane.QuarantineRecord{ReasonCode: "operation_failed"}
+		},
+		"terminal transaction": func(value *controlplane.Transaction) {
+			value.Status = controlplane.StatusSecurityApplied
+			value.SecurityApplied = &controlplane.SecurityAppliedRecord{EvidenceDigest: testDigest("e")}
+		},
+		"expired approval": func(value *controlplane.Transaction) { value.Approval.ExpiresAt = now },
+		"expired claim":    func(value *controlplane.Transaction) { value.ActiveClaim.ExpiresAt = now },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			changed := cloneControlTransaction(t, base)
+			mutate(&changed)
+			control := &recordingClaimRenewer{transaction: changed}
+			if _, err := RenewReadyCampaign(context.Background(), snapshot, now, control); err == nil {
+				t.Fatal("invalid ready state was renewed")
+			}
+			if len(control.requests) != 0 {
+				t.Fatal("invalid ready state crossed the renewal authority boundary")
+			}
+		})
+	}
+}
+
+func TestRenewalRejectsAControlResponseThatChangesMoreThanTheLease(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+	snapshot, base := pendingSecondOperation(t, &fixture)
+	now := fixture.now.Add(10 * time.Minute)
+	valid := cloneControlTransaction(t, base)
+	valid.ResourceVersion++
+	valid.UpdatedAt = now
+	valid.ActiveClaim.ExpiresAt = now.Add(time.Duration(claimLeaseSeconds) * time.Second)
+	tests := map[string]func(*controlplane.Transaction){
+		"stale resource version": func(value *controlplane.Transaction) { value.ResourceVersion = base.ResourceVersion },
+		"shortened lease":        func(value *controlplane.Transaction) { value.ActiveClaim.ExpiresAt = now.Add(time.Minute) },
+		"replacement claim":      func(value *controlplane.Transaction) { value.ActiveClaim.ID = "claim-other" },
+		"changed pending operation": func(value *controlplane.Transaction) {
+			value.Operations[1].ID = "authorization-other"
+		},
+		"closed transaction": func(value *controlplane.Transaction) { value.Status = controlplane.StatusCommitApproved },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			response := cloneControlTransaction(t, valid)
+			mutate(&response)
+			control := &recordingClaimRenewer{transaction: base, renewed: response}
+			if _, err := RenewPendingIntent(context.Background(), snapshot, now, control); err == nil {
+				t.Fatal("tampered renewal response was accepted")
+			}
+			if len(control.requests) != 1 {
+				t.Fatalf("renew calls = %d, want 1", len(control.requests))
+			}
+		})
+	}
+}
+
+func TestProposalResourceVersionsAreImmutableAcrossSameClaimRenewal(t *testing.T) {
+	t.Run("intent", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		snapshot, _ := approvedEmptyCampaign(t, &fixture)
+		proposal, _, err := PrepareNextIntent(context.Background(), snapshot, fixture.now, fixture.control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		renewedAt := fixture.now.Add(time.Second)
+		*fixture.clock = renewedAt
+		if _, err := RenewReadyCampaign(context.Background(), snapshot, renewedAt, fixture.control); err != nil {
+			t.Fatal(err)
+		}
+		audit := &countingAudit{}
+		control := &countingIntentRecorder{}
+		if _, err := ApplyIntent(context.Background(), proposal, fixture.control, audit, control); !errors.Is(err, ErrStateMismatch) {
+			t.Fatalf("ApplyIntent() error after renewal = %v", err)
+		}
+		if audit.calls != 0 || control.calls != 0 {
+			t.Fatalf("stale intent crossed authority boundary: audit=%d control=%d", audit.calls, control.calls)
+		}
+	})
+
+	t.Run("evidence", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		snapshot, transaction := pendingFirstOperation(t, &fixture)
+		proposal, err := NewEvidenceProposal(snapshot, transaction, verifiedAttempt(snapshot, transaction, fixture.now), fixture.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		renewedAt := fixture.now.Add(time.Second)
+		*fixture.clock = renewedAt
+		if _, err := RenewPendingIntent(context.Background(), snapshot, renewedAt, fixture.control); err != nil {
+			t.Fatal(err)
+		}
+		audit := &countingAudit{}
+		control := &countingEvidenceRecorder{}
+		if _, err := ApplyEvidence(context.Background(), proposal, fixture.control, audit, control); !errors.Is(err, ErrStateMismatch) {
+			t.Fatalf("ApplyEvidence() error after renewal = %v", err)
+		}
+		if audit.calls != 0 || control.calls != 0 {
+			t.Fatalf("stale evidence crossed authority boundary: audit=%d control=%d", audit.calls, control.calls)
+		}
+	})
+
+	t.Run("security applied", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		snapshot, transaction := completedCampaign(t, &fixture)
+		proposal, err := NewSecurityAppliedProposal(snapshot, transaction, fixture.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		renewedAt := fixture.now.Add(time.Second)
+		*fixture.clock = renewedAt
+		if _, err := RenewReadyCampaign(context.Background(), snapshot, renewedAt, fixture.control); err != nil {
+			t.Fatal(err)
+		}
+		audit := &countingAudit{}
+		control := &countingSecurityAppliedRecorder{}
+		if _, err := ApplySecurityApplied(context.Background(), proposal, fixture.control, audit, control); !errors.Is(err, ErrStateMismatch) {
+			t.Fatalf("ApplySecurityApplied() error after renewal = %v", err)
+		}
+		if audit.calls != 0 || control.calls != 0 {
+			t.Fatalf("stale terminal proposal crossed authority boundary: audit=%d control=%d", audit.calls, control.calls)
+		}
+	})
+
+	t.Run("reconciliation", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		snapshot, _ := uncertainFirstOperation(t, &fixture)
+		transaction, err := PrepareReconciliationClaim(context.Background(), snapshot, fixture.now, fixture.control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempt := verifiedAttempt(snapshot, transaction, fixture.now)
+		proposal, err := NewReconciliationProposal(snapshot, transaction, attempt, fixture.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		renewedAt := fixture.now.Add(time.Second)
+		*fixture.clock = renewedAt
+		if _, err := RenewReconciliationClaim(context.Background(), snapshot, renewedAt, fixture.control); err != nil {
+			t.Fatal(err)
+		}
+		audit := &countingAudit{}
+		control := &countingReconciliationRecorder{}
+		if _, err := ApplyReconciliation(context.Background(), proposal, fixture.control, audit, control); !errors.Is(err, ErrStateMismatch) {
+			t.Fatalf("ApplyReconciliation() error after renewal = %v", err)
+		}
+		if audit.calls != 0 || control.calls != 0 {
+			t.Fatalf("stale reconciliation proposal crossed authority boundary: audit=%d control=%d", audit.calls, control.calls)
+		}
+	})
+}
+
 func TestDraftInputRejectsAmbiguousOrUnexecutableCampaignValues(t *testing.T) {
 	tests := map[string]func(*DraftInput){
 		"short authorization list": func(input *DraftInput) { input.AuthorizationIDs = input.AuthorizationIDs[:6] },
@@ -748,6 +1177,118 @@ func TestReconciliationClaimResumesAndAcquiresAfterExpiry(t *testing.T) {
 	_ = transaction
 }
 
+func TestRenewReconciliationClaimRefreshesOnlyTheCurrentReadOnlyClaim(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, _ := uncertainFirstOperation(t, &fixture)
+	prepared, err := PrepareReconciliationClaim(context.Background(), snapshot, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A still-active claim with less than the five-minute observation budget
+	// must be renewable; only the renewed claim must cover that budget.
+	reviewedAt := prepared.ActiveClaim.ExpiresAt.Add(-2 * time.Minute)
+	*fixture.clock = reviewedAt
+	renewed, err := RenewReconciliationClaim(context.Background(), snapshot, reviewedAt, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.ResourceVersion != prepared.ResourceVersion+1 || renewed.ActiveClaim.ID != prepared.ActiveClaim.ID ||
+		renewed.FenceEpoch != prepared.FenceEpoch || renewed.ActiveClaim.Mode != controlplane.ClaimModeReconciliation ||
+		!renewed.ActiveClaim.ExpiresAt.Equal(reviewedAt.Add(time.Duration(claimLeaseSeconds)*time.Second)) ||
+		!reflect.DeepEqual(renewed.Operations, prepared.Operations) {
+		t.Fatalf("renewed reconciliation claim = %#v", renewed)
+	}
+	repeatedAt := reviewedAt.Add(time.Second)
+	*fixture.clock = repeatedAt
+	again, err := RenewReconciliationClaim(context.Background(), snapshot, repeatedAt, fixture.control)
+	if err != nil {
+		t.Fatalf("repeat reconciliation renewal: %v", err)
+	}
+	if again.ResourceVersion != renewed.ResourceVersion+1 || again.ActiveClaim.ID != renewed.ActiveClaim.ID ||
+		!again.ActiveClaim.ExpiresAt.Equal(repeatedAt.Add(time.Duration(claimLeaseSeconds)*time.Second)) ||
+		!reflect.DeepEqual(again.Operations, renewed.Operations) {
+		t.Fatalf("repeated reconciliation renewal = %#v", again)
+	}
+}
+
+func TestRenewReconciliationClaimRejectsExpiredMutationOrResolvedState(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, _ := uncertainFirstOperation(t, &fixture)
+	base, err := PrepareReconciliationClaim(context.Background(), snapshot, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := fixture.now.Add(10 * time.Minute)
+	tests := map[string]func(*controlplane.Transaction){
+		"mutation claim": func(value *controlplane.Transaction) {
+			value.ActiveClaim.Mode = controlplane.ClaimModeMutation
+			value.ActiveClaim.AllowedStages = planOperations(snapshot)
+		},
+		"expired claim": func(value *controlplane.Transaction) { value.ActiveClaim.ExpiresAt = now },
+		"closed claim": func(value *controlplane.Transaction) {
+			closedAt := now
+			value.ActiveClaim.Status = controlplane.ClaimReleased
+			value.ActiveClaim.ClosedAt = &closedAt
+		},
+		"wrong station": func(value *controlplane.Transaction) { value.ActiveClaim.StationID = "station-other" },
+		"wrong lane":    func(value *controlplane.Transaction) { value.ActiveClaim.LaneID = "lane-other" },
+		"stale fence":   func(value *controlplane.Transaction) { value.ActiveClaim.FenceEpoch++ },
+		"approval restored": func(value *controlplane.Transaction) {
+			approval := value.Operations[len(value.Operations)-1].Approval
+			value.Approval = &approval
+		},
+		"operation resolved": func(value *controlplane.Transaction) {
+			value.Status = controlplane.StatusReconciled
+			last := &value.Operations[len(value.Operations)-1]
+			last.Status = controlplane.OperationConfirmedApplied
+			last.ReconciliationAuditReceiptID = testDigest("d")
+		},
+		"terminal quarantine": func(value *controlplane.Transaction) {
+			value.Status = controlplane.StatusQuarantined
+			value.Quarantine = &controlplane.QuarantineRecord{ReasonCode: "reconciliation_unknown"}
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			changed := cloneControlTransaction(t, base)
+			mutate(&changed)
+			control := &recordingClaimRenewer{transaction: changed}
+			if _, err := RenewReconciliationClaim(context.Background(), snapshot, now, control); err == nil {
+				t.Fatal("invalid reconciliation state was renewed")
+			}
+			if len(control.requests) != 0 {
+				t.Fatal("invalid reconciliation state crossed the renewal authority boundary")
+			}
+		})
+	}
+
+	valid := cloneControlTransaction(t, base)
+	valid.ResourceVersion++
+	valid.UpdatedAt = now
+	valid.ActiveClaim.ExpiresAt = now.Add(time.Duration(claimLeaseSeconds) * time.Second)
+	responseTests := map[string]func(*controlplane.Transaction){
+		"changed claim": func(value *controlplane.Transaction) { value.ActiveClaim.ID = "claim-other" },
+		"changed fence": func(value *controlplane.Transaction) { value.ActiveClaim.FenceEpoch++ },
+		"resolved operation": func(value *controlplane.Transaction) {
+			value.Status = controlplane.StatusReconciled
+			value.Operations[len(value.Operations)-1].Status = controlplane.OperationConfirmedApplied
+		},
+	}
+	for name, mutate := range responseTests {
+		t.Run("response "+name, func(t *testing.T) {
+			response := cloneControlTransaction(t, valid)
+			mutate(&response)
+			control := &recordingClaimRenewer{transaction: base, renewed: response}
+			if _, err := RenewReconciliationClaim(context.Background(), snapshot, now, control); err == nil {
+				t.Fatal("changed reconciliation renewal response was accepted")
+			}
+			if len(control.requests) != 1 {
+				t.Fatalf("renew calls = %d, want 1", len(control.requests))
+			}
+		})
+	}
+}
+
 func TestReconciliationRejectsStaleClaimAndTamperingBeforeAudit(t *testing.T) {
 	fixture := newWorkflowFixture(t)
 	snapshot, _ := uncertainFirstOperation(t, &fixture)
@@ -829,6 +1370,52 @@ func pendingFirstOperation(t *testing.T, fixture *workflowFixture) (laneguard.Pl
 		t.Fatal(err)
 	}
 	transaction, err = ApplyIntent(ctx, intent, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot, transaction
+}
+
+func approvedEmptyCampaign(t *testing.T, fixture *workflowFixture) (laneguard.Plan, controlplane.Transaction) {
+	t.Helper()
+	ctx := context.Background()
+	snapshot, transaction, err := PrepareDraft(ctx, fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := NewApprovalProposal(snapshot, transaction, "approver-1", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = ApplyApproval(ctx, approval, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot, transaction
+}
+
+func successfulFirstOperation(t *testing.T, fixture *workflowFixture) (laneguard.Plan, controlplane.Transaction) {
+	t.Helper()
+	snapshot, transaction := pendingFirstOperation(t, fixture)
+	evidence, err := NewEvidenceProposal(snapshot, transaction, verifiedAttempt(snapshot, transaction, fixture.now), fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = ApplyEvidence(context.Background(), evidence, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot, transaction
+}
+
+func pendingSecondOperation(t *testing.T, fixture *workflowFixture) (laneguard.Plan, controlplane.Transaction) {
+	t.Helper()
+	snapshot, _ := successfulFirstOperation(t, fixture)
+	intent, _, err := PrepareNextIntent(context.Background(), snapshot, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := ApplyIntent(context.Background(), intent, fixture.control, fixture.audit, fixture.control)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1044,6 +1631,21 @@ func (reader staticReader) GetTransaction(context.Context, string) (controlplane
 	return reader.transaction, nil
 }
 
+type recordingClaimRenewer struct {
+	transaction controlplane.Transaction
+	renewed     controlplane.Transaction
+	requests    []controlplane.RenewClaimRequest
+}
+
+func (control *recordingClaimRenewer) GetTransaction(context.Context, string) (controlplane.Transaction, error) {
+	return control.transaction, nil
+}
+
+func (control *recordingClaimRenewer) RenewClaim(_ context.Context, request controlplane.RenewClaimRequest) (controlplane.Transaction, error) {
+	control.requests = append(control.requests, request)
+	return control.renewed, nil
+}
+
 type countingAudit struct {
 	calls int
 	err   error
@@ -1055,6 +1657,11 @@ func (audit *countingAudit) Append(context.Context, auditlog.AppendRequest) (aud
 }
 
 type countingEvidenceRecorder struct {
+	calls       int
+	transaction controlplane.Transaction
+}
+
+type countingIntentRecorder struct {
 	calls       int
 	transaction controlplane.Transaction
 }
@@ -1078,6 +1685,11 @@ func (control *countingApprovalPreflighter) PreflightApproval(_ context.Context,
 }
 
 func (control *countingApprovalRecorder) RecordApproval(context.Context, controlplane.RecordApprovalRequest) (controlplane.Transaction, error) {
+	control.calls++
+	return control.transaction, nil
+}
+
+func (control *countingIntentRecorder) RecordIntent(context.Context, controlplane.RecordIntentRequest) (controlplane.Transaction, error) {
 	control.calls++
 	return control.transaction, nil
 }
