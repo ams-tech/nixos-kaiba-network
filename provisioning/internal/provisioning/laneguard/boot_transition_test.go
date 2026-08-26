@@ -263,6 +263,108 @@ func TestBootTransitionBeginAllocatesGenerationAndBlocksOpenPhase(t *testing.T) 
 	}
 }
 
+func TestMergeBootTransitionProgressPreservesOnlyValidForwardLocalPrefix(t *testing.T) {
+	store := NewMemoryStore()
+	transition, err := store.BeginBootTransition(testBeginBootTransitionRequest(testHardwareAction(HardwarePhasePreObservation, OperationColdPowerCycle)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition.Status = BootTransitionAwaitingOperator
+	transition.UpdatedAt = transition.ColdIntervalEndsAt
+	if err := store.PutBootTransition(transition); err != nil {
+		t.Fatal(err)
+	}
+	transition.Status = BootTransitionOperatorAcknowledged
+	transition.Operator = OperatorPeer{UID: 1000, GID: 1000, PID: 2000}
+	transition.OperatorAcknowledgedAt = transition.UpdatedAt.Add(time.Second)
+	transition.UpdatedAt = transition.OperatorAcknowledgedAt
+	if err := store.PutBootTransition(transition); err != nil {
+		t.Fatal(err)
+	}
+
+	local := transition
+	local.Status = BootTransitionPowerApplied
+	local.PowerAppliedAt = local.UpdatedAt.Add(time.Second)
+	local.UpdatedAt = local.PowerAppliedAt
+	merged, err := MergeBootTransitionProgress(transition, local)
+	if err != nil || merged != local {
+		t.Fatalf("merged forward power prefix = %#v, %v", merged, err)
+	}
+
+	changed := local
+	changed.Action.TargetFingerprint = "replacement-target"
+	changed.Key = BootTransitionKey(changed.Action, changed.Generation)
+	if _, err := MergeBootTransitionProgress(transition, changed); err == nil {
+		t.Fatal("changed immutable action was accepted as local progress")
+	}
+
+	completed := local
+	completed.Status = BootTransitionCompleted
+	completed.SafeOffObservedAt = completed.UpdatedAt.Add(time.Second)
+	completed.CompletedAt = completed.SafeOffObservedAt
+	completed.UpdatedAt = completed.CompletedAt
+	// Completion without a mode observation is invalid and must not be
+	// projected into an apparently valid active prefix.
+	if _, err := MergeBootTransitionProgress(transition, completed); err == nil {
+		t.Fatal("invalid terminal local state was accepted as progress")
+	}
+}
+
+func TestMemoryStoreReportsTerminalBootTransitionQuarantine(t *testing.T) {
+	store := NewMemoryStore()
+	quarantined, err := store.HasQuarantinedBootTransition()
+	if err != nil || quarantined {
+		t.Fatalf("empty quarantine state = %t, %v", quarantined, err)
+	}
+	transition, err := store.BeginBootTransition(testBeginBootTransitionRequest(testHardwareAction(HardwarePhasePreObservation, OperationColdPowerCycle)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition.Status = BootTransitionQuarantined
+	transition.Failure = BootTransitionFailureSafeOffUnproven
+	transition.UpdatedAt = transition.UpdatedAt.Add(time.Second)
+	if err := store.PutBootTransition(transition); err != nil {
+		t.Fatalf("persist quarantine: %v", err)
+	}
+	quarantined, err = store.HasQuarantinedBootTransition()
+	if err != nil || !quarantined {
+		t.Fatalf("terminal quarantine state = %t, %v", quarantined, err)
+	}
+}
+
+func TestFileStoreReportsBootTransitionQuarantineAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal.json")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition, err := store.BeginBootTransition(testBeginBootTransitionRequest(testHardwareAction(HardwarePhasePreObservation, OperationColdPowerCycle)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition.Status = BootTransitionQuarantined
+	transition.Failure = BootTransitionFailureSafeOffUnproven
+	transition.UpdatedAt = transition.UpdatedAt.Add(time.Second)
+	if err := store.PutBootTransition(transition); err != nil {
+		t.Fatalf("persist quarantine: %v", err)
+	}
+	if quarantined, err := store.HasQuarantinedBootTransition(); err != nil || !quarantined {
+		t.Fatalf("live file quarantine state = %t, %v", quarantined, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if quarantined, err := reopened.HasQuarantinedBootTransition(); err != nil || !quarantined {
+		t.Fatalf("reopened file quarantine state = %t, %v", quarantined, err)
+	}
+}
+
 func TestFileStoreOwnsStableProcessLockAndReopensAfterClose(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "journal.json")
 	first, err := NewFileStore(path)

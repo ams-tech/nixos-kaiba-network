@@ -76,6 +76,8 @@ type Config struct {
 	USBReappearTimeout      time.Duration
 	USBPollInterval         time.Duration
 	MinimumColdInterval     time.Duration
+	OperatorPromptTimeout   time.Duration
+	CleanupTimeout          time.Duration
 	MaximumOutputBytes      int
 }
 
@@ -97,6 +99,12 @@ func (config *Config) applyDefaults() {
 	}
 	if config.MinimumColdInterval == 0 {
 		config.MinimumColdInterval = 2 * time.Second
+	}
+	if config.OperatorPromptTimeout == 0 {
+		config.OperatorPromptTimeout = 2 * time.Minute
+	}
+	if config.CleanupTimeout == 0 {
+		config.CleanupTimeout = 30 * time.Second
 	}
 	if config.MaximumOutputBytes == 0 {
 		config.MaximumOutputBytes = 256 * 1024
@@ -126,6 +134,7 @@ func (config Config) Validate() error {
 		"USB disappearance timeout": config.USBDisappearTimeout,
 		"USB reappearance timeout":  config.USBReappearTimeout,
 		"USB poll interval":         config.USBPollInterval, "minimum cold interval": config.MinimumColdInterval,
+		"operator prompt timeout": config.OperatorPromptTimeout, "cleanup timeout": config.CleanupTimeout,
 	} {
 		if value <= 0 || value > 10*time.Minute {
 			return fmt.Errorf("%s must be positive and at most ten minutes", label)

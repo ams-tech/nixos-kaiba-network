@@ -35,6 +35,7 @@ import (
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/controlplane"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mtls"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/operatorprompt"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/physicalrpi5"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/plancompiler"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
@@ -146,12 +147,12 @@ func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied bool) 
 	originalRequest := *execution.ExecuteRequest
 	originalPlan := execution.Plan
 
-	initialAdapter := newPhysicalAdapter(t, board, physicalrpi5.ModeFresh, release)
-	initialHardware := &countingHardware{delegate: initialAdapter}
 	journal, err := laneguard.NewFileStore(journalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	initialAdapter := newPhysicalAdapter(t, board, physicalrpi5.ModeFresh, release, journal, clock)
+	initialHardware := &countingHardware{delegate: initialAdapter}
 	guard, err := laneguard.NewWithClock(laneConfig(), initialHardware, journal, clock)
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +174,9 @@ func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied bool) 
 	bridge.stop()
 	controlServer.stop()
 	auditServer.stop()
+	if err := journal.Close(); err != nil {
+		t.Fatalf("close pre-restart lane journal: %v", err)
+	}
 	clock.set(now.Add(31 * time.Minute))
 	control = openControl(t, controlStore, clock, "after-restart")
 	audit = openAudit(t, auditStore, clock)
@@ -222,12 +226,17 @@ func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied bool) 
 		t.Fatalf("reconciliation binding = %#v / %#v", reconciliation.Plan, reconciliation.ReconcileRequest)
 	}
 
-	restartedAdapter := newPhysicalAdapter(t, board, physicalrpi5.ModeAuto, release)
-	restartedHardware := &countingHardware{delegate: restartedAdapter}
 	restartedJournal, err := laneguard.NewFileStore(journalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		if err := restartedJournal.Close(); err != nil {
+			t.Errorf("close restarted lane journal: %v", err)
+		}
+	}()
+	restartedAdapter := newPhysicalAdapter(t, board, physicalrpi5.ModeAuto, release, restartedJournal, clock)
+	restartedHardware := &countingHardware{delegate: restartedAdapter}
 	restartedGuard, err := laneguard.NewWithClock(laneConfig(), restartedHardware, restartedJournal, clock)
 	if err != nil {
 		t.Fatal(err)
@@ -494,6 +503,7 @@ func (clock *testClock) set(now time.Time) {
 type simulatedBoard struct {
 	mu          sync.Mutex
 	powered     bool
+	usbInstance uint64
 	owned       bool
 	applyCommit bool
 	commitCalls int
@@ -506,7 +516,16 @@ func newSimulatedBoard(applyCommit bool) *simulatedBoard {
 func (board *simulatedBoard) setPowered(powered bool) {
 	board.mu.Lock()
 	defer board.mu.Unlock()
+	if powered && !board.powered {
+		board.usbInstance++
+	}
 	board.powered = powered
+}
+
+func (board *simulatedBoard) pinnedUSBInstance() (uint64, bool) {
+	board.mu.Lock()
+	defer board.mu.Unlock()
+	return board.usbInstance, board.powered
 }
 
 func (board *simulatedBoard) isPowered() bool {
@@ -574,6 +593,23 @@ func (runner simulatedRunner) Run(_ context.Context, _ string, arguments []strin
 	}
 }
 
+func (runner simulatedRunner) RunGuarded(
+	ctx context.Context,
+	executable string,
+	arguments []string,
+	beforeStart func() error,
+	stdout io.Writer,
+	stderr io.Writer,
+) error {
+	if beforeStart == nil {
+		return errors.New("simulated guarded runner requires an identity check")
+	}
+	if err := beforeStart(); err != nil {
+		return err
+	}
+	return runner.Run(ctx, executable, arguments, stdout, stderr)
+}
+
 type simulatedFileSystem struct{ board *simulatedBoard }
 
 func (filesystem simulatedFileSystem) ReadDir(string) ([]fs.DirEntry, error) {
@@ -596,6 +632,32 @@ func (filesystem simulatedFileSystem) ReadFile(path string) ([]byte, error) {
 		return nil, fs.ErrNotExist
 	}
 }
+
+func (filesystem simulatedFileSystem) PinUSBInstance(path string) (physicalrpi5.USBInstancePin, error) {
+	if filepath.Base(path) != "1-1" {
+		return nil, fs.ErrNotExist
+	}
+	instance, powered := filesystem.board.pinnedUSBInstance()
+	if !powered {
+		return nil, fs.ErrNotExist
+	}
+	return simulatedUSBInstancePin{board: filesystem.board, instance: instance}, nil
+}
+
+type simulatedUSBInstancePin struct {
+	board    *simulatedBoard
+	instance uint64
+}
+
+func (pin simulatedUSBInstancePin) Verify() error {
+	current, powered := pin.board.pinnedUSBInstance()
+	if !powered || current != pin.instance {
+		return errors.New("simulated USB instance changed")
+	}
+	return nil
+}
+
+func (simulatedUSBInstancePin) Close() error { return nil }
 
 type simulatedDirEntry string
 
@@ -640,15 +702,15 @@ type countingHardware struct {
 	executes int
 }
 
-func (hardware *countingHardware) Observe(ctx context.Context, config laneguard.Config) (laneguard.Observation, error) {
-	return hardware.delegate.Observe(ctx, config)
+func (hardware *countingHardware) Observe(ctx context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.Observation, error) {
+	return hardware.delegate.Observe(ctx, config, action)
 }
 
-func (hardware *countingHardware) Execute(ctx context.Context, config laneguard.Config, operation laneguard.Operation) (laneguard.OperationResult, error) {
+func (hardware *countingHardware) Execute(ctx context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.OperationResult, error) {
 	hardware.mu.Lock()
 	hardware.executes++
 	hardware.mu.Unlock()
-	return hardware.delegate.Execute(ctx, config, operation)
+	return hardware.delegate.Execute(ctx, config, action)
 }
 
 func (hardware *countingHardware) executions() int {
@@ -657,7 +719,14 @@ func (hardware *countingHardware) executions() int {
 	return hardware.executes
 }
 
-func newPhysicalAdapter(t *testing.T, board *simulatedBoard, mode string, release releasebinding.Binding) *physicalrpi5.Adapter {
+func newPhysicalAdapter(
+	t *testing.T,
+	board *simulatedBoard,
+	mode string,
+	release releasebinding.Binding,
+	journal laneguard.Journal,
+	clock *testClock,
+) *physicalrpi5.Adapter {
 	t.Helper()
 	paths := physicalrpi5.ImmutablePaths{
 		RPIBootBinary: "/immutable/rpiboot", GPIOSetBinary: "/immutable/gpioset",
@@ -677,11 +746,24 @@ func newPhysicalAdapter(t *testing.T, board *simulatedBoard, mode string, releas
 	}, physicalrpi5.Dependencies{
 		Runner: simulatedRunner{board: board, paths: paths}, FS: simulatedFileSystem{board: board},
 		GPIO: simulatedGPIO{board: board}, UART: unexpectedUART{}, Sleeper: immediateSleeper{},
+		Journal: journal, Prompter: automaticPrompter{}, Clock: clock,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return adapter
+}
+
+type automaticPrompter struct{}
+
+func (automaticPrompter) Present(_ context.Context, prompt operatorprompt.Prompt) (operatorprompt.Acknowledgement, error) {
+	return operatorprompt.Acknowledgement{
+		SchemaVersion:  operatorprompt.AcknowledgementSchemaVersion,
+		PromptID:       prompt.ID,
+		PromptDigest:   prompt.Digest,
+		Peer:           laneguard.OperatorPeer{UID: 1000, GID: 1000, PID: 2000},
+		AcknowledgedAt: prompt.ExpiresAt.Add(-time.Second),
+	}, nil
 }
 
 func laneConfig() laneguard.Config {

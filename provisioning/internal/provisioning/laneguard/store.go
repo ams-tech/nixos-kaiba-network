@@ -66,11 +66,15 @@ type AttemptStore interface {
 // physical-mode state machine. IncompleteBootTransitions is the restart
 // primitive: callers must first restore and prove fail-off, terminalize each
 // returned record, and must never resume its old prompt or acknowledgment.
+// HasQuarantinedBootTransition is the durable lane lock: once safe-off cannot
+// be proven, a process restart must not make that terminal record disappear
+// from enforcement.
 type BootTransitionStore interface {
 	BeginBootTransition(BeginBootTransitionRequest) (BootTransition, error)
 	GetBootTransition(key string) (BootTransition, bool, error)
 	PutBootTransition(BootTransition) error
 	IncompleteBootTransitions() ([]BootTransition, error)
+	HasQuarantinedBootTransition() (bool, error)
 }
 
 type Journal interface {
@@ -169,6 +173,12 @@ func (store *MemoryStore) IncompleteBootTransitions() ([]BootTransition, error) 
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	return incompleteBootTransitions(store.bootTransitions), nil
+}
+
+func (store *MemoryStore) HasQuarantinedBootTransition() (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return hasQuarantinedBootTransition(store.bootTransitions), nil
 }
 
 // FileStore is a small crash-safe reference store for one guard process. It
@@ -346,6 +356,19 @@ func (store *FileStore) IncompleteBootTransitions() ([]BootTransition, error) {
 	return incompleteBootTransitions(state.BootTransitions), nil
 }
 
+func (store *FileStore) HasQuarantinedBootTransition() (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.requireOpen(); err != nil {
+		return false, err
+	}
+	state, err := store.load()
+	if err != nil {
+		return false, err
+	}
+	return hasQuarantinedBootTransition(state.BootTransitions), nil
+}
+
 func (store *FileStore) load() (journalState, error) {
 	file, err := os.OpenFile(store.path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {
@@ -472,6 +495,66 @@ func incompleteBootTransitions(transitions map[string]BootTransition) []BootTran
 		return incomplete[left].Key < incomplete[right].Key
 	})
 	return incomplete
+}
+
+func hasQuarantinedBootTransition(transitions map[string]BootTransition) bool {
+	for _, transition := range transitions {
+		if transition.Status == BootTransitionQuarantined {
+			return true
+		}
+	}
+	return false
+}
+
+// MergeBootTransitionProgress returns the deepest locally observed active
+// prefix only when it is a valid forward update of the durable record. A
+// caller can then attach a terminal safe-off outcome without discarding
+// physical progress whose preceding journal write failed.
+func MergeBootTransitionProgress(durable, local BootTransition) (BootTransition, error) {
+	if durable.IsTerminal() {
+		return BootTransition{}, errors.New("cannot merge progress into a terminal boot transition")
+	}
+	if err := local.Validate(); err != nil {
+		return BootTransition{}, fmt.Errorf("local boot-transition progress: %w", err)
+	}
+	progress := local
+	if local.IsTerminal() {
+		progress.SafeOffObservedAt = time.Time{}
+		progress.CompletedAt = time.Time{}
+		progress.Failure = BootTransitionFailureNone
+		progress.EvidenceDigest = ""
+		switch {
+		case !progress.OperatorReleasedAt.IsZero():
+			progress.Status = BootTransitionOperatorReleased
+			progress.UpdatedAt = latestBootTransitionTime(durable.UpdatedAt, progress.OperatorReleasedAt)
+		case !progress.ModeObservedAt.IsZero():
+			progress.Status = BootTransitionModeObserved
+			progress.UpdatedAt = latestBootTransitionTime(durable.UpdatedAt, progress.ModeObservedAt)
+		case !progress.PowerAppliedAt.IsZero():
+			progress.Status = BootTransitionPowerApplied
+			progress.UpdatedAt = latestBootTransitionTime(durable.UpdatedAt, progress.PowerAppliedAt)
+		case !progress.OperatorAcknowledgedAt.IsZero():
+			progress.Status = BootTransitionOperatorAcknowledged
+			progress.UpdatedAt = latestBootTransitionTime(durable.UpdatedAt, progress.OperatorAcknowledgedAt)
+		case !local.UpdatedAt.Before(local.ColdIntervalEndsAt):
+			progress.Status = BootTransitionAwaitingOperator
+			progress.UpdatedAt = latestBootTransitionTime(durable.UpdatedAt, progress.ColdIntervalEndsAt)
+		default:
+			progress.Status = BootTransitionRequested
+			progress.UpdatedAt = durable.UpdatedAt
+		}
+	}
+	if err := validBootTransitionUpdate(durable, progress); err != nil {
+		return BootTransition{}, fmt.Errorf("local progress is not a valid forward durable prefix: %w", err)
+	}
+	return progress, nil
+}
+
+func latestBootTransitionTime(left, right time.Time) time.Time {
+	if right.After(left) {
+		return right
+	}
+	return left
 }
 
 func fileStat(info os.FileInfo) (*syscall.Stat_t, bool) {

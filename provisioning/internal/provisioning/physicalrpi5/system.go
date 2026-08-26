@@ -23,6 +23,13 @@ type Runner interface {
 	Run(context.Context, string, []string, io.Writer, io.Writer) error
 }
 
+// GuardedRunner places one final identity check at the process-start boundary.
+// The check narrows the physically exclusive lane's re-identification window;
+// it is not an atomic hot-swap-resistant USB transaction.
+type GuardedRunner interface {
+	RunGuarded(context.Context, string, []string, func() error, io.Writer, io.Writer) error
+}
+
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, executable string, arguments []string, stdout, stderr io.Writer) error {
@@ -32,15 +39,95 @@ func (ExecRunner) Run(ctx context.Context, executable string, arguments []string
 	return command.Run()
 }
 
+func (ExecRunner) RunGuarded(ctx context.Context, executable string, arguments []string, beforeStart func() error, stdout, stderr io.Writer) error {
+	command := exec.CommandContext(ctx, executable, arguments...)
+	command.Stdout = stdout
+	command.Stderr = stderr
+	if beforeStart == nil {
+		return errors.New("guarded runner requires a process-start identity check")
+	}
+	if err := beforeStart(); err != nil {
+		return fmt.Errorf("process-start identity check: %w", err)
+	}
+	return command.Run()
+}
+
 type FileSystem interface {
 	ReadDir(string) ([]fs.DirEntry, error)
 	ReadFile(string) ([]byte, error)
+}
+
+// USBInstancePin holds the opened sysfs target object across multiple rpiboot
+// invocations. Verify compares the current fixed path with that still-open
+// kernel object, detecting removal and replacement at the same path.
+type USBInstancePin interface {
+	Verify() error
+	Close() error
+}
+
+type USBInstancePinner interface {
+	PinUSBInstance(string) (USBInstancePin, error)
 }
 
 type OSFileSystem struct{}
 
 func (OSFileSystem) ReadDir(path string) ([]fs.DirEntry, error) { return os.ReadDir(path) }
 func (OSFileSystem) ReadFile(path string) ([]byte, error)       { return os.ReadFile(path) }
+
+func (OSFileSystem) PinUSBInstance(path string) (USBInstancePin, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open fixed USB sysfs target: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("stat opened USB sysfs target: %w", err)
+	}
+	if !info.IsDir() {
+		_ = file.Close()
+		return nil, errors.New("fixed USB sysfs target does not resolve to a directory")
+	}
+	return &osUSBInstancePin{path: path, file: file, initial: info}, nil
+}
+
+type osUSBInstancePin struct {
+	mu      sync.Mutex
+	path    string
+	file    *os.File
+	initial os.FileInfo
+}
+
+func (pin *osUSBInstancePin) Verify() error {
+	pin.mu.Lock()
+	defer pin.mu.Unlock()
+	if pin.file == nil {
+		return errors.New("USB sysfs instance pin is closed")
+	}
+	held, err := pin.file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat held USB sysfs instance: %w", err)
+	}
+	current, err := os.Stat(pin.path)
+	if err != nil {
+		return fmt.Errorf("stat current fixed USB sysfs target: %w", err)
+	}
+	if !os.SameFile(pin.initial, held) || !os.SameFile(pin.initial, current) {
+		return errors.New("fixed USB sysfs target no longer names the pinned device instance")
+	}
+	return nil
+}
+
+func (pin *osUSBInstancePin) Close() error {
+	pin.mu.Lock()
+	defer pin.mu.Unlock()
+	if pin.file == nil {
+		return nil
+	}
+	file := pin.file
+	pin.file = nil
+	return file.Close()
+}
 
 type GPIO interface {
 	AcquirePower(context.Context, laneguard.GPIODescriptor) (PowerLease, error)
