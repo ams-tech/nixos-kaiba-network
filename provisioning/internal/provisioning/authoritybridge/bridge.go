@@ -25,8 +25,8 @@ const (
 	ResponseSchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha3"
 
 	// AuthorityReadTimeout is the maximum duration expected from each
-	// authenticated control or audit read. Network adapters must enforce this
-	// budget so the bridge's whole-operation deadline remains sound.
+	// authenticated control or audit request. Network adapters must enforce
+	// this budget so the bridge's whole-operation deadline remains sound.
 	AuthorityReadTimeout = 15 * time.Second
 )
 
@@ -74,6 +74,7 @@ type BoundRequest struct {
 // the bridge never accepts authority records from its Unix-socket caller.
 type ControlReader interface {
 	GetTransaction(context.Context, string) (controlplane.Transaction, error)
+	PreflightCurrentClaim(context.Context, controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error)
 }
 
 type AuditReader interface {
@@ -87,9 +88,10 @@ type Binder struct {
 	LeaseSafetyMargin time.Duration
 }
 
-// Bind fetches control state twice around the audit read. This closes the
-// obvious mixed-snapshot window: any claim, fence, approval, intent, or
-// resource-version change during authority collection fails closed.
+// Bind fetches control state twice around the audit read, then asks the control
+// server to verify the exact claim (and execution approval) against its own
+// clock. Any claim, fence, approval, intent, or resource-version change during
+// authority collection fails closed.
 func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundRequest, error) {
 	if err := validateBridgeRequest(request); err != nil {
 		return BoundRequest{}, err
@@ -134,6 +136,21 @@ func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundRequ
 		return BoundRequest{}, fmt.Errorf("%w: snapshot second control read: %w", ErrAuthoritySource, err)
 	}
 	if !bytes.Equal(firstSnapshot, secondSnapshot) {
+		return BoundRequest{}, ErrAuthorityChanged
+	}
+	preflightRequest, err := currentClaimPreflightRequest(request, second)
+	if err != nil {
+		return BoundRequest{}, err
+	}
+	preflighted, err := binder.Control.PreflightCurrentClaim(ctx, preflightRequest)
+	if err != nil {
+		return BoundRequest{}, fmt.Errorf("%w: current-claim preflight: %w", ErrAuthoritySource, err)
+	}
+	preflightSnapshot, err := json.Marshal(preflighted)
+	if err != nil {
+		return BoundRequest{}, fmt.Errorf("%w: snapshot current-claim preflight: %w", ErrAuthoritySource, err)
+	}
+	if !bytes.Equal(secondSnapshot, preflightSnapshot) {
 		return BoundRequest{}, ErrAuthorityChanged
 	}
 	approvalRecord, approvalReceipt, err := selectUniqueRecord(records, receiptIDs[0])
@@ -183,6 +200,29 @@ func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundRequ
 		return BoundRequest{}, fmt.Errorf("%w: generated binding: %w", ErrAuthorityRejected, err)
 	}
 	return result, nil
+}
+
+func currentClaimPreflightRequest(request BridgeRequest, transaction controlplane.Transaction) (controlplane.CurrentClaimPreflightRequest, error) {
+	if transaction.ActiveClaim == nil {
+		return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: transaction has no active claim", ErrAuthorityRejected)
+	}
+	preflight := controlplane.CurrentClaimPreflightRequest{
+		SchemaVersion: controlplane.CurrentClaimPreflightRequestSchemaVersion,
+		MutationContext: controlplane.MutationContext{
+			TransactionID:           transaction.ID,
+			ExpectedResourceVersion: transaction.ResourceVersion,
+			ClaimID:                 transaction.ActiveClaim.ID,
+			FenceEpoch:              transaction.FenceEpoch,
+		},
+	}
+	if request.Mode == ModeExecute {
+		if transaction.Approval == nil {
+			return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: transaction has no current approval", ErrAuthorityRejected)
+		}
+		preflight.ApprovalID = transaction.Approval.ID
+		preflight.PlanDigest = request.DraftSnapshot.PlanDigest
+	}
+	return preflight, nil
 }
 
 func validateBridgeRequest(request BridgeRequest) error {
