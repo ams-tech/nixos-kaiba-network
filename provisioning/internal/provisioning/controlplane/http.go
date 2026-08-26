@@ -125,6 +125,15 @@ func dispatchCommand(httpRequest *http.Request, service *Service, identityPolicy
 			return Transaction{}, err
 		}
 		return service.RenewClaim(ctx, request)
+	case "preflight_current_claim":
+		var request CurrentClaimPreflightRequest
+		if err := DecodeStrict(command.Request, &request); err != nil {
+			return Transaction{}, err
+		}
+		if err := authorizeCurrentClaim(httpRequest, service, identityPolicy, request.TransactionID); err != nil {
+			return Transaction{}, err
+		}
+		return service.PreflightCurrentClaim(ctx, request)
 	case "transfer_claim":
 		var request TransferClaimRequest
 		if err := DecodeStrict(command.Request, &request); err != nil {

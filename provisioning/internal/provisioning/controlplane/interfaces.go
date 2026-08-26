@@ -9,6 +9,7 @@ type Coordinator interface {
 	CreateTransaction(context.Context, CreateTransactionRequest) (Transaction, error)
 	AcquireClaim(context.Context, AcquireClaimRequest) (Transaction, error)
 	RenewClaim(context.Context, RenewClaimRequest) (Transaction, error)
+	PreflightCurrentClaim(context.Context, CurrentClaimPreflightRequest) (Transaction, error)
 	TransferClaim(context.Context, TransferClaimRequest) (Transaction, error)
 	ReleaseClaim(context.Context, ReleaseClaimRequest) (Transaction, error)
 	BindTarget(context.Context, BindTargetRequest) (Transaction, error)

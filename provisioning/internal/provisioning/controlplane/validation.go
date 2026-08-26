@@ -69,6 +69,13 @@ func validateRenewClaimRequest(request RenewClaimRequest) error {
 	return validateLease(request.LeaseDurationSeconds)
 }
 
+func validateCurrentClaimPreflightRequest(request CurrentClaimPreflightRequest) error {
+	if request.SchemaVersion != CurrentClaimPreflightRequestSchemaVersion {
+		return invalid("schema_version is unsupported")
+	}
+	return validateMutationContext(request.MutationContext)
+}
+
 func validateTransferClaimRequest(request TransferClaimRequest) error {
 	if err := validateEnvelope(request.SchemaVersion, TransferClaimRequestSchemaVersion, request.IdempotencyKey); err != nil {
 		return err

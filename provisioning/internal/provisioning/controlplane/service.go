@@ -109,6 +109,29 @@ func (s *Service) GetTransactionForReconciliation(ctx context.Context, transacti
 	return s.GetTransaction(ctx, transactionID)
 }
 
+// PreflightCurrentClaim verifies an exact mutation context against the
+// control plane's current resource version, fence, and server clock without
+// changing durable state. It grants no authority beyond the claim already
+// authenticated by the transport boundary.
+func (s *Service) PreflightCurrentClaim(_ context.Context, request CurrentClaimPreflightRequest) (Transaction, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := validateCurrentClaimPreflightRequest(request); err != nil {
+		return Transaction{}, err
+	}
+	transaction, exists := s.state.Transactions[request.TransactionID]
+	if !exists {
+		return Transaction{}, ErrNotFound
+	}
+	if transaction.ResourceVersion != request.ExpectedResourceVersion {
+		return Transaction{}, fmt.Errorf("%w: got %d, want %d", ErrVersionConflict, transaction.ResourceVersion, request.ExpectedResourceVersion)
+	}
+	if _, err := requireCurrentClaim(&transaction, request.ClaimID, request.FenceEpoch, s.clock().UTC(), ""); err != nil {
+		return Transaction{}, err
+	}
+	return cloneTransaction(transaction)
+}
+
 func (s *Service) CreateTransaction(_ context.Context, request CreateTransactionRequest) (Transaction, error) {
 	if err := validateCreateRequest(request); err != nil {
 		return Transaction{}, err

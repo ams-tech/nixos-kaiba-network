@@ -123,6 +123,10 @@ func (client *HTTPControlClient) RenewClaim(ctx context.Context, request control
 	return client.command(ctx, "renew_claim", request.TransactionID, request)
 }
 
+func (client *HTTPControlClient) PreflightCurrentClaim(ctx context.Context, request controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error) {
+	return client.command(ctx, "preflight_current_claim", request.TransactionID, request)
+}
+
 func (client *HTTPControlClient) TransferClaim(ctx context.Context, request controlplane.TransferClaimRequest) (controlplane.Transaction, error) {
 	return client.command(ctx, "transfer_claim", request.TransactionID, request)
 }

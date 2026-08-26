@@ -149,6 +149,110 @@ func TestFreshTargetPrestateIsDistinctFromApprovedPoststate(t *testing.T) {
 	}
 }
 
+func TestCurrentClaimPreflightIsReadOnlyAndUsesServerClock(t *testing.T) {
+	store := &MemoryStore{}
+	fixture := newTestFixture(t, store)
+	transaction := fixture.createClaimBind(developmentCampaignNames())
+	request := CurrentClaimPreflightRequest{
+		SchemaVersion:   CurrentClaimPreflightRequestSchemaVersion,
+		MutationContext: contextFor(transaction),
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checked, err := fixture.service.PreflightCurrentClaim(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked.ResourceVersion != transaction.ResourceVersion || checked.ActiveClaim == nil ||
+		checked.ActiveClaim.ID != transaction.ActiveClaim.ID || checked.FenceEpoch != transaction.FenceEpoch {
+		t.Fatalf("current-claim preflight = %#v, want exact transaction", checked)
+	}
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("current-claim preflight changed durable state")
+	}
+	persisted, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ResourceVersion != transaction.ResourceVersion || !persisted.UpdatedAt.Equal(transaction.UpdatedAt) {
+		t.Fatalf("current-claim preflight mutated transaction: %#v", persisted)
+	}
+
+	fixture.now = transaction.ActiveClaim.ExpiresAt.Add(-time.Nanosecond)
+	if _, err := fixture.service.PreflightCurrentClaim(context.Background(), request); err != nil {
+		t.Fatalf("preflight just before server-time expiry: %v", err)
+	}
+	fixture.now = transaction.ActiveClaim.ExpiresAt
+	if _, err := fixture.service.PreflightCurrentClaim(context.Background(), request); !errors.Is(err, ErrLeaseExpired) {
+		t.Fatalf("preflight at server-time expiry error = %v, want ErrLeaseExpired", err)
+	}
+}
+
+func TestCurrentClaimPreflightRejectsNonCurrentMutationContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*CurrentClaimPreflightRequest, *testFixture, Transaction)
+		wantErr error
+	}{
+		{
+			name: "wrong resource version",
+			mutate: func(request *CurrentClaimPreflightRequest, _ *testFixture, _ Transaction) {
+				request.ExpectedResourceVersion++
+			},
+			wantErr: ErrVersionConflict,
+		},
+		{
+			name: "wrong claim",
+			mutate: func(request *CurrentClaimPreflightRequest, _ *testFixture, _ Transaction) {
+				request.ClaimID = "claim-other"
+			},
+			wantErr: ErrStaleFence,
+		},
+		{
+			name: "wrong fence",
+			mutate: func(request *CurrentClaimPreflightRequest, _ *testFixture, _ Transaction) {
+				request.FenceEpoch++
+			},
+			wantErr: ErrStaleFence,
+		},
+		{
+			name: "expired claim",
+			mutate: func(_ *CurrentClaimPreflightRequest, fixture *testFixture, transaction Transaction) {
+				fixture.now = transaction.ActiveClaim.ExpiresAt
+			},
+			wantErr: ErrLeaseExpired,
+		},
+		{
+			name: "wrong schema",
+			mutate: func(request *CurrentClaimPreflightRequest, _ *testFixture, _ Transaction) {
+				request.SchemaVersion = "unsupported"
+			},
+			wantErr: ErrInvalid,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			transaction := fixture.createClaimBind(developmentCampaignNames())
+			request := CurrentClaimPreflightRequest{
+				SchemaVersion:   CurrentClaimPreflightRequestSchemaVersion,
+				MutationContext: contextFor(transaction),
+			}
+			test.mutate(&request, fixture, transaction)
+			if _, err := fixture.service.PreflightCurrentClaim(context.Background(), request); !errors.Is(err, test.wantErr) {
+				t.Fatalf("PreflightCurrentClaim() error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestApprovalPreflightIsReadOnlyAndAcceptsOnlyExactStateOrReplay(t *testing.T) {
 	fixture := newTestFixture(t, &MemoryStore{})
 	operations := developmentCampaignNames()

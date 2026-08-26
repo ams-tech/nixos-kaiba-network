@@ -14,20 +14,21 @@ const (
 	StoreSchemaVersion       = "provisioning.kaiba.network/control-store/v1alpha4"
 	CommandSchemaVersion     = "provisioning.kaiba.network/control-command/v1alpha1"
 
-	CreateTransactionRequestSchemaVersion    = "provisioning.kaiba.network/create-transaction-request/v1alpha3"
-	AcquireClaimRequestSchemaVersion         = "provisioning.kaiba.network/acquire-claim-request/v1alpha1"
-	RenewClaimRequestSchemaVersion           = "provisioning.kaiba.network/renew-claim-request/v1alpha1"
-	TransferClaimRequestSchemaVersion        = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
-	ReleaseClaimRequestSchemaVersion         = "provisioning.kaiba.network/release-claim-request/v1alpha1"
-	BindTargetRequestSchemaVersion           = "provisioning.kaiba.network/bind-target-request/v1alpha1"
-	ApprovalPreflightRequestSchemaVersion    = "provisioning.kaiba.network/approval-preflight-request/v1alpha1"
-	RecordApprovalRequestSchemaVersion       = "provisioning.kaiba.network/record-approval-request/v1alpha2"
-	RecordIntentRequestSchemaVersion         = "provisioning.kaiba.network/record-intent-request/v1alpha1"
-	RecordEvidenceRequestSchemaVersion       = "provisioning.kaiba.network/record-evidence-request/v1alpha1"
-	RecordReconciliationRequestSchemaVersion = "provisioning.kaiba.network/record-reconciliation-request/v1alpha1"
-	QuarantineRequestSchemaVersion           = "provisioning.kaiba.network/quarantine-request/v1alpha1"
-	AbortRequestSchemaVersion                = "provisioning.kaiba.network/abort-request/v1alpha1"
-	SecurityAppliedRequestSchemaVersion      = "provisioning.kaiba.network/security-applied-request/v1alpha1"
+	CreateTransactionRequestSchemaVersion     = "provisioning.kaiba.network/create-transaction-request/v1alpha3"
+	AcquireClaimRequestSchemaVersion          = "provisioning.kaiba.network/acquire-claim-request/v1alpha1"
+	RenewClaimRequestSchemaVersion            = "provisioning.kaiba.network/renew-claim-request/v1alpha1"
+	CurrentClaimPreflightRequestSchemaVersion = "provisioning.kaiba.network/current-claim-preflight-request/v1alpha1"
+	TransferClaimRequestSchemaVersion         = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
+	ReleaseClaimRequestSchemaVersion          = "provisioning.kaiba.network/release-claim-request/v1alpha1"
+	BindTargetRequestSchemaVersion            = "provisioning.kaiba.network/bind-target-request/v1alpha1"
+	ApprovalPreflightRequestSchemaVersion     = "provisioning.kaiba.network/approval-preflight-request/v1alpha1"
+	RecordApprovalRequestSchemaVersion        = "provisioning.kaiba.network/record-approval-request/v1alpha2"
+	RecordIntentRequestSchemaVersion          = "provisioning.kaiba.network/record-intent-request/v1alpha1"
+	RecordEvidenceRequestSchemaVersion        = "provisioning.kaiba.network/record-evidence-request/v1alpha1"
+	RecordReconciliationRequestSchemaVersion  = "provisioning.kaiba.network/record-reconciliation-request/v1alpha1"
+	QuarantineRequestSchemaVersion            = "provisioning.kaiba.network/quarantine-request/v1alpha1"
+	AbortRequestSchemaVersion                 = "provisioning.kaiba.network/abort-request/v1alpha1"
+	SecurityAppliedRequestSchemaVersion       = "provisioning.kaiba.network/security-applied-request/v1alpha1"
 )
 
 // UnownedCustomerKeyHash is the only prestate accepted by the development
@@ -261,6 +262,14 @@ type MutationContext struct {
 	ExpectedResourceVersion uint64 `json:"expected_resource_version"`
 	ClaimID                 string `json:"claim_id"`
 	FenceEpoch              uint64 `json:"fence_epoch"`
+}
+
+// CurrentClaimPreflightRequest is a receipt-free, read-only request to verify
+// that an exact mutation context still names the server's current unexpired
+// claim. It deliberately carries no operation selector or mutation input.
+type CurrentClaimPreflightRequest struct {
+	SchemaVersion string `json:"schema_version"`
+	MutationContext
 }
 
 type BindTargetRequest struct {
