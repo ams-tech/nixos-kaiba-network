@@ -18,13 +18,17 @@ func TestCommandSurfaceHasNoGenericMutationOrHardwareSelectors(t *testing.T) {
 	for _, required := range []string{
 		"prepare-draft", "install-draft", "propose-approval", "apply-approval",
 		"propose-next-intent", "apply-intent", "propose-evidence", "apply-evidence",
+		"propose-security-applied", "apply-security-applied",
 		"prepare-reconciliation", "propose-reconciliation", "apply-reconciliation",
 	} {
 		if !strings.Contains(usage, required) {
 			t.Fatalf("usage omits %q", required)
 		}
 	}
-	for _, forbidden := range []string{"--operation", "--boot-mode", "--device", "--gpio", "--uart", "--command", "--enable-mutations"} {
+	for _, forbidden := range []string{
+		"--operation", "--boot-mode", "--device", "--gpio", "--uart", "--command", "--enable-mutations",
+		"--evidence-digest", "--rollback", "--release-classification",
+	} {
 		if strings.Contains(usage, forbidden) {
 			t.Fatalf("usage exposes forbidden selector %q", forbidden)
 		}

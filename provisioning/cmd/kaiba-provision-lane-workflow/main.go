@@ -62,6 +62,10 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		err = proposeEvidence(ctx, arguments[1:], stdout, stderr)
 	case "apply-evidence":
 		err = applyEvidence(ctx, arguments[1:], stdout, stderr)
+	case "propose-security-applied":
+		err = proposeSecurityApplied(ctx, arguments[1:], stdout, stderr)
+	case "apply-security-applied":
+		err = applySecurityApplied(ctx, arguments[1:], stdout, stderr)
 	case "prepare-reconciliation":
 		err = prepareReconciliation(ctx, arguments[1:], stdout, stderr)
 	case "propose-reconciliation":
@@ -425,6 +429,81 @@ func applyEvidence(ctx context.Context, arguments []string, stdout, stderr io.Wr
 	return writeSummary(stdout, transactionSummary("evidence_recorded", transaction))
 }
 
+func proposeSecurityApplied(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("propose-security-applied", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	draftPath := flags.String("draft", "", "reviewed authority-free draft JSON path")
+	outputPath := flags.String("proposal-out", "", "new security-applied proposal JSON path")
+	var network controlFlags
+	addControlFlags(flags, &network)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *draftPath == "" || *outputPath == "" {
+		return fmt.Errorf("%w: propose-security-applied requires --draft and --proposal-out", errUsage)
+	}
+	if err := evidencefile.ValidateNewPath(*outputPath); err != nil {
+		return err
+	}
+	draft, err := loadDraft(*draftPath)
+	if err != nil {
+		return err
+	}
+	client, err := network.client()
+	if err != nil {
+		return err
+	}
+	transaction, err := client.GetTransaction(ctx, draft.TransactionID)
+	if err != nil {
+		return err
+	}
+	proposal, err := operatorworkflow.NewSecurityAppliedProposal(draft, transaction, clockNow().UTC())
+	if err != nil {
+		return err
+	}
+	if err := writeCanonicalNew(*outputPath, proposal, false); err != nil {
+		return err
+	}
+	return writeSummary(stdout, map[string]any{
+		"status": "security_applied_proposed", "evidence_digest": proposal.EvidenceDigest,
+		"rollback_status": proposal.RollbackStatus, "release_classification": proposal.ReleaseClassification,
+		"proposal_path": *outputPath,
+	})
+}
+
+func applySecurityApplied(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("apply-security-applied", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	proposalPath := flags.String("proposal", "", "reviewed security-applied proposal JSON path")
+	var network pairedFlags
+	addPairedFlags(flags, &network)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *proposalPath == "" {
+		return fmt.Errorf("%w: apply-security-applied requires --proposal", errUsage)
+	}
+	var proposal operatorworkflow.SecurityAppliedProposal
+	if err := loadStrictJSON(*proposalPath, &proposal); err != nil {
+		return err
+	}
+	control, audit, err := network.clients()
+	if err != nil {
+		return err
+	}
+	transaction, err := operatorworkflow.ApplySecurityApplied(ctx, proposal, control, audit, control)
+	if err != nil {
+		return err
+	}
+	result := transactionSummary("security_applied_recorded", transaction)
+	if transaction.SecurityApplied != nil {
+		result["evidence_digest"] = transaction.SecurityApplied.EvidenceDigest
+		result["rollback_status"] = transaction.SecurityApplied.RollbackStatus
+		result["release_classification"] = transaction.SecurityApplied.ReleaseClassification
+	}
+	return writeSummary(stdout, result)
+}
+
 func prepareReconciliation(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("prepare-reconciliation", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -625,6 +704,8 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow apply-intent --proposal FILE [station control/audit TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow propose-evidence --draft FILE --attempt FILE --proposal-out FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow apply-evidence --proposal FILE [station control/audit TLS flags]")
+	fmt.Fprintln(output, "       kaiba-provision-lane-workflow propose-security-applied --draft FILE --proposal-out FILE [station control TLS flags]")
+	fmt.Fprintln(output, "       kaiba-provision-lane-workflow apply-security-applied --proposal FILE [station control/audit TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow prepare-reconciliation --draft FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow propose-reconciliation --draft FILE --attempt FILE --proposal-out FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow apply-reconciliation --proposal FILE [station control/audit TLS flags]")
