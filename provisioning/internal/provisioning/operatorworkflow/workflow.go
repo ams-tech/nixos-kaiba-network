@@ -30,7 +30,10 @@ const (
 	SecurityAppliedProposalSchemaVersion = "provisioning.kaiba.network/operator-security-applied-proposal/v1alpha1"
 	ReconciliationProposalSchemaVersion  = "provisioning.kaiba.network/operator-reconciliation-proposal/v1alpha1"
 
-	claimLeaseSeconds                = uint32(3600)
+	claimLeaseSeconds = uint32(3600)
+	// Leave at least five minutes between the largest operation plus the
+	// largest configured safety margin and the fixed one-hour claim lease.
+	maximumOperationSeconds          = uint32(3000)
 	maximumApproval                  = 24 * time.Hour
 	digestDomain                     = "kaiba.provisioning.operator-workflow.v1alpha1"
 	developmentRollbackStatus        = "rollback_unimplemented"
@@ -294,8 +297,8 @@ func buildDraft(input DraftInput, fenceEpoch uint64) (plancompiler.Draft, error)
 		return plancompiler.Draft{}, fmt.Errorf("%w: exactly seven authorization IDs and duration budgets are required", ErrInvalidInput)
 	}
 	for index, seconds := range input.MaximumSeconds {
-		if seconds == 0 || seconds >= claimLeaseSeconds {
-			return plancompiler.Draft{}, fmt.Errorf("%w: maximum duration %d must be between 1 and %d seconds", ErrInvalidInput, index+1, claimLeaseSeconds-1)
+		if seconds == 0 || seconds > maximumOperationSeconds {
+			return plancompiler.Draft{}, fmt.Errorf("%w: maximum duration %d must be between 1 and %d seconds", ErrInvalidInput, index+1, maximumOperationSeconds)
 		}
 		maximum[index] = time.Duration(seconds) * time.Second
 		authorizationIDs[index] = input.AuthorizationIDs[index]

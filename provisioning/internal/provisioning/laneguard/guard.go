@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+var (
+	ErrOperationDeadline      = errors.New("operation maximum duration exceeded")
+	ErrReconciliationDeadline = errors.New("reconciliation observation budget exceeded")
+)
+
 // Hardware is the only component allowed to translate a typed operation into
 // target-facing behavior. Implementations must use Config's fixed resources
 // and build-time-pinned artifacts.
@@ -136,6 +141,8 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	if !LeaseCoversOperation(current, request.ClaimExpiresAt, operation.MaximumDuration, guard.config.LeaseSafetyMargin) {
 		return Attempt{}, ErrLeaseInvalid
 	}
+	operationCtx, cancelOperation := context.WithTimeoutCause(ctx, operation.MaximumDuration, ErrOperationDeadline)
+	defer cancelOperation()
 	key := attemptKey(plan, operation.Sequence)
 	existing, found, err := guard.store.Get(key)
 	if err != nil {
@@ -169,8 +176,11 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	if err != nil {
 		return Attempt{}, err
 	}
-	observation, err := guard.observeBoundTarget(ctx, plan.TargetFingerprint, preAction)
+	observation, err := guard.observeBoundTarget(operationCtx, plan.TargetFingerprint, preAction)
 	if err != nil {
+		return Attempt{}, errors.Join(err, context.Cause(operationCtx))
+	}
+	if err := context.Cause(operationCtx); err != nil {
 		return Attempt{}, err
 	}
 	// Direct observation may include bounded device waits and, once the manual
@@ -206,8 +216,9 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	if err != nil {
 		return Attempt{}, err
 	}
-	result, executeErr := guard.hardware.Execute(ctx, guard.config, executionAction)
+	result, executeErr := guard.hardware.Execute(operationCtx, guard.config, executionAction)
 	transitionErr := guard.validateBootTransitionOutcome(executionAction, result.BootTransition, executeErr == nil)
+	executeErr = errors.Join(executeErr, context.Cause(operationCtx))
 	if executeErr != nil {
 		if transitionErr == nil {
 			attempt.ExecutionTransition = result.BootTransition
@@ -235,7 +246,8 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	if err != nil {
 		return attempt, err
 	}
-	postObservation, observeErr := guard.observeBoundTarget(ctx, plan.TargetFingerprint, postAction)
+	postObservation, observeErr := guard.observeBoundTarget(operationCtx, plan.TargetFingerprint, postAction)
+	observeErr = errors.Join(observeErr, context.Cause(operationCtx))
 	if postObservation.BootTransition != (BootTransitionOutcome{}) {
 		attempt.PostObservationTransition = postObservation.BootTransition
 	}
@@ -278,6 +290,10 @@ func (guard *Guard) reconcileLocked(ctx context.Context, request ReconcileReques
 	if !LeaseCoversOperation(current, request.Claim.ExpiresAt, ReconciliationObservationBudget, guard.config.LeaseSafetyMargin) {
 		return Attempt{}, ErrLeaseInvalid
 	}
+	reconciliationCtx, cancelReconciliation := context.WithTimeoutCause(
+		ctx, ReconciliationObservationBudget, ErrReconciliationDeadline,
+	)
+	defer cancelReconciliation()
 	key := attemptKey(plan, operation.Sequence)
 	attempt, found, err := guard.store.Get(key)
 	if err != nil {
@@ -310,7 +326,8 @@ func (guard *Guard) reconcileLocked(ctx context.Context, request ReconcileReques
 	if err != nil {
 		return Attempt{}, err
 	}
-	observation, err := guard.observeBoundTarget(ctx, plan.TargetFingerprint, reconciliationAction)
+	observation, err := guard.observeBoundTarget(reconciliationCtx, plan.TargetFingerprint, reconciliationAction)
+	err = errors.Join(err, context.Cause(reconciliationCtx))
 	if observation.BootTransition != (BootTransitionOutcome{}) {
 		attempt.ReconciliationTransition = observation.BootTransition
 	}

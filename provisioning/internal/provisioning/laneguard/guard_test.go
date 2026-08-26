@@ -64,11 +64,13 @@ type fakeHardware struct {
 	after           map[Operation]DirectState
 	beforeObserve   func()
 	beforeExecute   func(Operation)
+	waitObserve     bool
+	waitExecute     bool
 	mutateOutcome   func(HardwareAction, *BootTransitionOutcome)
 	replaceTarget   bool
 }
 
-func (hardware *fakeHardware) Observe(_ context.Context, config Config, action HardwareAction) (Observation, error) {
+func (hardware *fakeHardware) Observe(ctx context.Context, config Config, action HardwareAction) (Observation, error) {
 	hardware.mu.Lock()
 	hardware.observeCount++
 	hardware.transitionCount++
@@ -80,7 +82,12 @@ func (hardware *fakeHardware) Observe(_ context.Context, config Config, action H
 	observation := hardware.observation
 	hardwareErr := hardware.observeErr
 	mutate := hardware.mutateOutcome
+	wait := hardware.waitObserve
 	hardware.mu.Unlock()
+	if wait {
+		<-ctx.Done()
+		return Observation{}, ctx.Err()
+	}
 	outcome, transitionErr := recordFakeBootTransition(hardware.journal, config, action, ordinal, hardwareErr != nil)
 	if mutate != nil {
 		mutate(action, &outcome)
@@ -89,7 +96,7 @@ func (hardware *fakeHardware) Observe(_ context.Context, config Config, action H
 	return observation, errors.Join(hardwareErr, transitionErr)
 }
 
-func (hardware *fakeHardware) Execute(_ context.Context, config Config, action HardwareAction) (OperationResult, error) {
+func (hardware *fakeHardware) Execute(ctx context.Context, config Config, action HardwareAction) (OperationResult, error) {
 	hardware.mu.Lock()
 	hardware.executeCount++
 	hardware.transitionCount++
@@ -104,9 +111,14 @@ func (hardware *fakeHardware) Execute(_ context.Context, config Config, action H
 	}
 	err := hardware.executeErr
 	mutate := hardware.mutateOutcome
+	wait := hardware.waitExecute
 	hardware.mu.Unlock()
 	if callback != nil {
 		callback(action.Operation)
+	}
+	if wait {
+		<-ctx.Done()
+		return OperationResult{}, ctx.Err()
 	}
 	outcome, transitionErr := recordFakeBootTransition(hardware.journal, config, action, ordinal, err != nil)
 	if mutate != nil {
@@ -988,6 +1000,63 @@ func TestGuardRechecksAuthorityAfterDirectPrestateObservation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGuardEnforcesReviewedOperationDeadline(t *testing.T) {
+	newDeadlineGuard := func(t *testing.T, waitObserve, waitExecute bool) (*Guard, *fakeHardware, *MemoryStore, Plan, time.Time) {
+		t.Helper()
+		config := testConfig()
+		plan := testPlanBody()
+		plan.Operations[0].MaximumDuration = 20 * time.Millisecond
+		plan = deriveTestPlan(plan)
+		now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+		store := NewMemoryStore()
+		hardware := &fakeHardware{
+			journal: store, waitObserve: waitObserve, waitExecute: waitExecute,
+			observation: Observation{
+				EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+				TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+			},
+		}
+		guard, err := NewWithClock(config, hardware, store, fakeClock{now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := guard.LoadPlan(context.Background(), plan); err != nil {
+			t.Fatal(err)
+		}
+		return guard, hardware, store, plan, now
+	}
+
+	t.Run("pre-observation", func(t *testing.T) {
+		guard, hardware, store, plan, now := newDeadlineGuard(t, true, false)
+		attempt, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(time.Minute)))
+		if !errors.Is(err, ErrOperationDeadline) || attempt != (Attempt{}) {
+			t.Fatalf("deadline result = %#v, %v", attempt, err)
+		}
+		if hardware.executeCount != 0 {
+			t.Fatalf("deadline-crossing pre-observation reached execution %d times", hardware.executeCount)
+		}
+		if _, found, getErr := store.Get(attemptKey(plan, 1)); getErr != nil || found {
+			t.Fatalf("pre-execution deadline created an attempt: found=%t err=%v", found, getErr)
+		}
+	})
+
+	t.Run("execution", func(t *testing.T) {
+		guard, hardware, store, plan, now := newDeadlineGuard(t, false, true)
+		attempt, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(time.Minute)))
+		if !errors.Is(err, ErrOperationDeadline) || !errors.Is(err, ErrReconciliationRequired) ||
+			attempt.Status != AttemptUncertain {
+			t.Fatalf("deadline result = %#v, %v", attempt, err)
+		}
+		if hardware.executeCount != 1 {
+			t.Fatalf("execution count = %d", hardware.executeCount)
+		}
+		durable, found, getErr := store.Get(attemptKey(plan, 1))
+		if getErr != nil || !found || durable.Status != AttemptUncertain {
+			t.Fatalf("durable deadline result = %#v, found=%t err=%v", durable, found, getErr)
+		}
+	})
 }
 
 func TestGuardRejectsExpiredClaimWhenDurationArithmeticWouldOverflow(t *testing.T) {

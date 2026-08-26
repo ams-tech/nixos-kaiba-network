@@ -427,7 +427,11 @@ in
           RuntimeDirectoryMode = "0750";
           WorkingDirectory = stateRoot;
           UMask = "0077";
-          TimeoutStartSec = "10min";
+          # Reviewed operation budgets are at most 50 minutes. The guard
+          # enforces that budget; this outer bound leaves time for authority
+          # setup and cancellation-independent safe relay release plus
+          # terminal journal persistence.
+          TimeoutStartSec = "65min";
           # The adapter gets a 30-second cancellation-independent window to
           # release the relay and prove USB disappearance. Give systemd enough
           # margin to persist the resulting terminal transition as well.

@@ -185,6 +185,19 @@ let
     services.kaiba-provisioning-authority-bridge.controlPort = 0;
   };
 
+  provisioningAuthorityBridgeInvalidLeaseMargins =
+    map
+      (
+        leaseSafetyMarginSeconds:
+        lib.recursiveUpdate provisioningAuthorityBridge {
+          services.kaiba-provisioning-authority-bridge = { inherit leaseSafetyMarginSeconds; };
+        }
+      )
+      [
+        0
+        301
+      ];
+
   provisioningAuthorityBridgeEquivalentOrigins = lib.recursiveUpdate provisioningAuthorityBridge {
     services.kaiba-provisioning-authority-bridge = {
       controlAddress = "::1";
@@ -497,6 +510,8 @@ let
     && lib.hasInfix ''"--socket" "/run/kaiba-provision-authority-bridge/bridge.sock"'' authorityBridgeService.ExecStart
     && lib.hasInfix ''"--control-url" "https://192.0.2.10:8091"'' authorityBridgeService.ExecStart
     && lib.hasInfix ''"--audit-url" "https://192.0.2.11:8092"'' authorityBridgeService.ExecStart
+    && authorityBridgeConfig.services.kaiba-provisioning-authority-bridge.leaseSafetyMarginSeconds == 30
+    && lib.hasInfix ''"--lease-safety-margin" "30s"'' authorityBridgeService.ExecStart
     && lib.hasInfix ''"--tls-cert" "%d/client-cert"'' authorityBridgeService.ExecStart
     && lib.hasInfix ''"--tls-key" "%d/client-key"'' authorityBridgeService.ExecStart
     && lib.hasInfix ''"--control-server-ca" "%d/control-server-ca"'' authorityBridgeService.ExecStart
@@ -641,6 +656,7 @@ let
     && builtins.elem
       "d /var/lib/kaiba-provision-lane-guard/attempts 0700 root kaiba-provision-operator -"
       laneGuardConfig.systemd.tmpfiles.rules
+    && laneGuardService.TimeoutStartSec == "65min"
     && laneGuardService.TimeoutStopSec == "45s"
     && laneGuardService.DevicePolicy == "closed"
     && builtins.elem "/dev/gpiochip0 rw" laneGuardService.DeviceAllow
@@ -707,6 +723,14 @@ assert lib.assertMsg (
 assert lib.assertMsg (
   !assertionsPass provisioningAuthorityBridgeZeroPort
 ) "an authority-bridge endpoint using TCP port zero was accepted";
+assert lib.assertMsg (
+  builtins.all (
+    module:
+    !(builtins.tryEval (
+      (evaluateConfig module).services.kaiba-provisioning-authority-bridge.leaseSafetyMarginSeconds
+    )).success
+  ) provisioningAuthorityBridgeInvalidLeaseMargins
+) "an authority-bridge lease safety margin outside 1 through 300 seconds was accepted";
 assert lib.assertMsg (
   !assertionsPass provisioningAuthorityBridgeEquivalentOrigins
 ) "equivalent IPv6 spellings of one authority origin were accepted";

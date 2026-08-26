@@ -376,7 +376,8 @@ func TestDraftInputRejectsAmbiguousOrUnexecutableCampaignValues(t *testing.T) {
 		"short duration list":      func(input *DraftInput) { input.MaximumSeconds = input.MaximumSeconds[:6] },
 		"extra duration":           func(input *DraftInput) { input.MaximumSeconds = append(input.MaximumSeconds, 60) },
 		"duplicate authorization":  func(input *DraftInput) { input.AuthorizationIDs[6] = input.AuthorizationIDs[0] },
-		"full claim duration":      func(input *DraftInput) { input.MaximumSeconds[0] = claimLeaseSeconds },
+		"zero duration":            func(input *DraftInput) { input.MaximumSeconds[0] = 0 },
+		"over executable maximum":  func(input *DraftInput) { input.MaximumSeconds[0] = maximumOperationSeconds + 1 },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -386,6 +387,14 @@ func TestDraftInputRejectsAmbiguousOrUnexecutableCampaignValues(t *testing.T) {
 				t.Fatalf("PrepareDraft() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestDraftInputAcceptsMaximumExecutableOperationBudget(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	fixture.input.MaximumSeconds[0] = maximumOperationSeconds
+	if _, _, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control); err != nil {
+		t.Fatalf("PrepareDraft() rejected maximum executable budget: %v", err)
 	}
 }
 
