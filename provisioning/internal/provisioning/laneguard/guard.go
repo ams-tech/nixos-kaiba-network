@@ -645,6 +645,12 @@ func makeHardwareAction(plan Plan, operation OperationSpec, phase HardwarePhase,
 }
 
 func attemptKey(plan Plan, sequence uint32) string {
+	return AttemptJournalKey(plan, sequence)
+}
+
+// AttemptJournalKey is the single deterministic identity used by the guard's
+// execute-once journal and by its immutable receipt publisher.
+func AttemptJournalKey(plan Plan, sequence uint32) string {
 	return fmt.Sprintf("%s/%s/%d/%d", plan.TransactionID, plan.PlanDigest, plan.FenceEpoch, sequence)
 }
 

@@ -59,12 +59,21 @@ type operatorPromptServer interface {
 	io.Closer
 }
 
+type laneJournal interface {
+	laneguard.Journal
+	io.Closer
+}
+
 var (
 	lookupOperatorGroup  = user.LookupGroup
 	listenOperatorPrompt = func(config operatorprompt.Config) (operatorPromptServer, error) {
 		return operatorprompt.Listen(config)
 	}
+	openLaneJournal = func(path string) (laneJournal, error) {
+		return laneguard.NewFileStore(path)
+	}
 	validateAttemptDestination           = evidencefile.ValidateTrustedNewPath
+	readAttemptEvidence                  = evidencefile.ReadTrustedExisting
 	writeAttemptEvidence                 = evidencefile.WriteCanonicalNewTrusted
 	commandOutput              io.Writer = os.Stdout
 )
@@ -225,9 +234,6 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 			return fmt.Errorf("validate authenticated plan and operation request: %w", err)
 		}
 	}
-	if *mode == "execute" && !time.Now().UTC().Before(plan.ApprovalExpiresAt) {
-		return laneguard.ErrApprovalExpired
-	}
 	if plan.Release != compiledRelease {
 		return fmt.Errorf("%w: approved release differs from the immutable lane-guard build", laneguard.ErrPlanMismatch)
 	}
@@ -235,12 +241,44 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("derive immutable attempt destination: %w", err)
 	}
-	if err := validateAttemptDestination(attemptPath); err != nil {
-		return fmt.Errorf("validate immutable attempt destination before physical I/O: %w", err)
-	}
 	operatorGID, err := resolveOperatorGID(*operatorGroup)
 	if err != nil {
 		return err
+	}
+	store, err := openLaneJournal(*journalPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, store.Close())
+	}()
+	attemptKey := laneguard.AttemptJournalKey(plan, originalRequest.Sequence)
+	durable, found, err := store.Get(attemptKey)
+	if err != nil {
+		return fmt.Errorf("read durable attempt before physical I/O: %w", err)
+	}
+	if found && !attemptMatchesAuthenticatedPlan(durable, plan, originalRequest.Sequence) {
+		return fmt.Errorf("%w: durable attempt differs from the authenticated operation", laneguard.ErrPlanMismatch)
+	}
+	destinationExists, err := inspectAttemptDestination(attemptPath, durable, found)
+	if err != nil {
+		return err
+	}
+	if destinationExists {
+		return publishDurableAttempt(attemptPath, durable, destinationExists, attemptStatusError(*mode, durable.Status))
+	}
+	if found && isPublishableAttemptStatus(durable.Status) &&
+		(*mode == "execute" || durable.Status != laneguard.AttemptUncertain) {
+		return publishDurableAttempt(attemptPath, durable, false, attemptStatusError(*mode, durable.Status))
+	}
+	if found && durable.Status == laneguard.AttemptStarted && *mode == "execute" {
+		return errors.Join(
+			laneguard.ErrReconciliationRequired,
+			fmt.Errorf("durable attempt %q remains started; immutable receipt was not published", attemptKey),
+		)
+	}
+	if *mode == "execute" && !time.Now().UTC().Before(plan.ApprovalExpiresAt) {
+		return laneguard.ErrApprovalExpired
 	}
 	initialMode := physicalrpi5.ModeFresh
 	if *mode == "reconcile" {
@@ -253,13 +291,6 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		InitialMode: initialMode, ExpectedCustomerKeyHash: expectedCustomerKeyHash,
 		ExpectedEEPROMHash: expectedEEPROMHash, ExpectedBootImageDigest: expectedBootImageDigest,
 	}
-	store, err := laneguard.NewFileStore(*journalPath)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, store.Close())
-	}()
 	promptServer, err := listenOperatorPrompt(operatorprompt.Config{
 		SocketPath: *operatorSocket, AllowedPrimaryGID: operatorGID,
 	})
@@ -289,33 +320,139 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 			return fmt.Errorf("load approved plan into fixed lane: %w", err)
 		}
 	}
-	var attempt laneguard.Attempt
 	if *mode == "reconcile" {
-		attempt, err = guard.ReconcilePlan(ctx, plan, reconcileRequest)
+		_, err = guard.ReconcilePlan(ctx, plan, reconcileRequest)
 	} else {
-		attempt, err = guard.Execute(ctx, executeRequest)
+		_, err = guard.Execute(ctx, executeRequest)
 	}
-	if attempt.Key != "" {
-		encoded, encodeErr := json.Marshal(attempt)
-		if encodeErr != nil {
-			return errors.Join(err, fmt.Errorf("encode canonical attempt evidence: %w", encodeErr))
-		}
-		encoded = append(encoded, '\n')
-		if writeErr := writeAttemptEvidence(attemptPath, encoded); writeErr != nil {
-			return errors.Join(err, fmt.Errorf("publish immutable attempt evidence: %w", writeErr))
-		}
-		summary := struct {
-			Path   string                  `json:"path"`
-			Status laneguard.AttemptStatus `json:"status"`
-			Key    string                  `json:"key"`
-		}{Path: attemptPath, Status: attempt.Status, Key: attempt.Key}
-		encoder := json.NewEncoder(commandOutput)
-		encoder.SetEscapeHTML(false)
-		if encodeErr := encoder.Encode(summary); encodeErr != nil {
-			return errors.Join(err, fmt.Errorf("encode attempt publication summary: %w", encodeErr))
+	durable, found, reloadErr := store.Get(attemptKey)
+	if reloadErr != nil {
+		return errors.Join(err, fmt.Errorf("reload durable attempt after lane operation; receipt not published: %w", reloadErr))
+	}
+	if !found {
+		return errors.Join(err, fmt.Errorf("durable attempt %q is missing after lane operation; receipt not published", attemptKey))
+	}
+	if !attemptMatchesAuthenticatedPlan(durable, plan, originalRequest.Sequence) {
+		return errors.Join(err, fmt.Errorf("%w: reloaded durable attempt differs from the authenticated operation; receipt not published", laneguard.ErrPlanMismatch))
+	}
+	if !isPublishableAttemptStatus(durable.Status) {
+		return errors.Join(err, fmt.Errorf(
+			"durable attempt %q has non-terminal status %q after lane operation; receipt not published",
+			attemptKey, durable.Status,
+		))
+	}
+	return publishDurableAttempt(attemptPath, durable, false, err)
+}
+
+const maximumAttemptEvidenceBytes = 1024 * 1024
+
+func attemptMatchesAuthenticatedPlan(attempt laneguard.Attempt, plan laneguard.Plan, sequence uint32) bool {
+	if sequence == 0 || int(sequence) > len(plan.Operations) {
+		return false
+	}
+	operation := plan.Operations[sequence-1]
+	return attempt.SchemaVersion == laneguard.AttemptSchemaVersion &&
+		attempt.Key == laneguard.AttemptJournalKey(plan, sequence) &&
+		attempt.TransactionID == plan.TransactionID && attempt.PlanDigest == plan.PlanDigest &&
+		attempt.TargetFingerprint == plan.TargetFingerprint && attempt.FenceEpoch == plan.FenceEpoch &&
+		attempt.ApprovalID == plan.ApprovalID && attempt.IntentReceipt == plan.IntentReceipt &&
+		attempt.IntentSequence == plan.IntentSequence && attempt.Sequence == sequence &&
+		attempt.Operation == operation.Operation && attempt.OperationDigest == operation.OperationDigest
+}
+
+func isPublishableAttemptStatus(status laneguard.AttemptStatus) bool {
+	switch status {
+	case laneguard.AttemptVerified, laneguard.AttemptUncertain,
+		laneguard.AttemptConfirmedNotApplied, laneguard.AttemptQuarantined:
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalAttemptEvidence(attempt laneguard.Attempt) ([]byte, error) {
+	encoded, err := json.Marshal(attempt)
+	if err != nil {
+		return nil, fmt.Errorf("encode canonical durable attempt evidence: %w", err)
+	}
+	return append(encoded, '\n'), nil
+}
+
+// inspectAttemptDestination distinguishes a genuinely new destination from a
+// prior successful (or link-complete) publication. An existing pathname is
+// accepted only when the journal already holds the exact publishable attempt
+// and the trusted immutable file contains its canonical bytes.
+func inspectAttemptDestination(path string, durable laneguard.Attempt, found bool) (bool, error) {
+	validationErr := validateAttemptDestination(path)
+	if validationErr == nil {
+		return false, nil
+	}
+	if !found || !isPublishableAttemptStatus(durable.Status) {
+		return false, errors.Join(
+			fmt.Errorf("validate immutable attempt destination before physical I/O: %w", validationErr),
+			errors.New("existing receipt cannot be reused without a matching durable publishable attempt"),
+		)
+	}
+	expected, err := canonicalAttemptEvidence(durable)
+	if err != nil {
+		return false, err
+	}
+	existing, readErr := readAttemptEvidence(path, maximumAttemptEvidenceBytes)
+	if readErr != nil {
+		return false, errors.Join(
+			fmt.Errorf("validate immutable attempt destination before physical I/O: %w", validationErr),
+			fmt.Errorf("read existing immutable attempt evidence: %w", readErr),
+		)
+	}
+	if !bytes.Equal(existing, expected) {
+		return false, errors.Join(
+			fmt.Errorf("validate immutable attempt destination before physical I/O: %w", validationErr),
+			errors.New("existing immutable attempt evidence differs from the durable journal record"),
+		)
+	}
+	return true, nil
+}
+
+func publishDurableAttempt(path string, attempt laneguard.Attempt, alreadyPublished bool, operationErr error) error {
+	encoded, err := canonicalAttemptEvidence(attempt)
+	if err != nil {
+		return errors.Join(operationErr, err)
+	}
+	if !alreadyPublished {
+		if writeErr := writeAttemptEvidence(path, encoded); writeErr != nil {
+			return errors.Join(operationErr, fmt.Errorf("publish immutable durable attempt evidence: %w", writeErr))
 		}
 	}
-	return err
+	summary := struct {
+		Path             string                  `json:"path"`
+		Status           laneguard.AttemptStatus `json:"status"`
+		Key              string                  `json:"key"`
+		AlreadyPublished bool                    `json:"already_published"`
+	}{Path: path, Status: attempt.Status, Key: attempt.Key, AlreadyPublished: alreadyPublished}
+	encoder := json.NewEncoder(commandOutput)
+	encoder.SetEscapeHTML(false)
+	if encodeErr := encoder.Encode(summary); encodeErr != nil {
+		return errors.Join(operationErr, fmt.Errorf("encode attempt publication summary: %w", encodeErr))
+	}
+	return operationErr
+}
+
+func attemptStatusError(mode string, status laneguard.AttemptStatus) error {
+	switch status {
+	case laneguard.AttemptVerified:
+		return nil
+	case laneguard.AttemptUncertain:
+		return laneguard.ErrReconciliationRequired
+	case laneguard.AttemptConfirmedNotApplied:
+		if mode == "execute" {
+			return laneguard.ErrConfirmedNotApplied
+		}
+		return nil
+	case laneguard.AttemptQuarantined:
+		return laneguard.ErrQuarantined
+	default:
+		return fmt.Errorf("durable attempt has non-publishable status %q", status)
+	}
 }
 
 const attemptPublicationIdentitySchemaVersion = "kaiba.provisioning.lane-attempt-publication/v1alpha1"
