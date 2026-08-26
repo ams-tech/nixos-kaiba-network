@@ -266,10 +266,13 @@ type MutationContext struct {
 
 // CurrentClaimPreflightRequest is a receipt-free, read-only request to verify
 // that an exact mutation context still names the server's current unexpired
-// claim. It deliberately carries no operation selector or mutation input.
+// claim and, when supplied, its exact current approval. It deliberately
+// carries no operation selector or mutation input.
 type CurrentClaimPreflightRequest struct {
 	SchemaVersion string `json:"schema_version"`
 	MutationContext
+	ApprovalID string `json:"approval_id,omitempty"`
+	PlanDigest string `json:"plan_digest,omitempty"`
 }
 
 type BindTargetRequest struct {

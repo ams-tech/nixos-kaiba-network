@@ -253,6 +253,71 @@ func TestCurrentClaimPreflightRejectsNonCurrentMutationContext(t *testing.T) {
 	}
 }
 
+func TestCurrentClaimPreflightOptionallyRequiresTheExactCurrentApproval(t *testing.T) {
+	store := &MemoryStore{}
+	fixture := newTestFixture(t, store)
+	transaction := fixture.createClaimBindApprove(developmentCampaignNames())
+	var err error
+	transaction, err = fixture.service.RenewClaim(context.Background(), RenewClaimRequest{
+		SchemaVersion: RenewClaimRequestSchemaVersion, IdempotencyKey: "renew-for-approval-preflight",
+		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch, LeaseDurationSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := CurrentClaimPreflightRequest{
+		SchemaVersion:   CurrentClaimPreflightRequestSchemaVersion,
+		MutationContext: contextFor(transaction),
+		ApprovalID:      transaction.Approval.ID,
+		PlanDigest:      transaction.Approval.PlanDigest,
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked, err := fixture.service.PreflightCurrentClaim(context.Background(), request)
+	if err != nil {
+		t.Fatalf("preflight exact current approval: %v", err)
+	}
+	if checked.ResourceVersion != transaction.ResourceVersion || checked.Approval == nil ||
+		checked.Approval.ID != transaction.Approval.ID || checked.Approval.PlanDigest != transaction.Approval.PlanDigest {
+		t.Fatalf("approval-bound preflight = %#v, want exact transaction", checked)
+	}
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("approval-bound current-claim preflight changed durable state")
+	}
+
+	for name, mutate := range map[string]func(*CurrentClaimPreflightRequest){
+		"approval without plan": func(value *CurrentClaimPreflightRequest) { value.PlanDigest = "" },
+		"plan without approval": func(value *CurrentClaimPreflightRequest) {
+			value.ApprovalID = ""
+		},
+		"approval mismatch": func(value *CurrentClaimPreflightRequest) { value.ApprovalID = "approval-other" },
+		"plan mismatch":     func(value *CurrentClaimPreflightRequest) { value.PlanDigest = digest("f") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := request
+			mutate(&changed)
+			if _, err := fixture.service.PreflightCurrentClaim(context.Background(), changed); err == nil {
+				t.Fatal("invalid approval-bound preflight was accepted")
+			}
+		})
+	}
+
+	fixture.now = transaction.Approval.ExpiresAt
+	if !transaction.ActiveClaim.ExpiresAt.After(fixture.now) {
+		t.Fatal("test fixture claim did not outlive the approval")
+	}
+	if _, err := fixture.service.PreflightCurrentClaim(context.Background(), request); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("expired approval with live claim error = %v, want ErrIllegalTransition", err)
+	}
+}
+
 func TestApprovalPreflightIsReadOnlyAndAcceptsOnlyExactStateOrReplay(t *testing.T) {
 	fixture := newTestFixture(t, &MemoryStore{})
 	operations := developmentCampaignNames()

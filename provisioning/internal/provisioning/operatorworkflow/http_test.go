@@ -240,6 +240,7 @@ func TestHTTPControlClientCurrentClaimPreflightUsesFixedTypedOperation(t *testin
 			TransactionID: "transaction-1", ExpectedResourceVersion: 5,
 			ClaimID: "claim-1", FenceEpoch: 3,
 		},
+		ApprovalID: "approval-1", PlanDigest: testDigest("d"),
 	}
 	responseBody, err := json.Marshal(controlplane.Transaction{
 		SchemaVersion: controlplane.TransactionSchemaVersion, ID: want.TransactionID, ResourceVersion: 5,
@@ -266,7 +267,10 @@ func TestHTTPControlClientCurrentClaimPreflightUsesFixedTypedOperation(t *testin
 		if err := json.Unmarshal(command.Request, &fields); err != nil {
 			t.Fatal(err)
 		}
-		for _, field := range []string{"schema_version", "transaction_id", "expected_resource_version", "claim_id", "fence_epoch"} {
+		for _, field := range []string{
+			"schema_version", "transaction_id", "expected_resource_version", "claim_id", "fence_epoch",
+			"approval_id", "plan_digest",
+		} {
 			delete(fields, field)
 		}
 		if len(fields) != 0 {

@@ -126,8 +126,15 @@ func (s *Service) PreflightCurrentClaim(_ context.Context, request CurrentClaimP
 	if transaction.ResourceVersion != request.ExpectedResourceVersion {
 		return Transaction{}, fmt.Errorf("%w: got %d, want %d", ErrVersionConflict, transaction.ResourceVersion, request.ExpectedResourceVersion)
 	}
-	if _, err := requireCurrentClaim(&transaction, request.ClaimID, request.FenceEpoch, s.clock().UTC(), ""); err != nil {
+	now := s.clock().UTC()
+	claim, err := requireCurrentClaim(&transaction, request.ClaimID, request.FenceEpoch, now, "")
+	if err != nil {
 		return Transaction{}, err
+	}
+	if request.ApprovalID != "" {
+		if _, err := requireCurrentApproval(&transaction, claim, request.ApprovalID, request.PlanDigest, now); err != nil {
+			return Transaction{}, err
+		}
 	}
 	return cloneTransaction(transaction)
 }

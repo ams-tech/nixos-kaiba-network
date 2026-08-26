@@ -174,6 +174,10 @@ type approvalPreflighter interface {
 	PreflightApproval(context.Context, controlplane.ApprovalPreflightRequest) (controlplane.Transaction, error)
 }
 
+type currentClaimPreflighter interface {
+	PreflightCurrentClaim(context.Context, controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error)
+}
+
 type intentRecorder interface {
 	RecordIntent(context.Context, controlplane.RecordIntentRequest) (controlplane.Transaction, error)
 }
@@ -778,6 +782,15 @@ func ApplyIntent(ctx context.Context, proposal IntentProposal, current transacti
 	if err := proposalMatchesCurrentIntent(proposal, transaction); err != nil {
 		return controlplane.Transaction{}, err
 	}
+	transaction, err = preflightCurrentClaimBeforeAudit(
+		ctx, current, transaction, proposal.ExpectedResourceVersion, proposal.ApprovalID, proposal.DraftSnapshot.PlanDigest,
+	)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("preflight current claim before intent audit: %w", err)
+	}
+	if err := proposalMatchesCurrentIntent(proposal, transaction); err != nil {
+		return controlplane.Transaction{}, err
+	}
 	auditRequest, _, err := proposal.requests(validPlaceholderDigest)
 	if err != nil {
 		return controlplane.Transaction{}, err
@@ -900,6 +913,13 @@ func ApplyEvidence(ctx context.Context, proposal EvidenceProposal, current trans
 	if err := proposalMatchesCurrentEvidence(proposal, transaction); err != nil {
 		return controlplane.Transaction{}, err
 	}
+	transaction, err = preflightCurrentClaimBeforeAudit(ctx, current, transaction, proposal.ExpectedResourceVersion, "", "")
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("preflight current claim before evidence audit: %w", err)
+	}
+	if err := proposalMatchesCurrentEvidence(proposal, transaction); err != nil {
+		return controlplane.Transaction{}, err
+	}
 	auditRequest, _, err := proposal.requests(validPlaceholderDigest)
 	if err != nil {
 		return controlplane.Transaction{}, err
@@ -996,6 +1016,19 @@ func ApplySecurityApplied(ctx context.Context, proposal SecurityAppliedProposal,
 	}
 	auditRequest, _, err := proposal.requests(transaction, validPlaceholderDigest)
 	if err != nil {
+		return controlplane.Transaction{}, err
+	}
+	approvalID := ""
+	if transaction.Approval != nil {
+		approvalID = transaction.Approval.ID
+	}
+	transaction, err = preflightCurrentClaimBeforeAudit(
+		ctx, current, transaction, proposal.ExpectedResourceVersion, approvalID, proposal.DraftSnapshot.PlanDigest,
+	)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("preflight current claim before security-applied audit: %w", err)
+	}
+	if err := proposalMatchesCurrentSecurityApplied(proposal, transaction); err != nil {
 		return controlplane.Transaction{}, err
 	}
 	receipt, err := audit.Append(ctx, auditRequest)
@@ -1399,6 +1432,13 @@ func ApplyReconciliation(ctx context.Context, proposal ReconciliationProposal, c
 	transaction, err := current.GetTransaction(ctx, proposal.DraftSnapshot.TransactionID)
 	if err != nil {
 		return controlplane.Transaction{}, fmt.Errorf("read transaction before reconciliation append: %w", err)
+	}
+	if err := proposalMatchesCurrentReconciliation(proposal, transaction); err != nil {
+		return controlplane.Transaction{}, err
+	}
+	transaction, err = preflightCurrentClaimBeforeAudit(ctx, current, transaction, proposal.ExpectedResourceVersion, "", "")
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("preflight current claim before reconciliation audit: %w", err)
 	}
 	if err := proposalMatchesCurrentReconciliation(proposal, transaction); err != nil {
 		return controlplane.Transaction{}, err
@@ -2104,6 +2144,40 @@ func matchDraftTransaction(snapshot laneguard.Plan, transaction controlplane.Tra
 		return fmt.Errorf("%w: control transaction does not match the authority-free draft", ErrStateMismatch)
 	}
 	return nil
+}
+
+// preflightCurrentClaimBeforeAudit uses the control plane's clock to reject an
+// already-expired claim before a new audit event is appended. Exact committed
+// replays deliberately skip this check: they reuse the proposal's original
+// idempotent audit and control requests and create no new transition.
+func preflightCurrentClaimBeforeAudit(
+	ctx context.Context,
+	current transactionReader,
+	transaction controlplane.Transaction,
+	expectedResourceVersion uint64,
+	approvalID string,
+	planDigest string,
+) (controlplane.Transaction, error) {
+	if transaction.ResourceVersion != expectedResourceVersion {
+		return transaction, nil
+	}
+	preflight, ok := current.(currentClaimPreflighter)
+	if !ok {
+		return controlplane.Transaction{}, fmt.Errorf("%w: current control client has no server-time claim preflight", ErrInvalidInput)
+	}
+	checked, err := preflight.PreflightCurrentClaim(ctx, controlplane.CurrentClaimPreflightRequest{
+		SchemaVersion:   controlplane.CurrentClaimPreflightRequestSchemaVersion,
+		MutationContext: mutationContext(transaction),
+		ApprovalID:      approvalID,
+		PlanDigest:      planDigest,
+	})
+	if err != nil {
+		return controlplane.Transaction{}, err
+	}
+	if digestJSON("current-claim-preflight-transaction", checked) != digestJSON("current-claim-preflight-transaction", transaction) {
+		return controlplane.Transaction{}, fmt.Errorf("%w: current-claim preflight returned different transaction state", ErrStateMismatch)
+	}
+	return checked, nil
 }
 
 func mutationContext(transaction controlplane.Transaction) controlplane.MutationContext {

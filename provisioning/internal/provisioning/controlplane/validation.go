@@ -73,7 +73,16 @@ func validateCurrentClaimPreflightRequest(request CurrentClaimPreflightRequest) 
 	if request.SchemaVersion != CurrentClaimPreflightRequestSchemaVersion {
 		return invalid("schema_version is unsupported")
 	}
-	return validateMutationContext(request.MutationContext)
+	if err := validateMutationContext(request.MutationContext); err != nil {
+		return err
+	}
+	if (request.ApprovalID == "") != (request.PlanDigest == "") {
+		return invalid("approval_id and plan_digest must either both be absent or both be present")
+	}
+	if request.ApprovalID != "" && (!validIdentifier(request.ApprovalID) || !validDigest(request.PlanDigest)) {
+		return invalid("approval_id or plan_digest is invalid")
+	}
+	return nil
 }
 
 func validateTransferClaimRequest(request TransferClaimRequest) error {

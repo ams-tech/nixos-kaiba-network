@@ -798,6 +798,99 @@ func TestProposalResourceVersionsAreImmutableAcrossSameClaimRenewal(t *testing.T
 	})
 }
 
+func TestApplyTransitionsRejectServerExpiredClaimsBeforeAuthorityWrites(t *testing.T) {
+	for _, kind := range []string{"intent", "evidence", "security applied", "reconciliation"} {
+		t.Run(kind, func(t *testing.T) {
+			scenario := newApplyPreflightScenario(t, kind)
+			if scenario.transaction.ActiveClaim == nil {
+				t.Fatal("scenario has no active claim")
+			}
+			*scenario.fixture.clock = scenario.transaction.ActiveClaim.ExpiresAt
+			audit := &countingAudit{}
+			if _, err := scenario.applyCounting(scenario.fixture.control, audit); !errors.Is(err, controlplane.ErrLeaseExpired) {
+				t.Fatalf("Apply() at server-time claim expiry error = %v, want ErrLeaseExpired", err)
+			}
+			if audit.calls != 0 || scenario.controlCalls() != 0 {
+				t.Fatalf("expired claim crossed authority boundary: audit=%d control=%d", audit.calls, scenario.controlCalls())
+			}
+		})
+	}
+}
+
+func TestApprovalBoundApplyTransitionsRejectServerExpiredApprovalBeforeAuthorityWrites(t *testing.T) {
+	for _, kind := range []string{"intent", "security applied"} {
+		t.Run(kind, func(t *testing.T) {
+			scenario := newApplyPreflightScenario(t, kind)
+			approval := scenario.transaction.Approval
+			if approval == nil || scenario.transaction.ActiveClaim == nil ||
+				!scenario.transaction.ActiveClaim.ExpiresAt.After(approval.ExpiresAt) {
+				t.Fatal("scenario claim does not outlive its approval")
+			}
+			*scenario.fixture.clock = approval.ExpiresAt
+			audit := &countingAudit{}
+			if _, err := scenario.applyCounting(scenario.fixture.control, audit); !errors.Is(err, controlplane.ErrIllegalTransition) {
+				t.Fatalf("Apply() at server-time approval expiry error = %v, want ErrIllegalTransition", err)
+			}
+			if audit.calls != 0 || scenario.controlCalls() != 0 {
+				t.Fatalf("expired approval crossed authority boundary: audit=%d control=%d", audit.calls, scenario.controlCalls())
+			}
+		})
+	}
+}
+
+func TestApplyTransitionsRejectDifferentSameVersionPreflightStateBeforeAuthorityWrites(t *testing.T) {
+	for _, kind := range []string{"intent", "evidence", "security applied", "reconciliation"} {
+		t.Run(kind, func(t *testing.T) {
+			scenario := newApplyPreflightScenario(t, kind)
+			changed := cloneControlTransaction(t, scenario.transaction)
+			changed.UpdatedAt = changed.UpdatedAt.Add(time.Nanosecond)
+			reader := &recordingCurrentClaimReader{
+				transaction:          scenario.transaction,
+				preflightTransaction: changed,
+			}
+			audit := &countingAudit{}
+			if _, err := scenario.applyCounting(reader, audit); !errors.Is(err, ErrStateMismatch) {
+				t.Fatalf("Apply() with changed same-version preflight error = %v, want ErrStateMismatch", err)
+			}
+			if reader.preflightCalls != 1 || audit.calls != 0 || scenario.controlCalls() != 0 {
+				t.Fatalf("changed preflight calls: preflight=%d audit=%d control=%d", reader.preflightCalls, audit.calls, scenario.controlCalls())
+			}
+		})
+	}
+}
+
+func TestExactCommittedApplyReplaysSkipExpiredClaimPreflight(t *testing.T) {
+	for _, kind := range []string{"intent", "evidence", "security applied", "reconciliation"} {
+		t.Run(kind, func(t *testing.T) {
+			scenario := newApplyPreflightScenario(t, kind)
+			committed, err := scenario.applyReal(scenario.fixture.control, scenario.fixture.audit)
+			if err != nil {
+				t.Fatalf("commit proposal: %v", err)
+			}
+			if committed.ActiveClaim == nil {
+				t.Fatal("committed transaction has no active claim")
+			}
+			version := committed.ResourceVersion
+			records := len(scenario.fixture.audit.service.Records(committed.ID))
+			*scenario.fixture.clock = committed.ActiveClaim.ExpiresAt
+			reader := &recordingCurrentClaimReader{
+				transaction:  committed,
+				preflightErr: errors.New("expired preflight must be skipped for an exact replay"),
+			}
+			replayed, err := scenario.applyReal(reader, scenario.fixture.audit)
+			if err != nil {
+				t.Fatalf("replay after claim expiry: %v", err)
+			}
+			if reader.preflightCalls != 0 || replayed.ResourceVersion != version ||
+				len(scenario.fixture.audit.service.Records(committed.ID)) != records {
+				t.Fatalf("replay changed state: preflight=%d version=%d/%d audit records=%d/%d",
+					reader.preflightCalls, replayed.ResourceVersion, version,
+					len(scenario.fixture.audit.service.Records(committed.ID)), records)
+			}
+		})
+	}
+}
+
 func TestDraftInputRejectsAmbiguousOrUnexecutableCampaignValues(t *testing.T) {
 	tests := map[string]func(*DraftInput){
 		"short authorization list": func(input *DraftInput) { input.AuthorizationIDs = input.AuthorizationIDs[:6] },
@@ -1625,9 +1718,126 @@ func cloneControlTransaction(t *testing.T, transaction controlplane.Transaction)
 	return clone
 }
 
+type applyPreflightScenario struct {
+	fixture       *workflowFixture
+	transaction   controlplane.Transaction
+	applyCounting func(transactionReader, auditAppender) (controlplane.Transaction, error)
+	applyReal     func(transactionReader, auditAppender) (controlplane.Transaction, error)
+	controlCalls  func() int
+}
+
+func newApplyPreflightScenario(t *testing.T, kind string) applyPreflightScenario {
+	t.Helper()
+	fixture := newWorkflowFixture(t)
+	ctx := context.Background()
+	switch kind {
+	case "intent":
+		snapshot, _ := approvedEmptyCampaign(t, &fixture)
+		proposal, transaction, err := PrepareNextIntent(ctx, snapshot, fixture.now, fixture.control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := &countingIntentRecorder{transaction: transaction}
+		return applyPreflightScenario{
+			fixture: &fixture, transaction: transaction,
+			applyCounting: func(current transactionReader, audit auditAppender) (controlplane.Transaction, error) {
+				return ApplyIntent(ctx, proposal, current, audit, writer)
+			},
+			applyReal: func(current transactionReader, audit auditAppender) (controlplane.Transaction, error) {
+				return ApplyIntent(ctx, proposal, current, audit, fixture.control)
+			},
+			controlCalls: func() int { return writer.calls },
+		}
+	case "evidence":
+		snapshot, transaction := pendingFirstOperation(t, &fixture)
+		proposal, err := NewEvidenceProposal(snapshot, transaction, verifiedAttempt(snapshot, transaction, fixture.now), fixture.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := &countingEvidenceRecorder{transaction: transaction}
+		return applyPreflightScenario{
+			fixture: &fixture, transaction: transaction,
+			applyCounting: func(current transactionReader, audit auditAppender) (controlplane.Transaction, error) {
+				return ApplyEvidence(ctx, proposal, current, audit, writer)
+			},
+			applyReal: func(current transactionReader, audit auditAppender) (controlplane.Transaction, error) {
+				return ApplyEvidence(ctx, proposal, current, audit, fixture.control)
+			},
+			controlCalls: func() int { return writer.calls },
+		}
+	case "security applied":
+		snapshot, transaction := completedCampaign(t, &fixture)
+		proposal, err := NewSecurityAppliedProposal(snapshot, transaction, fixture.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := &countingSecurityAppliedRecorder{transaction: transaction}
+		return applyPreflightScenario{
+			fixture: &fixture, transaction: transaction,
+			applyCounting: func(current transactionReader, audit auditAppender) (controlplane.Transaction, error) {
+				return ApplySecurityApplied(ctx, proposal, current, audit, writer)
+			},
+			applyReal: func(current transactionReader, audit auditAppender) (controlplane.Transaction, error) {
+				return ApplySecurityApplied(ctx, proposal, current, audit, fixture.control)
+			},
+			controlCalls: func() int { return writer.calls },
+		}
+	case "reconciliation":
+		snapshot, _ := uncertainFirstOperation(t, &fixture)
+		transaction, err := PrepareReconciliationClaim(ctx, snapshot, fixture.now, fixture.control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proposal, err := NewReconciliationProposal(snapshot, transaction, verifiedAttempt(snapshot, transaction, fixture.now), fixture.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := &countingReconciliationRecorder{transaction: transaction}
+		return applyPreflightScenario{
+			fixture: &fixture, transaction: transaction,
+			applyCounting: func(current transactionReader, audit auditAppender) (controlplane.Transaction, error) {
+				return ApplyReconciliation(ctx, proposal, current, audit, writer)
+			},
+			applyReal: func(current transactionReader, audit auditAppender) (controlplane.Transaction, error) {
+				return ApplyReconciliation(ctx, proposal, current, audit, fixture.control)
+			},
+			controlCalls: func() int { return writer.calls },
+		}
+	default:
+		t.Fatalf("unknown apply preflight scenario %q", kind)
+		return applyPreflightScenario{}
+	}
+}
+
+type recordingCurrentClaimReader struct {
+	transaction          controlplane.Transaction
+	preflightTransaction controlplane.Transaction
+	preflightErr         error
+	preflightCalls       int
+}
+
+func (reader *recordingCurrentClaimReader) GetTransaction(context.Context, string) (controlplane.Transaction, error) {
+	return reader.transaction, nil
+}
+
+func (reader *recordingCurrentClaimReader) PreflightCurrentClaim(_ context.Context, _ controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error) {
+	reader.preflightCalls++
+	return reader.preflightTransaction, reader.preflightErr
+}
+
 type staticReader struct{ transaction controlplane.Transaction }
 
 func (reader staticReader) GetTransaction(context.Context, string) (controlplane.Transaction, error) {
+	return reader.transaction, nil
+}
+
+func (reader staticReader) PreflightCurrentClaim(_ context.Context, request controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error) {
+	if request.SchemaVersion != controlplane.CurrentClaimPreflightRequestSchemaVersion ||
+		request.TransactionID != reader.transaction.ID ||
+		request.ExpectedResourceVersion != reader.transaction.ResourceVersion || reader.transaction.ActiveClaim == nil ||
+		request.ClaimID != reader.transaction.ActiveClaim.ID || request.FenceEpoch != reader.transaction.FenceEpoch {
+		return controlplane.Transaction{}, ErrStateMismatch
+	}
 	return reader.transaction, nil
 }
 
