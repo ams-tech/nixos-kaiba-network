@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/controlplane"
 )
 
 func TestCommandSurfaceHasNoGenericMutationOrHardwareSelectors(t *testing.T) {
@@ -18,6 +21,7 @@ func TestCommandSurfaceHasNoGenericMutationOrHardwareSelectors(t *testing.T) {
 	for _, required := range []string{
 		"prepare-draft", "install-draft", "propose-approval", "apply-approval",
 		"propose-next-intent", "apply-intent", "propose-evidence", "apply-evidence",
+		"renew-pending-intent", "renew-ready-campaign",
 		"propose-security-applied", "apply-security-applied",
 		"prepare-reconciliation", "propose-reconciliation", "apply-reconciliation",
 	} {
@@ -32,6 +36,57 @@ func TestCommandSurfaceHasNoGenericMutationOrHardwareSelectors(t *testing.T) {
 		if strings.Contains(usage, forbidden) {
 			t.Fatalf("usage exposes forbidden selector %q", forbidden)
 		}
+	}
+}
+
+func TestTransactionSummaryExposesCurrentAuthorityContext(t *testing.T) {
+	claimExpiresAt := time.Date(2026, 8, 26, 14, 0, 0, 0, time.UTC)
+	approvalExpiresAt := claimExpiresAt.Add(time.Hour)
+	transaction := controlplane.Transaction{
+		ID: "transaction-1", ResourceVersion: 17, Status: controlplane.StatusMutationInProgress,
+		FenceEpoch: 4,
+		ActiveClaim: &controlplane.Claim{
+			ID: "claim-1", Mode: controlplane.ClaimModeMutation, ExpiresAt: claimExpiresAt,
+		},
+		Approval: &controlplane.Approval{ExpiresAt: approvalExpiresAt},
+		Operations: []controlplane.OperationRecord{{
+			ID: "authorization-1", Operation: "write_customer_key_hash",
+			Status: controlplane.OperationIntentRecorded,
+		}},
+	}
+
+	got := transactionSummary("intent_recorded", transaction)
+	want := map[string]any{
+		"resource_version": uint64(17), "fence_epoch": uint64(4),
+		"claim_id": "claim-1", "claim_mode": controlplane.ClaimModeMutation,
+		"claim_expires_at": claimExpiresAt, "approval_expires_at": approvalExpiresAt,
+		"operation_sequence": 1,
+	}
+	for field, value := range want {
+		if got[field] != value {
+			t.Errorf("summary[%q] = %#v, want %#v", field, got[field], value)
+		}
+	}
+}
+
+func TestRenewalSummariesExposeFixedProgress(t *testing.T) {
+	transaction := controlplane.Transaction{
+		Operations: []controlplane.OperationRecord{{
+			ID: "authorization-1", Operation: "write_customer_key_hash",
+			Status: controlplane.OperationIntentRecorded,
+		}},
+	}
+	pending := pendingIntentRenewalSummary(transaction)
+	last, ok := pending["last_operation"].(map[string]any)
+	if !ok || last["sequence"] != 1 || last["operation_id"] != "authorization-1" ||
+		last["operation"] != "write_customer_key_hash" || last["status"] != controlplane.OperationIntentRecorded {
+		t.Fatalf("pending renewal summary last operation = %#v", pending["last_operation"])
+	}
+
+	transaction.Operations[0].Status = controlplane.OperationSucceeded
+	ready := readyCampaignRenewalSummary(transaction)
+	if ready["successful_prefix"] != 1 {
+		t.Fatalf("ready renewal successful prefix = %#v, want 1", ready["successful_prefix"])
 	}
 }
 

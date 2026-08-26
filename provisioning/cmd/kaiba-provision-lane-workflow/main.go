@@ -58,10 +58,14 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		err = proposeNextIntent(ctx, arguments[1:], stdout, stderr)
 	case "apply-intent":
 		err = applyIntent(ctx, arguments[1:], stdout, stderr)
+	case "renew-pending-intent":
+		err = renewPendingIntent(ctx, arguments[1:], stdout, stderr)
 	case "propose-evidence":
 		err = proposeEvidence(ctx, arguments[1:], stdout, stderr)
 	case "apply-evidence":
 		err = applyEvidence(ctx, arguments[1:], stdout, stderr)
+	case "renew-ready-campaign":
+		err = renewReadyCampaign(ctx, arguments[1:], stdout, stderr)
 	case "propose-security-applied":
 		err = proposeSecurityApplied(ctx, arguments[1:], stdout, stderr)
 	case "apply-security-applied":
@@ -246,21 +250,24 @@ func proposeApproval(ctx context.Context, arguments []string, stdout, stderr io.
 	if err != nil {
 		return err
 	}
-	transaction, err := client.GetTransaction(ctx, draft.TransactionID)
+	now := clockNow().UTC()
+	transaction, err := operatorworkflow.RenewTargetBoundCampaign(ctx, draft, now, client)
 	if err != nil {
 		return err
 	}
-	proposal, err := operatorworkflow.NewApprovalProposal(draft, transaction, *approverID, clockNow().UTC())
+	proposal, err := operatorworkflow.NewApprovalProposal(draft, transaction, *approverID, now)
 	if err != nil {
 		return err
 	}
 	if err := writeCanonicalNew(*outputPath, proposal, false); err != nil {
 		return err
 	}
-	return writeSummary(stdout, map[string]any{
-		"status": "approval_proposed", "approval_id": proposal.ApprovalID,
-		"plan_digest": draft.PlanDigest, "proposal_path": *outputPath,
-	})
+	result := transactionSummary("approval_proposed", transaction)
+	result["approval_id"] = proposal.ApprovalID
+	result["approval_expires_at"] = draft.ApprovalExpiresAt
+	result["plan_digest"] = draft.PlanDigest
+	result["proposal_path"] = *outputPath
+	return writeSummary(stdout, result)
 }
 
 func applyApproval(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -314,7 +321,7 @@ func proposeNextIntent(ctx context.Context, arguments []string, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	proposal, _, err := operatorworkflow.PrepareNextIntent(ctx, draft, clockNow().UTC(), client)
+	proposal, transaction, err := operatorworkflow.PrepareNextIntent(ctx, draft, clockNow().UTC(), client)
 	if err != nil {
 		return err
 	}
@@ -322,11 +329,12 @@ func proposeNextIntent(ctx context.Context, arguments []string, stdout, stderr i
 		return err
 	}
 	operation := draft.Operations[proposal.Sequence-1]
-	return writeSummary(stdout, map[string]any{
-		"status": "intent_proposed", "sequence": proposal.Sequence,
-		"operation": operation.Operation, "required_boot_mode": operation.RequiredBootMode,
-		"proposal_path": *outputPath,
-	})
+	result := transactionSummary("intent_proposed", transaction)
+	result["sequence"] = proposal.Sequence
+	result["operation"] = operation.Operation
+	result["required_boot_mode"] = operation.RequiredBootMode
+	result["proposal_path"] = *outputPath
+	return writeSummary(stdout, result)
 }
 
 func applyIntent(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -354,6 +362,33 @@ func applyIntent(ctx context.Context, arguments []string, stdout, stderr io.Writ
 		return err
 	}
 	return writeSummary(stdout, transactionSummary("intent_recorded", transaction))
+}
+
+func renewPendingIntent(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("renew-pending-intent", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	draftPath := flags.String("draft", "", "reviewed authority-free draft JSON path")
+	var network controlFlags
+	addControlFlags(flags, &network)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *draftPath == "" {
+		return fmt.Errorf("%w: renew-pending-intent requires --draft", errUsage)
+	}
+	draft, err := loadDraft(*draftPath)
+	if err != nil {
+		return err
+	}
+	client, err := network.client()
+	if err != nil {
+		return err
+	}
+	transaction, err := operatorworkflow.RenewPendingIntent(ctx, draft, clockNow().UTC(), client)
+	if err != nil {
+		return err
+	}
+	return writeSummary(stdout, pendingIntentRenewalSummary(transaction))
 }
 
 func proposeEvidence(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -385,21 +420,23 @@ func proposeEvidence(ctx context.Context, arguments []string, stdout, stderr io.
 	if err != nil {
 		return err
 	}
-	transaction, err := client.GetTransaction(ctx, draft.TransactionID)
+	now := clockNow().UTC()
+	transaction, err := operatorworkflow.RenewPendingEvidence(ctx, draft, now, client)
 	if err != nil {
 		return err
 	}
-	proposal, err := operatorworkflow.NewEvidenceProposal(draft, transaction, attempt, clockNow().UTC())
+	proposal, err := operatorworkflow.NewEvidenceProposal(draft, transaction, attempt, now)
 	if err != nil {
 		return err
 	}
 	if err := writeCanonicalNew(*outputPath, proposal, false); err != nil {
 		return err
 	}
-	return writeSummary(stdout, map[string]any{
-		"status": "evidence_proposed", "sequence": attempt.Sequence,
-		"attempt_status": attempt.Status, "proposal_path": *outputPath,
-	})
+	result := transactionSummary("evidence_proposed", transaction)
+	result["sequence"] = attempt.Sequence
+	result["attempt_status"] = attempt.Status
+	result["proposal_path"] = *outputPath
+	return writeSummary(stdout, result)
 }
 
 func applyEvidence(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -429,6 +466,33 @@ func applyEvidence(ctx context.Context, arguments []string, stdout, stderr io.Wr
 	return writeSummary(stdout, transactionSummary("evidence_recorded", transaction))
 }
 
+func renewReadyCampaign(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("renew-ready-campaign", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	draftPath := flags.String("draft", "", "reviewed authority-free draft JSON path")
+	var network controlFlags
+	addControlFlags(flags, &network)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *draftPath == "" {
+		return fmt.Errorf("%w: renew-ready-campaign requires --draft", errUsage)
+	}
+	draft, err := loadDraft(*draftPath)
+	if err != nil {
+		return err
+	}
+	client, err := network.client()
+	if err != nil {
+		return err
+	}
+	transaction, err := operatorworkflow.RenewReadyCampaign(ctx, draft, clockNow().UTC(), client)
+	if err != nil {
+		return err
+	}
+	return writeSummary(stdout, readyCampaignRenewalSummary(transaction))
+}
+
 func proposeSecurityApplied(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("propose-security-applied", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -453,22 +517,24 @@ func proposeSecurityApplied(ctx context.Context, arguments []string, stdout, std
 	if err != nil {
 		return err
 	}
-	transaction, err := client.GetTransaction(ctx, draft.TransactionID)
+	now := clockNow().UTC()
+	transaction, err := operatorworkflow.RenewReadyCampaign(ctx, draft, now, client)
 	if err != nil {
 		return err
 	}
-	proposal, err := operatorworkflow.NewSecurityAppliedProposal(draft, transaction, clockNow().UTC())
+	proposal, err := operatorworkflow.NewSecurityAppliedProposal(draft, transaction, now)
 	if err != nil {
 		return err
 	}
 	if err := writeCanonicalNew(*outputPath, proposal, false); err != nil {
 		return err
 	}
-	return writeSummary(stdout, map[string]any{
-		"status": "security_applied_proposed", "evidence_digest": proposal.EvidenceDigest,
-		"rollback_status": proposal.RollbackStatus, "release_classification": proposal.ReleaseClassification,
-		"proposal_path": *outputPath,
-	})
+	result := transactionSummary("security_applied_proposed", transaction)
+	result["evidence_digest"] = proposal.EvidenceDigest
+	result["rollback_status"] = proposal.RollbackStatus
+	result["release_classification"] = proposal.ReleaseClassification
+	result["proposal_path"] = *outputPath
+	return writeSummary(stdout, result)
 }
 
 func applySecurityApplied(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -564,21 +630,23 @@ func proposeReconciliation(ctx context.Context, arguments []string, stdout, stde
 	if err != nil {
 		return err
 	}
-	transaction, err := client.GetTransaction(ctx, draft.TransactionID)
+	now := clockNow().UTC()
+	transaction, err := operatorworkflow.RenewReconciliationClaim(ctx, draft, now, client)
 	if err != nil {
 		return err
 	}
-	proposal, err := operatorworkflow.NewReconciliationProposal(draft, transaction, attempt, clockNow().UTC())
+	proposal, err := operatorworkflow.NewReconciliationProposal(draft, transaction, attempt, now)
 	if err != nil {
 		return err
 	}
 	if err := writeCanonicalNew(*outputPath, proposal, false); err != nil {
 		return err
 	}
-	return writeSummary(stdout, map[string]any{
-		"status": "reconciliation_proposed", "sequence": attempt.Sequence,
-		"resolution": proposal.Resolution, "proposal_path": *outputPath,
-	})
+	result := transactionSummary("reconciliation_proposed", transaction)
+	result["sequence"] = attempt.Sequence
+	result["resolution"] = proposal.Resolution
+	result["proposal_path"] = *outputPath
+	return writeSummary(stdout, result)
 }
 
 func applyReconciliation(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
@@ -681,12 +749,39 @@ func transactionSummary(status string, transaction controlplane.Transaction) map
 		"transaction_status": transaction.Status, "resource_version": transaction.ResourceVersion,
 		"fence_epoch": transaction.FenceEpoch,
 	}
+	if transaction.ActiveClaim != nil {
+		result["claim_id"] = transaction.ActiveClaim.ID
+		result["claim_mode"] = transaction.ActiveClaim.Mode
+		result["claim_expires_at"] = transaction.ActiveClaim.ExpiresAt
+	}
+	if transaction.Approval != nil {
+		result["approval_expires_at"] = transaction.Approval.ExpiresAt
+	}
 	if len(transaction.Operations) != 0 {
 		last := transaction.Operations[len(transaction.Operations)-1]
 		result["operation_id"] = last.ID
 		result["operation"] = last.Operation
 		result["operation_status"] = last.Status
+		result["operation_sequence"] = len(transaction.Operations)
 	}
+	return result
+}
+
+func pendingIntentRenewalSummary(transaction controlplane.Transaction) map[string]any {
+	result := transactionSummary("pending_intent_claim_renewed", transaction)
+	if len(transaction.Operations) != 0 {
+		last := transaction.Operations[len(transaction.Operations)-1]
+		result["last_operation"] = map[string]any{
+			"sequence": len(transaction.Operations), "operation_id": last.ID,
+			"operation": last.Operation, "status": last.Status,
+		}
+	}
+	return result
+}
+
+func readyCampaignRenewalSummary(transaction controlplane.Transaction) map[string]any {
+	result := transactionSummary("ready_campaign_claim_renewed", transaction)
+	result["successful_prefix"] = len(transaction.Operations)
 	return result
 }
 
@@ -702,8 +797,10 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow apply-approval --proposal FILE [approver control/audit TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow propose-next-intent --draft FILE --proposal-out FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow apply-intent --proposal FILE [station control/audit TLS flags]")
+	fmt.Fprintln(output, "       kaiba-provision-lane-workflow renew-pending-intent --draft FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow propose-evidence --draft FILE --attempt FILE --proposal-out FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow apply-evidence --proposal FILE [station control/audit TLS flags]")
+	fmt.Fprintln(output, "       kaiba-provision-lane-workflow renew-ready-campaign --draft FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow propose-security-applied --draft FILE --proposal-out FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow apply-security-applied --proposal FILE [station control/audit TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow prepare-reconciliation --draft FILE [station control TLS flags]")
