@@ -38,8 +38,8 @@ let
         printf '%s\n' 'usage: kaiba-provision-lane-acknowledge' >&2
         exit 2
       fi
-      exec ${pkgs.shadow}/bin/sg ${operatorGroup} -c \
-        '${getExe' cfg.operatorPackage "kaiba-provision-lane-operator"} --socket ${operatorSocketPath}'
+      exec ${getExe' cfg.operatorPackage "kaiba-provision-lane-operator"} \
+        --socket ${operatorSocketPath}
     '';
     derivationArgs.passthru.kaibaLaneOperatorWrapper = {
       group = operatorGroup;
@@ -216,8 +216,9 @@ in
       type = types.str;
       default = "${stateRoot}/journal.json";
       description = ''
-        Durable execute-once journal. It must be a clean non-store path below
-        ${stateRoot}; systemd creates that root-owned boundary with mode 0700.
+        Durable execute-once journal. It must be a clean non-store direct child
+        of ${stateRoot}; systemd creates that root-owned boundary with mode
+        0700.
       '';
     };
 
@@ -226,7 +227,7 @@ in
       default = "${stateRoot}/draft.json";
       description = ''
         Root-installed authority-free plan draft reviewed before approval. It
-        must be a clean, regular, non-symlink, non-store path below
+        must be a clean, regular, non-symlink, non-store direct child of
         ${stateRoot}. It cannot authorize execution: the bridge independently
         binds its digest to current control and audit authority.
       '';
@@ -314,6 +315,14 @@ in
           '';
         }
         {
+          assertion = builtins.all (path: builtins.dirOf path == stateRoot) statePaths;
+          message = ''
+            services.kaiba-provisioning-lane-guard journalPath and draftPath
+            must be direct children of ${stateRoot} so the pre-start trusted
+            state boundary has no implicitly created parent directories.
+          '';
+        }
+        {
           assertion = builtins.length (lib.unique statePaths) == builtins.length statePaths;
           message = "lane-guard journal and draft paths must be distinct";
         }
@@ -350,11 +359,19 @@ in
     }
 
     (mkIf (cfg.package != null) {
-      # Only the fixed wrapper enters PATH. It changes the client's effective
-      # primary group to the peer-authenticated operator group and supplies the
-      # module-owned socket; the underlying client accepts no operation, mode,
-      # target, or physical selector through this supported entry point.
-      environment.systemPackages = [ operatorWrapper ];
+      # Only the fixed NixOS security wrapper enters PATH. The compiled wrapper
+      # changes the client's effective primary group to the peer-authenticated
+      # operator group before executing this argument-free source wrapper. The
+      # source supplies the module-owned socket and accepts no operation, mode,
+      # target, or physical selector.
+      security.wrappers.kaiba-provision-lane-acknowledge = {
+        source = getExe' operatorWrapper "kaiba-provision-lane-acknowledge";
+        owner = "root";
+        group = operatorGroup;
+        setuid = false;
+        setgid = true;
+        permissions = "u+rx,g+rx,o-rwx";
+      };
       users.groups.${operatorGroup} = { };
       users.users = builtins.listToAttrs (
         map (name: {
@@ -362,6 +379,14 @@ in
           value.extraGroups = [ operatorGroup ];
         }) cfg.operators
       );
+
+      # The reviewed draft must be installed before the first one-shot starts,
+      # so StateDirectory= alone is too late to bootstrap this trusted parent.
+      # tmpfiles and systemd agree on the same root-owned, non-writable mode.
+      systemd.tmpfiles.rules = [
+        "d ${stateRoot} 0700 root ${operatorGroup} -"
+        "d ${attemptDirectory} 0700 root ${operatorGroup} -"
+      ];
 
       systemd.services.kaiba-provisioning-lane-guard = {
         description = "One-shot Kaiba physical Raspberry Pi 5 provisioning lane guard";

@@ -364,6 +364,11 @@ let
     services.kaiba-provisioning-lane-guard.journalPath = "${kaibaLaneGuardPackage}/journal.json";
   };
 
+  provisioningLaneGuardNestedDraft = lib.recursiveUpdate provisioningLaneGuard {
+    services.kaiba-provisioning-lane-guard.draftPath =
+      "/var/lib/kaiba-provision-lane-guard/reviewed/draft.json";
+  };
+
   provisioningSigningGate = {
     services.kaiba-provisioning-signing-gate = {
       enable = true;
@@ -426,9 +431,8 @@ let
     laneGuardMutatingCustomSocketConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
   laneGuardReconcileService =
     laneGuardReconcileConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
-  laneGuardOperatorWrappers = builtins.filter (
-    package: package ? kaibaLaneOperatorWrapper
-  ) laneGuardConfig.environment.systemPackages;
+  laneGuardOperatorSecurityWrapper =
+    laneGuardConfig.security.wrappers.kaiba-provision-lane-acknowledge;
   authorityBridgeCustomSocketService =
     laneGuardMutatingCustomSocketConfig.systemd.services.kaiba-provisioning-authority-bridge.serviceConfig;
   signingGateService = signingGateConfig.systemd.services.kaiba-provision-signing-gate.serviceConfig;
@@ -625,15 +629,18 @@ let
     && laneGuardService.RuntimeDirectoryMode == "0750"
     && laneGuardConfig.users.groups ? kaiba-provision-operator
     && builtins.elem "kaiba-provision-operator" laneGuardConfig.users.users.provisioner.extraGroups
-    && builtins.length laneGuardOperatorWrappers == 1
-    && (builtins.head laneGuardOperatorWrappers).kaibaLaneOperatorWrapper == {
-      acceptsArguments = false;
-      group = "kaiba-provision-operator";
-      mutationCapable = false;
-      operationSelectionCapable = false;
-      physicalPathSelectionCapable = false;
-      socketPath = "/run/kaiba-provision-lane-guard/operator.sock";
-    }
+    && laneGuardOperatorSecurityWrapper.owner == "root"
+    && laneGuardOperatorSecurityWrapper.group == "kaiba-provision-operator"
+    && laneGuardOperatorSecurityWrapper.setuid == false
+    && laneGuardOperatorSecurityWrapper.setgid == true
+    && laneGuardOperatorSecurityWrapper.permissions == "u+rx,g+rx,o-rwx"
+    && laneGuardOperatorSecurityWrapper.capabilities == ""
+    && builtins.elem
+      "d /var/lib/kaiba-provision-lane-guard 0700 root kaiba-provision-operator -"
+      laneGuardConfig.systemd.tmpfiles.rules
+    && builtins.elem
+      "d /var/lib/kaiba-provision-lane-guard/attempts 0700 root kaiba-provision-operator -"
+      laneGuardConfig.systemd.tmpfiles.rules
     && laneGuardService.TimeoutStopSec == "45s"
     && laneGuardService.DevicePolicy == "closed"
     && builtins.elem "/dev/gpiochip0 rw" laneGuardService.DeviceAllow
@@ -781,6 +788,9 @@ assert lib.assertMsg (builtins.all (assertion: assertion.assertion)
 assert lib.assertMsg (
   !assertionsPass provisioningLaneGuardStoreJournal
 ) "a Nix-store lane-guard journal was accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningLaneGuardNestedDraft
+) "a lane-guard draft with an unbootstrapped nested parent was accepted";
 assert lib.assertMsg (assertionsPass provisioningSigningGate) (
   builtins.toJSON (failedMessages provisioningSigningGate)
 );
@@ -822,12 +832,13 @@ assert lib.assertMsg physicalServiceBoundary
 assert lib.assertMsg signingServiceBoundary
   "YubiKey signer credential, PC/SC, user, or sandbox boundary is not enforced";
 pkgs.runCommand "kaiba-provisioning-module-evaluation" { } ''
-  operator_wrapper=${builtins.head laneGuardOperatorWrappers}/bin/kaiba-provision-lane-acknowledge
-  test -x "$operator_wrapper"
-  grep -F -- '${pkgs.shadow}/bin/sg kaiba-provision-operator' "$operator_wrapper" > /dev/null
-  grep -F -- '--socket /run/kaiba-provision-lane-guard/operator.sock' "$operator_wrapper" > /dev/null
+  operator_wrapper_source=${laneGuardOperatorSecurityWrapper.source}
+  test -x "$operator_wrapper_source"
+  grep -F -- 'kaiba-provision-lane-operator' "$operator_wrapper_source" > /dev/null
+  grep -F -- '--socket /run/kaiba-provision-lane-guard/operator.sock' "$operator_wrapper_source" > /dev/null
+  ! grep -F -- '/bin/sg' "$operator_wrapper_source"
   set +e
-  "$operator_wrapper" unexpected > wrapper.stdout 2> wrapper.stderr
+  "$operator_wrapper_source" unexpected > wrapper.stdout 2> wrapper.stderr
   wrapper_status="$?"
   set -e
   test "$wrapper_status" -eq 2

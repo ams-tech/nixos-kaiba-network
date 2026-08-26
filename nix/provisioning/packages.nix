@@ -131,7 +131,6 @@ let
       "cmd/kaiba-provision-authority-bridge"
       "cmd/kaiba-provision-control"
       "cmd/kaiba-provision-lane-guard"
-      "cmd/kaiba-provision-lane-workflow"
       "cmd/kaiba-provision-signer"
       "cmd/kaiba-provision-signing-client"
       "cmd/kaiba-provision-signing-gate"
@@ -164,6 +163,37 @@ let
     meta = {
       mainProgram = "kaiba-provision-lane-operator";
       description = "Private authenticated Kaiba physical-lane acknowledgement client";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  # Keep the authority workflow in a capability-isolated closure. It imports
+  # the public lane contracts to validate trusted receipts, but it must not
+  # gain the privileged adapter, rpiboot, or GPIO tooling as sibling runtime
+  # content merely because those components are built from the same source.
+  laneWorkflow = pkgs.buildGoModule {
+    pname = "kaiba-provision-lane-workflow";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-lane-workflow" ];
+    vendorHash = null;
+    doCheck = false;
+    disallowedReferences = [
+      serviceSuite
+      laneGuard
+      rpiboot
+      pkgs.libgpiod
+    ];
+    passthru.kaibaLaneWorkflow = {
+      authority = "fixed_authenticated_lane_workflow";
+      directHardwareAccess = false;
+      mutationCapable = false;
+      operationSelectionCapable = false;
+      physicalPathSelectionCapable = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-lane-workflow";
+      description = "Kaiba fixed Raspberry Pi 5 lane authority workflow";
       platforms = lib.platforms.linux;
     };
   };
@@ -493,11 +523,6 @@ let
   laneGuard = servicePackage {
     binary = "kaiba-provision-lane-guard";
     description = "Kaiba one-lane privileged Raspberry Pi 5 provisioning guard";
-  };
-
-  laneWorkflow = servicePackage {
-    binary = "kaiba-provision-lane-workflow";
-    description = "Kaiba fixed Raspberry Pi 5 lane authority workflow";
   };
 
   liveStation = servicePackage {
