@@ -31,25 +31,45 @@ let
   stateRoot = "/var/lib/${stateDirectory}";
   attemptDirectory = "${stateRoot}/attempts";
   defaultOperatorPackage = (import ../packages.nix { inherit pkgs lib; }).laneOperator;
-  operatorWrapper = pkgs.writeShellApplication {
-    name = "kaiba-provision-lane-acknowledge";
-    text = ''
-      if (( $# != 0 )); then
-        printf '%s\n' 'usage: kaiba-provision-lane-acknowledge' >&2
-        exit 2
-      fi
-      exec ${getExe' cfg.operatorPackage "kaiba-provision-lane-operator"} \
-        --socket ${operatorSocketPath}
-    '';
-    derivationArgs.passthru.kaibaLaneOperatorWrapper = {
-      group = operatorGroup;
-      socketPath = operatorSocketPath;
-      acceptsArguments = false;
-      mutationCapable = false;
-      operationSelectionCapable = false;
-      physicalPathSelectionCapable = false;
-    };
-  };
+  # This source must be a native executable: shells intentionally drop an
+  # inherited setgid identity unless privileged mode is requested. The NixOS
+  # security wrapper enters operatorGroup, then this fixed-argv launcher keeps
+  # that identity while exposing no caller-controlled selector.
+  operatorWrapper =
+    (pkgs.writeCBin "kaiba-provision-lane-acknowledge" ''
+      #include <errno.h>
+      #include <stdio.h>
+      #include <string.h>
+      #include <unistd.h>
+
+      int main(int argc, char **argv) {
+        (void)argv;
+        if (argc != 1) {
+          fputs("usage: kaiba-provision-lane-acknowledge\n", stderr);
+          return 2;
+        }
+        execl(
+          "${getExe' cfg.operatorPackage "kaiba-provision-lane-operator"}",
+          "kaiba-provision-lane-operator",
+          "--socket",
+          "${operatorSocketPath}",
+          (char *)0
+        );
+        fprintf(stderr, "kaiba-provision-lane-acknowledge: %s\n", strerror(errno));
+        return 1;
+      }
+    '').overrideAttrs (old: {
+      passthru = (old.passthru or { }) // {
+        kaibaLaneOperatorWrapper = {
+          group = operatorGroup;
+          socketPath = operatorSocketPath;
+          acceptsArguments = false;
+          mutationCapable = false;
+          operationSelectionCapable = false;
+          physicalPathSelectionCapable = false;
+        };
+      };
+    });
   statePaths = [
     cfg.journalPath
     cfg.draftPath

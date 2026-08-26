@@ -834,8 +834,10 @@ assert lib.assertMsg signingServiceBoundary
 pkgs.runCommand "kaiba-provisioning-module-evaluation" { } ''
   operator_wrapper_source=${laneGuardOperatorSecurityWrapper.source}
   test -x "$operator_wrapper_source"
+  ${pkgs.file}/bin/file -b "$operator_wrapper_source" | grep -E '^ELF ' > /dev/null
   grep -F -- 'kaiba-provision-lane-operator' "$operator_wrapper_source" > /dev/null
-  grep -F -- '--socket /run/kaiba-provision-lane-guard/operator.sock' "$operator_wrapper_source" > /dev/null
+  grep -F -- '--socket' "$operator_wrapper_source" > /dev/null
+  grep -F -- '/run/kaiba-provision-lane-guard/operator.sock' "$operator_wrapper_source" > /dev/null
   ! grep -F -- '/bin/sg' "$operator_wrapper_source"
   set +e
   "$operator_wrapper_source" unexpected > wrapper.stdout 2> wrapper.stderr
