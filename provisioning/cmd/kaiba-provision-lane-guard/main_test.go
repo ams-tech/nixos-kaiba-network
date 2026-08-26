@@ -707,6 +707,9 @@ func TestExistingReceiptMismatchIsRejectedBeforeHardware(t *testing.T) {
 	if err := os.WriteFile(attemptPath, []byte("{\"wrong\":true}\n"), 0o444); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(attemptPath, 0o444); err != nil {
+		t.Fatal(err)
+	}
 	err = run(context.Background(), commandMutationArguments(
 		t, directory, writeJSON(t, directory, "draft.json", commandDraft(plan)), filepath.Join(directory, "journal.json"),
 	))
