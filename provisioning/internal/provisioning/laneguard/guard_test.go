@@ -908,10 +908,14 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 	if err := store.Put(attempt); err != nil {
 		t.Fatalf("put verified: %v", err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close first journal owner: %v", err)
+	}
 	reopened, err := NewFileStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer reopened.Close()
 	actual, ok, err := reopened.Get(attempt.Key)
 	if err != nil || !ok || actual != attempt {
 		t.Fatalf("reopened = %#v, %t, %v", actual, ok, err)
@@ -925,13 +929,14 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 
 func TestFileStoreRejectsPreAttemptStoreSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "attempts.json")
-	if err := os.WriteFile(path, []byte(`{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha3","attempts":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema_version":"provisioning.kaiba.network/lane-guard-attempt-store/v1alpha1","attempts":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := NewFileStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer store.Close()
 	if _, _, err := store.Get("missing"); err == nil || !strings.Contains(err.Error(), "unsupported schema") {
 		t.Fatalf("old journal error = %v", err)
 	}
