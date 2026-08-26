@@ -23,15 +23,18 @@ import (
 )
 
 const (
-	DraftInputSchemaVersion             = "provisioning.kaiba.network/operator-draft-input/v1alpha1"
-	ApprovalProposalSchemaVersion       = "provisioning.kaiba.network/operator-approval-proposal/v1alpha1"
-	IntentProposalSchemaVersion         = "provisioning.kaiba.network/operator-intent-proposal/v1alpha1"
-	EvidenceProposalSchemaVersion       = "provisioning.kaiba.network/operator-evidence-proposal/v1alpha1"
-	ReconciliationProposalSchemaVersion = "provisioning.kaiba.network/operator-reconciliation-proposal/v1alpha1"
+	DraftInputSchemaVersion              = "provisioning.kaiba.network/operator-draft-input/v1alpha1"
+	ApprovalProposalSchemaVersion        = "provisioning.kaiba.network/operator-approval-proposal/v1alpha1"
+	IntentProposalSchemaVersion          = "provisioning.kaiba.network/operator-intent-proposal/v1alpha1"
+	EvidenceProposalSchemaVersion        = "provisioning.kaiba.network/operator-evidence-proposal/v1alpha1"
+	SecurityAppliedProposalSchemaVersion = "provisioning.kaiba.network/operator-security-applied-proposal/v1alpha1"
+	ReconciliationProposalSchemaVersion  = "provisioning.kaiba.network/operator-reconciliation-proposal/v1alpha1"
 
-	claimLeaseSeconds = uint32(3600)
-	maximumApproval   = 24 * time.Hour
-	digestDomain      = "kaiba.provisioning.operator-workflow.v1alpha1"
+	claimLeaseSeconds                = uint32(3600)
+	maximumApproval                  = 24 * time.Hour
+	digestDomain                     = "kaiba.provisioning.operator-workflow.v1alpha1"
+	developmentRollbackStatus        = "rollback_unimplemented"
+	developmentReleaseClassification = "development_asset"
 )
 
 var (
@@ -106,6 +109,22 @@ type EvidenceProposal struct {
 	EventTime               time.Time         `json:"event_time"`
 }
 
+// SecurityAppliedProposal is the durable, reviewable terminal transition for
+// the fixed development campaign. Its evidence digest is derived from the
+// complete control history; rollback and release classification are fixed by
+// policy rather than selected by the caller.
+type SecurityAppliedProposal struct {
+	SchemaVersion           string         `json:"schema_version"`
+	DraftSnapshot           laneguard.Plan `json:"draft_snapshot"`
+	ExpectedResourceVersion uint64         `json:"expected_resource_version"`
+	ClaimID                 string         `json:"claim_id"`
+	FenceEpoch              uint64         `json:"fence_epoch"`
+	EvidenceDigest          string         `json:"evidence_digest"`
+	RollbackStatus          string         `json:"rollback_status"`
+	ReleaseClassification   string         `json:"release_classification"`
+	EventTime               time.Time      `json:"event_time"`
+}
+
 // ReconciliationProposal binds a trusted terminal observation of the
 // original execute-once attempt to a fresh read-only reconciliation claim.
 // Resolution is reviewable but is always rederived from Attempt; it is not a
@@ -154,6 +173,10 @@ type intentRecorder interface {
 
 type evidenceRecorder interface {
 	RecordEvidence(context.Context, controlplane.RecordEvidenceRequest) (controlplane.Transaction, error)
+}
+
+type securityAppliedRecorder interface {
+	MarkSecurityApplied(context.Context, controlplane.SecurityAppliedRequest) (controlplane.Transaction, error)
 }
 
 type reconciliationRecorder interface {
@@ -695,6 +718,243 @@ func ApplyEvidence(ctx context.Context, proposal EvidenceProposal, current trans
 		return controlplane.Transaction{}, fmt.Errorf("record control evidence: %w", err)
 	}
 	return transaction, nil
+}
+
+// NewSecurityAppliedProposal derives the only successful terminal disposition
+// supported by the development campaign. No caller-supplied evidence digest,
+// rollback posture, or release classification crosses this boundary.
+func NewSecurityAppliedProposal(snapshot laneguard.Plan, transaction controlplane.Transaction, eventTime time.Time) (SecurityAppliedProposal, error) {
+	if eventTime.IsZero() {
+		return SecurityAppliedProposal{}, fmt.Errorf("%w: security-applied event time", ErrInvalidInput)
+	}
+	if transaction.Status != controlplane.StatusCommitApproved || transaction.SecurityApplied != nil {
+		return SecurityAppliedProposal{}, fmt.Errorf("%w: transaction is not awaiting security-applied finalization", ErrStateMismatch)
+	}
+	evidenceDigest, err := completedCampaignEvidence(snapshot, transaction, eventTime.UTC())
+	if err != nil {
+		return SecurityAppliedProposal{}, err
+	}
+	return SecurityAppliedProposal{
+		SchemaVersion: SecurityAppliedProposalSchemaVersion, DraftSnapshot: clonePlan(snapshot),
+		ExpectedResourceVersion: transaction.ResourceVersion,
+		ClaimID:                 transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
+		EvidenceDigest: evidenceDigest, RollbackStatus: developmentRollbackStatus,
+		ReleaseClassification: developmentReleaseClassification, EventTime: eventTime.UTC(),
+	}, nil
+}
+
+func (proposal SecurityAppliedProposal) requests(transaction controlplane.Transaction, receiptID string) (auditlog.AppendRequest, controlplane.SecurityAppliedRequest, error) {
+	if !digestPattern.MatchString(receiptID) {
+		return auditlog.AppendRequest{}, controlplane.SecurityAppliedRequest{}, fmt.Errorf("%w: security-applied audit receipt", ErrInvalidInput)
+	}
+	if err := proposalMatchesCurrentSecurityApplied(proposal, transaction); err != nil {
+		return auditlog.AppendRequest{}, controlplane.SecurityAppliedRequest{}, err
+	}
+	eventID := workflowID("security-applied", proposal.DraftSnapshot.TransactionID, proposal.EvidenceDigest)
+	auditRequest := auditlog.AppendRequest{
+		SchemaVersion:  auditlog.AppendRequestSchemaVersion,
+		IdempotencyKey: workflowID("audit-security-applied", proposal.DraftSnapshot.TransactionID, proposal.EvidenceDigest),
+		Event: auditlog.Event{
+			SchemaVersion: auditlog.EventSchemaVersion, PolicyVersion: auditlog.DefaultPolicyVersion,
+			EventID: eventID, TransactionID: proposal.DraftSnapshot.TransactionID,
+			StationID: proposal.DraftSnapshot.StationID, LaneID: proposal.DraftSnapshot.LaneID,
+			Stage: "security_applied", FenceEpoch: proposal.FenceEpoch,
+			InputDigest: proposal.DraftSnapshot.PlanDigest, OutputDigest: proposal.EvidenceDigest,
+			Result:                auditlog.ResultSucceeded,
+			Actors:                []auditlog.Actor{{ID: proposal.DraftSnapshot.StationID, Role: "provisioning_station"}},
+			TimeEvidence:          auditlog.TimeEvidence{StationTime: proposal.EventTime.UTC(), ClockStatus: "synchronized"},
+			ObservationReferences: []auditlog.ObservationReference{{Kind: "campaign_evidence", Digest: proposal.EvidenceDigest}},
+		},
+	}
+	controlRequest := controlplane.SecurityAppliedRequest{
+		SchemaVersion:  controlplane.SecurityAppliedRequestSchemaVersion,
+		IdempotencyKey: workflowID("control-security-applied", proposal.DraftSnapshot.TransactionID, proposal.EvidenceDigest),
+		MutationContext: controlplane.MutationContext{
+			TransactionID:           proposal.DraftSnapshot.TransactionID,
+			ExpectedResourceVersion: proposal.ExpectedResourceVersion,
+			ClaimID:                 proposal.ClaimID, FenceEpoch: proposal.FenceEpoch,
+		},
+		PlanDigest: proposal.DraftSnapshot.PlanDigest, EvidenceDigest: proposal.EvidenceDigest,
+		AuditReceiptID: receiptID, RollbackStatus: developmentRollbackStatus,
+		ReleaseClassification: developmentReleaseClassification,
+	}
+	return auditRequest, controlRequest, nil
+}
+
+// ApplySecurityApplied appends the fixed terminal event before issuing the
+// compare-and-set control transition. Exact proposal replay is idempotent,
+// including after the control transition committed but its response was lost.
+func ApplySecurityApplied(ctx context.Context, proposal SecurityAppliedProposal, current transactionReader, audit auditAppender, control securityAppliedRecorder) (controlplane.Transaction, error) {
+	if current == nil || audit == nil || control == nil {
+		return controlplane.Transaction{}, fmt.Errorf("%w: security-applied clients are required", ErrInvalidInput)
+	}
+	transaction, err := current.GetTransaction(ctx, proposal.DraftSnapshot.TransactionID)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("read transaction before security-applied append: %w", err)
+	}
+	auditRequest, _, err := proposal.requests(transaction, validPlaceholderDigest)
+	if err != nil {
+		return controlplane.Transaction{}, err
+	}
+	receipt, err := audit.Append(ctx, auditRequest)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("append security-applied audit: %w", err)
+	}
+	if receipt.SchemaVersion != auditlog.ReceiptSchemaVersion || !digestPattern.MatchString(receipt.ReceiptID) {
+		return controlplane.Transaction{}, fmt.Errorf("%w: audit returned an invalid receipt", ErrStateMismatch)
+	}
+	_, request, err := proposal.requests(transaction, receipt.ReceiptID)
+	if err != nil {
+		return controlplane.Transaction{}, err
+	}
+	transaction, err = control.MarkSecurityApplied(ctx, request)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("record security-applied control state: %w", err)
+	}
+	if err := proposalMatchesCurrentSecurityApplied(proposal, transaction); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("validate security-applied control response: %w", err)
+	}
+	if transaction.Status != controlplane.StatusSecurityApplied || transaction.SecurityApplied == nil ||
+		transaction.SecurityApplied.AuditReceiptID != receipt.ReceiptID {
+		return controlplane.Transaction{}, fmt.Errorf("%w: control response did not contain the audited security-applied outcome", ErrStateMismatch)
+	}
+	return transaction, nil
+}
+
+type securityAppliedEvidenceMaterial struct {
+	TransactionID         string                         `json:"transaction_id"`
+	TransactionDigest     string                         `json:"transaction_digest"`
+	PlanDigest            string                         `json:"plan_digest"`
+	Release               releasebinding.Binding         `json:"release"`
+	Target                controlplane.TargetBinding     `json:"target"`
+	ClaimID               string                         `json:"claim_id"`
+	FenceEpoch            uint64                         `json:"fence_epoch"`
+	Approval              controlplane.Approval          `json:"approval"`
+	Operations            []controlplane.OperationRecord `json:"operations"`
+	RollbackStatus        string                         `json:"rollback_status"`
+	ReleaseClassification string                         `json:"release_classification"`
+}
+
+func completedCampaignEvidence(snapshot laneguard.Plan, transaction controlplane.Transaction, eventTime time.Time) (string, error) {
+	draft, err := plancompiler.DraftFromSnapshot(snapshot)
+	if err != nil {
+		return "", fmt.Errorf("%w: security-applied draft: %v", ErrInvalidInput, err)
+	}
+	if eventTime.IsZero() || (transaction.Status != controlplane.StatusCommitApproved && transaction.Status != controlplane.StatusSecurityApplied) {
+		return "", fmt.Errorf("%w: transaction is not a completed development campaign", ErrStateMismatch)
+	}
+	if err := matchDraftTransaction(snapshot, transaction, transaction.Status); err != nil {
+		return "", err
+	}
+	if transaction.Quarantine != nil || transaction.Abort != nil || transaction.ActiveClaim == nil ||
+		transaction.ActiveClaim.AcquiredAt.IsZero() || transaction.ActiveClaim.AcquiredAt.After(eventTime) ||
+		!transaction.ActiveClaim.ExpiresAt.After(eventTime) || transaction.Target == nil ||
+		transaction.Target.BoundAt.IsZero() || transaction.Target.BoundAt.After(eventTime) {
+		return "", fmt.Errorf("%w: terminal claim, target, or disposition differs from the completed campaign", ErrStateMismatch)
+	}
+	if transaction.Status == controlplane.StatusCommitApproved && transaction.UpdatedAt.After(eventTime) {
+		return "", fmt.Errorf("%w: finalization event predates the completed control state", ErrStateMismatch)
+	}
+	approval := transaction.Approval
+	if approval == nil || !approvalMatchesCampaign(*approval, snapshot, transaction, eventTime) {
+		return "", fmt.Errorf("%w: current approval does not bind the completed campaign", ErrStateMismatch)
+	}
+	if len(transaction.Operations) != len(snapshot.Operations) {
+		return "", fmt.Errorf("%w: campaign has %d of %d exact operation records", ErrStateMismatch, len(transaction.Operations), len(snapshot.Operations))
+	}
+	seenIDs := make(map[string]struct{}, len(transaction.Operations))
+	var previousEvidenceAt time.Time
+	for index, record := range transaction.Operations {
+		operation := snapshot.Operations[index]
+		prestateDigest, err := draft.PrestateDigest(operation.Sequence)
+		if err != nil {
+			return "", err
+		}
+		if record.ID != operation.AuthorizationID || record.Operation != string(operation.Operation) ||
+			record.PlanDigest != snapshot.PlanDigest || record.Release != snapshot.Release ||
+			!record.ApprovalExpiresAt.Equal(snapshot.ApprovalExpiresAt) || record.InputDigest != snapshot.PlanDigest ||
+			record.PrestateDigest != prestateDigest || !digestPattern.MatchString(record.IntentAuditReceiptID) ||
+			record.IntentFenceEpoch != snapshot.FenceEpoch || record.IntentAt.IsZero() || record.IntentAt.After(eventTime) ||
+			(!previousEvidenceAt.IsZero() && record.IntentAt.Before(previousEvidenceAt)) ||
+			!approvalMatchesCampaign(record.Approval, snapshot, transaction, eventTime) ||
+			record.EvidenceAt == nil || record.EvidenceAt.Before(record.IntentAt) || record.EvidenceAt.After(eventTime) ||
+			!digestPattern.MatchString(record.OutputDigest) || !digestPattern.MatchString(record.ObservationDigest) {
+			return "", fmt.Errorf("%w: completed operation %d does not bind the reviewed campaign and evidence", ErrStateMismatch, index+1)
+		}
+		if _, duplicate := seenIDs[record.ID]; duplicate {
+			return "", fmt.Errorf("%w: completed campaign repeats an operation ID", ErrStateMismatch)
+		}
+		seenIDs[record.ID] = struct{}{}
+		switch record.Status {
+		case controlplane.OperationSucceeded:
+			if !digestPattern.MatchString(record.EvidenceAuditReceiptID) || record.ReconciliationAuditReceiptID != "" {
+				return "", fmt.Errorf("%w: completed operation %d lacks direct evidence receipt", ErrStateMismatch, index+1)
+			}
+		case controlplane.OperationConfirmedApplied:
+			if !digestPattern.MatchString(record.ReconciliationAuditReceiptID) ||
+				(record.EvidenceAuditReceiptID != "" && !digestPattern.MatchString(record.EvidenceAuditReceiptID)) {
+				return "", fmt.Errorf("%w: completed operation %d lacks reconciliation receipt", ErrStateMismatch, index+1)
+			}
+		default:
+			return "", fmt.Errorf("%w: completed operation %d is not authoritatively applied", ErrStateMismatch, index+1)
+		}
+		previousEvidenceAt = *record.EvidenceAt
+	}
+	material := securityAppliedEvidenceMaterial{
+		TransactionID: transaction.ID, TransactionDigest: transaction.TransactionDigest,
+		PlanDigest: snapshot.PlanDigest, Release: snapshot.Release,
+		Target: *transaction.Target, ClaimID: transaction.ActiveClaim.ID, FenceEpoch: snapshot.FenceEpoch,
+		Approval: *approval, Operations: append([]controlplane.OperationRecord(nil), transaction.Operations...),
+		RollbackStatus: developmentRollbackStatus, ReleaseClassification: developmentReleaseClassification,
+	}
+	return digestJSON("security-applied-campaign", material), nil
+}
+
+func approvalMatchesCampaign(approval controlplane.Approval, snapshot laneguard.Plan, transaction controlplane.Transaction, eventTime time.Time) bool {
+	return identifierPattern.MatchString(approval.ID) && identifierPattern.MatchString(approval.ApproverID) &&
+		approval.TransactionDigest == transaction.TransactionDigest && approval.PlanDigest == snapshot.PlanDigest &&
+		approval.StationID == snapshot.StationID && approval.LaneID == snapshot.LaneID &&
+		approval.FenceEpoch == snapshot.FenceEpoch && approval.TargetFingerprint == snapshot.TargetFingerprint &&
+		approval.Release == snapshot.Release && equalStrings(approval.AllowedOperations, planOperations(snapshot)) &&
+		digestPattern.MatchString(approval.AuditReceiptID) && !approval.ApprovedAt.IsZero() &&
+		!approval.ApprovedAt.After(eventTime) && approval.ExpiresAt.Equal(snapshot.ApprovalExpiresAt) &&
+		approval.ExpiresAt.After(eventTime) && approval.ExpiresAt.After(approval.ApprovedAt) &&
+		approval.ExpiresAt.Sub(approval.ApprovedAt) <= maximumApproval
+}
+
+func proposalMatchesCurrentSecurityApplied(proposal SecurityAppliedProposal, transaction controlplane.Transaction) error {
+	if proposal.SchemaVersion != SecurityAppliedProposalSchemaVersion || proposal.ExpectedResourceVersion == 0 ||
+		!identifierPattern.MatchString(proposal.ClaimID) || proposal.FenceEpoch != proposal.DraftSnapshot.FenceEpoch ||
+		!digestPattern.MatchString(proposal.EvidenceDigest) || proposal.RollbackStatus != developmentRollbackStatus ||
+		proposal.ReleaseClassification != developmentReleaseClassification || proposal.EventTime.IsZero() {
+		return fmt.Errorf("%w: security-applied proposal fields", ErrInvalidInput)
+	}
+	evidenceDigest, err := completedCampaignEvidence(proposal.DraftSnapshot, transaction, proposal.EventTime.UTC())
+	if err != nil {
+		return err
+	}
+	if transaction.ID != proposal.DraftSnapshot.TransactionID || transaction.ActiveClaim == nil ||
+		transaction.ActiveClaim.ID != proposal.ClaimID || transaction.FenceEpoch != proposal.FenceEpoch ||
+		transaction.ActiveClaim.FenceEpoch != proposal.FenceEpoch || evidenceDigest != proposal.EvidenceDigest {
+		return fmt.Errorf("%w: current completed campaign differs from the security-applied proposal", ErrStateMismatch)
+	}
+	switch transaction.Status {
+	case controlplane.StatusCommitApproved:
+		if transaction.ResourceVersion != proposal.ExpectedResourceVersion || transaction.SecurityApplied != nil {
+			return fmt.Errorf("%w: transaction is no longer awaiting the proposed finalization", ErrStateMismatch)
+		}
+	case controlplane.StatusSecurityApplied:
+		record := transaction.SecurityApplied
+		if transaction.ResourceVersion <= proposal.ExpectedResourceVersion || record == nil ||
+			record.EvidenceDigest != proposal.EvidenceDigest || !digestPattern.MatchString(record.AuditReceiptID) ||
+			record.RollbackStatus != developmentRollbackStatus || record.ReleaseClassification != developmentReleaseClassification ||
+			record.RecordedAt.IsZero() {
+			return fmt.Errorf("%w: recorded terminal outcome differs from the security-applied proposal", ErrStateMismatch)
+		}
+	default:
+		return fmt.Errorf("%w: transaction is not finalizable or terminal", ErrStateMismatch)
+	}
+	return nil
 }
 
 // PrepareReconciliationClaim converts the original lane's current claim into

@@ -215,6 +215,125 @@ func TestWorkflowProducesBridgeCompatibleAuthorityAndAdvancesOnlyAfterEvidence(t
 	}
 }
 
+func TestSecurityAppliedProposalAuditsThenTerminalizesExactCampaignIdempotently(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction := completedCampaign(t, &fixture)
+	proposal, err := NewSecurityAppliedProposal(snapshot, transaction, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.EvidenceDigest == "" || proposal.RollbackStatus != developmentRollbackStatus ||
+		proposal.ReleaseClassification != developmentReleaseClassification ||
+		proposal.ExpectedResourceVersion != transaction.ResourceVersion || proposal.ClaimID != transaction.ActiveClaim.ID {
+		t.Fatalf("security-applied proposal = %#v", proposal)
+	}
+
+	transaction, err = ApplySecurityApplied(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.Status != controlplane.StatusSecurityApplied || transaction.SecurityApplied == nil ||
+		transaction.SecurityApplied.EvidenceDigest != proposal.EvidenceDigest ||
+		transaction.SecurityApplied.RollbackStatus != developmentRollbackStatus ||
+		transaction.SecurityApplied.ReleaseClassification != developmentReleaseClassification {
+		t.Fatalf("security-applied transaction = %#v", transaction)
+	}
+	records := fixture.audit.service.Records(transaction.ID)
+	terminalEvent := records[len(records)-1].Event
+	if terminalEvent.Stage != "security_applied" || terminalEvent.Result != auditlog.ResultSucceeded ||
+		terminalEvent.InputDigest != snapshot.PlanDigest || terminalEvent.OutputDigest != proposal.EvidenceDigest ||
+		len(terminalEvent.ObservationReferences) != 1 ||
+		terminalEvent.ObservationReferences[0].Digest != proposal.EvidenceDigest ||
+		transaction.SecurityApplied.AuditReceiptID != fixture.audit.receipts[len(fixture.audit.receipts)-1].ReceiptID {
+		t.Fatalf("security-applied audit/control binding = %#v / %#v", terminalEvent, transaction.SecurityApplied)
+	}
+
+	version := transaction.ResourceVersion
+	recordCount := len(records)
+	transaction, err = ApplySecurityApplied(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatalf("replay security-applied proposal: %v", err)
+	}
+	if transaction.ResourceVersion != version || len(fixture.audit.service.Records(transaction.ID)) != recordCount {
+		t.Fatal("security-applied replay was not idempotent")
+	}
+}
+
+func TestSecurityAppliedRejectsProposalOrCompletedStateTamperingBeforeAudit(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction := completedCampaign(t, &fixture)
+	base, err := NewSecurityAppliedProposal(snapshot, transaction, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposalTests := map[string]func(*SecurityAppliedProposal){
+		"schema":          func(value *SecurityAppliedProposal) { value.SchemaVersion = "wrong" },
+		"resource":        func(value *SecurityAppliedProposal) { value.ExpectedResourceVersion++ },
+		"claim":           func(value *SecurityAppliedProposal) { value.ClaimID = "claim-other" },
+		"fence":           func(value *SecurityAppliedProposal) { value.FenceEpoch++ },
+		"evidence digest": func(value *SecurityAppliedProposal) { value.EvidenceDigest = testDigest("d") },
+		"rollback":        func(value *SecurityAppliedProposal) { value.RollbackStatus = "implemented" },
+		"classification":  func(value *SecurityAppliedProposal) { value.ReleaseClassification = "production" },
+	}
+	for name, mutate := range proposalTests {
+		t.Run("proposal "+name, func(t *testing.T) {
+			proposal := cloneSecurityAppliedProposal(t, base)
+			mutate(&proposal)
+			audit := &countingAudit{}
+			control := &countingSecurityAppliedRecorder{transaction: transaction}
+			if _, err := ApplySecurityApplied(context.Background(), proposal, staticReader{transaction}, audit, control); err == nil {
+				t.Fatal("tampered security-applied proposal was accepted")
+			}
+			if audit.calls != 0 || control.calls != 0 {
+				t.Fatalf("tampered proposal crossed authority boundary: audit=%d control=%d", audit.calls, control.calls)
+			}
+		})
+	}
+
+	stateTests := map[string]func(*controlplane.Transaction){
+		"short campaign": func(value *controlplane.Transaction) {
+			value.Operations = value.Operations[:len(value.Operations)-1]
+		},
+		"operation identity": func(value *controlplane.Transaction) { value.Operations[2].ID = "authorization-other" },
+		"operation status":   func(value *controlplane.Transaction) { value.Operations[3].Status = controlplane.OperationUncertain },
+		"evidence receipt":   func(value *controlplane.Transaction) { value.Operations[4].EvidenceAuditReceiptID = "" },
+		"evidence output":    func(value *controlplane.Transaction) { value.Operations[5].OutputDigest = testDigest("e") },
+		"target":             func(value *controlplane.Transaction) { value.Target.Fingerprint = testDigest("e") },
+		"target observation": func(value *controlplane.Transaction) { value.Target.ObservationDigest = testDigest("e") },
+	}
+	for name, mutate := range stateTests {
+		t.Run("state "+name, func(t *testing.T) {
+			changed := cloneControlTransaction(t, transaction)
+			mutate(&changed)
+			audit := &countingAudit{}
+			control := &countingSecurityAppliedRecorder{transaction: changed}
+			if _, err := ApplySecurityApplied(context.Background(), base, staticReader{changed}, audit, control); err == nil {
+				t.Fatal("tampered completed state was accepted")
+			}
+			if audit.calls != 0 || control.calls != 0 {
+				t.Fatalf("tampered state crossed authority boundary: audit=%d control=%d", audit.calls, control.calls)
+			}
+		})
+	}
+}
+
+func TestSecurityAppliedAuditFailureNeverCallsControl(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction := completedCampaign(t, &fixture)
+	proposal, err := NewSecurityAppliedProposal(snapshot, transaction, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := &countingAudit{err: errors.New("audit unavailable")}
+	control := &countingSecurityAppliedRecorder{transaction: transaction}
+	if _, err := ApplySecurityApplied(context.Background(), proposal, staticReader{transaction}, audit, control); err == nil {
+		t.Fatal("ApplySecurityApplied() succeeded with failed audit append")
+	}
+	if audit.calls != 1 || control.calls != 0 {
+		t.Fatalf("calls after terminal audit failure: audit=%d control=%d", audit.calls, control.calls)
+	}
+}
+
 func TestDraftPreparationAndClaimRenewalResumeWithoutIdempotencyConflict(t *testing.T) {
 	fixture := newWorkflowFixture(t)
 	ctx := context.Background()
@@ -638,6 +757,42 @@ func pendingFirstOperation(t *testing.T, fixture *workflowFixture) (laneguard.Pl
 	return snapshot, transaction
 }
 
+func completedCampaign(t *testing.T, fixture *workflowFixture) (laneguard.Plan, controlplane.Transaction) {
+	t.Helper()
+	ctx := context.Background()
+	snapshot, transaction, err := PrepareDraft(ctx, fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := NewApprovalProposal(snapshot, transaction, "approver-1", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = ApplyApproval(ctx, approval, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range snapshot.Operations {
+		intent, _, err := PrepareNextIntent(ctx, snapshot, fixture.now, fixture.control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		transaction, err = ApplyIntent(ctx, intent, fixture.control, fixture.audit, fixture.control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evidence, err := NewEvidenceProposal(snapshot, transaction, verifiedAttempt(snapshot, transaction, fixture.now), fixture.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		transaction, err = ApplyEvidence(ctx, evidence, fixture.control, fixture.audit, fixture.control)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return snapshot, transaction
+}
+
 func uncertainFirstOperation(t *testing.T, fixture *workflowFixture) (laneguard.Plan, controlplane.Transaction) {
 	t.Helper()
 	snapshot, transaction := pendingFirstOperation(t, fixture)
@@ -779,6 +934,32 @@ func cloneReconciliationProposal(t *testing.T, proposal ReconciliationProposal) 
 	return clone
 }
 
+func cloneSecurityAppliedProposal(t *testing.T, proposal SecurityAppliedProposal) SecurityAppliedProposal {
+	t.Helper()
+	encoded, err := json.Marshal(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clone SecurityAppliedProposal
+	if err := json.Unmarshal(encoded, &clone); err != nil {
+		t.Fatal(err)
+	}
+	return clone
+}
+
+func cloneControlTransaction(t *testing.T, transaction controlplane.Transaction) controlplane.Transaction {
+	t.Helper()
+	encoded, err := json.Marshal(transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clone controlplane.Transaction
+	if err := json.Unmarshal(encoded, &clone); err != nil {
+		t.Fatal(err)
+	}
+	return clone
+}
+
 type staticReader struct{ transaction controlplane.Transaction }
 
 func (reader staticReader) GetTransaction(context.Context, string) (controlplane.Transaction, error) {
@@ -821,6 +1002,16 @@ type countingReconciliationRecorder struct {
 }
 
 func (control *countingReconciliationRecorder) RecordReconciliation(context.Context, controlplane.RecordReconciliationRequest) (controlplane.Transaction, error) {
+	control.calls++
+	return control.transaction, nil
+}
+
+type countingSecurityAppliedRecorder struct {
+	calls       int
+	transaction controlplane.Transaction
+}
+
+func (control *countingSecurityAppliedRecorder) MarkSecurityApplied(context.Context, controlplane.SecurityAppliedRequest) (controlplane.Transaction, error) {
 	control.calls++
 	return control.transaction, nil
 }

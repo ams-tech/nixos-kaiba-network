@@ -143,6 +143,10 @@ func (client *HTTPControlClient) RecordEvidence(ctx context.Context, request con
 	return client.command(ctx, "record_evidence", request.TransactionID, request)
 }
 
+func (client *HTTPControlClient) MarkSecurityApplied(ctx context.Context, request controlplane.SecurityAppliedRequest) (controlplane.Transaction, error) {
+	return client.command(ctx, "mark_security_applied", request.TransactionID, request)
+}
+
 func (client *HTTPControlClient) RecordReconciliation(ctx context.Context, request controlplane.RecordReconciliationRequest) (controlplane.Transaction, error) {
 	return client.command(ctx, "record_reconciliation", request.TransactionID, request)
 }
