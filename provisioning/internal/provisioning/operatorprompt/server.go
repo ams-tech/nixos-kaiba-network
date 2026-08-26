@@ -69,12 +69,17 @@ type Server struct {
 	wait     sync.WaitGroup
 }
 
-// Listen creates a mode-0660 socket owned by the server UID and the fixed
-// allowed primary GID. Its parent must already be a non-symlink 0750 directory
-// with the same UID/GID; Listen never removes a pre-existing path.
+// Listen creates a mode-0660 socket owned by the server UID and its fixed
+// effective GID. Its parent must already be a non-symlink 0750 directory with
+// the same UID/GID; Listen never changes ownership or removes a pre-existing
+// path. Requiring the service to enter the allowed group before startup keeps
+// socket creation compatible with a capability-free systemd sandbox.
 func Listen(config Config) (*Server, error) {
 	if err := validateSocketPath(config.SocketPath); err != nil {
 		return nil, err
+	}
+	if uint32(os.Getegid()) != config.AllowedPrimaryGID {
+		return nil, errors.New("operator prompt server effective GID does not match the allowed primary GID")
 	}
 	if config.PeerCredentials == nil {
 		config.PeerCredentials = systemPeerCredentials
@@ -97,10 +102,6 @@ func Listen(config Config) (*Server, error) {
 		if info, statErr := os.Lstat(config.SocketPath); statErr == nil && info.Mode()&os.ModeSocket != 0 {
 			_ = os.Remove(config.SocketPath)
 		}
-	}
-	if err := os.Chown(config.SocketPath, os.Geteuid(), int(config.AllowedPrimaryGID)); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("set operator socket ownership: %w", err)
 	}
 	if err := os.Chmod(config.SocketPath, 0o660); err != nil {
 		cleanup()

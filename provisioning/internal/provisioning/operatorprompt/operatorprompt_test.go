@@ -235,6 +235,14 @@ func TestOnlyOneActivePromptAndCloseReleasesWaiter(t *testing.T) {
 func TestSocketSafetyModeAndCleanup(t *testing.T) {
 	directory := testSocketDirectory(t)
 	path := filepath.Join(directory, "operator.sock")
+	wrongGID := uint32(os.Getegid()) + 1
+	if wrongGID == 0 {
+		wrongGID = 1
+	}
+	if _, err := Listen(Config{SocketPath: path, AllowedPrimaryGID: wrongGID}); err == nil ||
+		!strings.Contains(err.Error(), "effective GID") {
+		t.Fatalf("Listen with mismatched service GID = %v", err)
+	}
 	if err := os.WriteFile(path, []byte("do not replace"), 0o600); err != nil {
 		t.Fatal(err)
 	}

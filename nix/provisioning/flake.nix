@@ -144,6 +144,8 @@
           kaiba-provision-control = built.control;
           kaiba-provision-integrated-rehearsal = built.integratedRehearsal;
           kaiba-provision-lane-guard = built.laneGuard;
+          kaiba-provision-lane-operator = built.laneOperator;
+          kaiba-provision-lane-workflow = built.laneWorkflow;
           kaiba-provision-media-contract = built.mediaContractTool;
           kaiba-provision = built.provision;
           kaiba-provision-rehearsal = built.rehearsal;

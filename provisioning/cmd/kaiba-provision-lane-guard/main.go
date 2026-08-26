@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,14 +12,18 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/authoritybridge"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/evidencefile"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/operatorprompt"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/physicalrpi5"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebindingmanifest"
@@ -43,11 +48,26 @@ var (
 
 var effectiveUID = os.Geteuid
 
-type hardwareFactory func(physicalrpi5.Config) (laneguard.Hardware, error)
+type hardwareFactory func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error)
 
-var buildHardware hardwareFactory = func(config physicalrpi5.Config) (laneguard.Hardware, error) {
-	return physicalrpi5.New(config, physicalrpi5.Dependencies{})
+var buildHardware hardwareFactory = func(config physicalrpi5.Config, dependencies physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+	return physicalrpi5.New(config, dependencies)
 }
+
+type operatorPromptServer interface {
+	physicalrpi5.Prompter
+	io.Closer
+}
+
+var (
+	lookupOperatorGroup  = user.LookupGroup
+	listenOperatorPrompt = func(config operatorprompt.Config) (operatorPromptServer, error) {
+		return operatorprompt.Listen(config)
+	}
+	validateAttemptDestination           = evidencefile.ValidateTrustedNewPath
+	writeAttemptEvidence                 = evidencefile.WriteCanonicalNewTrusted
+	commandOutput              io.Writer = os.Stdout
+)
 
 var requestAuthority = authoritybridge.Request
 
@@ -89,6 +109,9 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	journalPath := flags.String("journal", "", "absolute durable execute-once journal path")
 	draftPath := flags.String("draft", "", "absolute authority-free approved-plan draft JSON path")
 	bridgeSocket := flags.String("bridge-socket", "", "absolute authenticated authority-bridge Unix socket path")
+	operatorSocket := flags.String("operator-socket", "", "absolute authenticated operator-prompt Unix socket path")
+	operatorGroup := flags.String("operator-group", "", "fixed primary group authorized to acknowledge operator prompts")
+	attemptDirectory := flags.String("attempt-directory", "", "absolute trusted directory for immutable lane-attempt evidence")
 	mode := flags.String("mode", "execute", "one-shot operation: execute or reconcile")
 	enableMutations := flags.Bool("enable-mutations", false, "enable the immutable physical RPIBOOT adapter")
 	printReleaseBinding := flags.Bool("print-release-binding", false, "print the immutable public release binding as JSON and exit")
@@ -123,7 +146,7 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		if err != nil {
 			return err
 		}
-		encoder := json.NewEncoder(os.Stdout)
+		encoder := json.NewEncoder(commandOutput)
 		encoder.SetEscapeHTML(false)
 		if *printReleaseMaterial {
 			return encoder.Encode(material)
@@ -131,7 +154,7 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		return encoder.Encode(material.Binding)
 	}
 	if !*enableMutations {
-		fmt.Fprintf(os.Stdout, "lane guard configuration valid; mutation disabled for %s/%s\n", laneConfig.StationID, laneConfig.LaneID)
+		fmt.Fprintf(commandOutput, "lane guard configuration valid; mutation disabled for %s/%s\n", laneConfig.StationID, laneConfig.LaneID)
 		return nil
 	}
 	if effectiveUID() != 0 {
@@ -140,8 +163,16 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if *mode != "execute" && *mode != "reconcile" {
 		return errors.New("mode must be execute or reconcile")
 	}
-	if *journalPath == "" || *draftPath == "" || *bridgeSocket == "" {
-		return errors.New("enabled operation requires journal, draft, and bridge-socket paths")
+	if *journalPath == "" || *draftPath == "" || *bridgeSocket == "" || *operatorSocket == "" || *operatorGroup == "" || *attemptDirectory == "" {
+		return errors.New("enabled operation requires journal, draft, bridge-socket, operator-socket, operator-group, and attempt-directory")
+	}
+	for label, path := range map[string]string{
+		"journal": *journalPath, "draft": *draftPath, "bridge socket": *bridgeSocket,
+		"operator socket": *operatorSocket, "attempt directory": *attemptDirectory,
+	} {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			return fmt.Errorf("%s path must be clean and absolute", label)
+		}
 	}
 	var draft laneguard.Plan
 	if err := loadStrictJSON(*draftPath, 1024*1024, &draft); err != nil {
@@ -200,6 +231,17 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if plan.Release != compiledRelease {
 		return fmt.Errorf("%w: approved release differs from the immutable lane-guard build", laneguard.ErrPlanMismatch)
 	}
+	attemptPath, err := plannedAttemptEvidencePath(*attemptDirectory, *mode, executeRequest, reconcileRequest)
+	if err != nil {
+		return fmt.Errorf("derive immutable attempt destination: %w", err)
+	}
+	if err := validateAttemptDestination(attemptPath); err != nil {
+		return fmt.Errorf("validate immutable attempt destination before physical I/O: %w", err)
+	}
+	operatorGID, err := resolveOperatorGID(*operatorGroup)
+	if err != nil {
+		return err
+	}
 	initialMode := physicalrpi5.ModeFresh
 	if *mode == "reconcile" {
 		initialMode = physicalrpi5.ModeAuto
@@ -211,7 +253,25 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		InitialMode: initialMode, ExpectedCustomerKeyHash: expectedCustomerKeyHash,
 		ExpectedEEPROMHash: expectedEEPROMHash, ExpectedBootImageDigest: expectedBootImageDigest,
 	}
-	hardware, err := buildHardware(physicalConfig)
+	store, err := laneguard.NewFileStore(*journalPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, store.Close())
+	}()
+	promptServer, err := listenOperatorPrompt(operatorprompt.Config{
+		SocketPath: *operatorSocket, AllowedPrimaryGID: operatorGID,
+	})
+	if err != nil {
+		return fmt.Errorf("create authenticated operator prompt socket: %w", err)
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, promptServer.Close())
+	}()
+	hardware, err := buildHardware(physicalConfig, physicalrpi5.Dependencies{
+		Journal: store, Prompter: promptServer,
+	})
 	if err != nil {
 		return fmt.Errorf("construct immutable physical adapter: %w", err)
 	}
@@ -219,10 +279,6 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		defer func() {
 			resultErr = errors.Join(resultErr, closer.Close())
 		}()
-	}
-	store, err := laneguard.NewFileStore(*journalPath)
-	if err != nil {
-		return err
 	}
 	guard, err := laneguard.New(laneConfig, hardware, store)
 	if err != nil {
@@ -240,13 +296,73 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		attempt, err = guard.Execute(ctx, executeRequest)
 	}
 	if attempt.Key != "" {
-		encoder := json.NewEncoder(os.Stdout)
+		encoded, encodeErr := json.Marshal(attempt)
+		if encodeErr != nil {
+			return errors.Join(err, fmt.Errorf("encode canonical attempt evidence: %w", encodeErr))
+		}
+		encoded = append(encoded, '\n')
+		if writeErr := writeAttemptEvidence(attemptPath, encoded); writeErr != nil {
+			return errors.Join(err, fmt.Errorf("publish immutable attempt evidence: %w", writeErr))
+		}
+		summary := struct {
+			Path   string                  `json:"path"`
+			Status laneguard.AttemptStatus `json:"status"`
+			Key    string                  `json:"key"`
+		}{Path: attemptPath, Status: attempt.Status, Key: attempt.Key}
+		encoder := json.NewEncoder(commandOutput)
 		encoder.SetEscapeHTML(false)
-		if encodeErr := encoder.Encode(attempt); encodeErr != nil {
-			return errors.Join(err, fmt.Errorf("encode attempt result: %w", encodeErr))
+		if encodeErr := encoder.Encode(summary); encodeErr != nil {
+			return errors.Join(err, fmt.Errorf("encode attempt publication summary: %w", encodeErr))
 		}
 	}
 	return err
+}
+
+const attemptPublicationIdentitySchemaVersion = "kaiba.provisioning.lane-attempt-publication/v1alpha1"
+
+func plannedAttemptEvidencePath(directory, mode string, execute laneguard.ExecuteRequest, reconcile laneguard.ReconcileRequest) (string, error) {
+	if directory == "" || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return "", errors.New("attempt directory must be a clean absolute path")
+	}
+	identity := struct {
+		SchemaVersion string                      `json:"schema_version"`
+		Mode          string                      `json:"mode"`
+		Execute       *laneguard.ExecuteRequest   `json:"execute,omitempty"`
+		Reconcile     *laneguard.ReconcileRequest `json:"reconcile,omitempty"`
+	}{SchemaVersion: attemptPublicationIdentitySchemaVersion, Mode: mode}
+	switch mode {
+	case "execute":
+		identity.Execute = &execute
+	case "reconcile":
+		identity.Reconcile = &reconcile
+	default:
+		return "", errors.New("attempt publication mode must be execute or reconcile")
+	}
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	path := filepath.Join(directory, fmt.Sprintf("lane-attempt-%x.json", digest[:]))
+	if filepath.Dir(path) != directory {
+		return "", errors.New("attempt evidence escaped its fixed directory")
+	}
+	return path, nil
+}
+
+func resolveOperatorGID(name string) (uint32, error) {
+	group, err := lookupOperatorGroup(name)
+	if err != nil {
+		return 0, fmt.Errorf("resolve operator group %q: %w", name, err)
+	}
+	if group == nil {
+		return 0, fmt.Errorf("resolve operator group %q: lookup returned no group", name)
+	}
+	value, err := strconv.ParseUint(group.Gid, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("operator group %q has invalid numeric GID %q: %w", name, group.Gid, err)
+	}
+	return uint32(value), nil
 }
 
 func immutableReleaseBinding() (releasebinding.Binding, error) {

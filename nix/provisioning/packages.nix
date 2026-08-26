@@ -131,6 +131,7 @@ let
       "cmd/kaiba-provision-authority-bridge"
       "cmd/kaiba-provision-control"
       "cmd/kaiba-provision-lane-guard"
+      "cmd/kaiba-provision-lane-workflow"
       "cmd/kaiba-provision-signer"
       "cmd/kaiba-provision-signing-client"
       "cmd/kaiba-provision-signing-gate"
@@ -144,6 +145,27 @@ let
     # link step separate prevents probe-only build-time paths from becoming
     # ambient configuration for the control and station processes.
     doCheck = false;
+  };
+
+  laneOperator = pkgs.buildGoModule {
+    pname = "kaiba-provision-lane-operator";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-lane-operator" ];
+    vendorHash = null;
+    doCheck = false;
+    passthru.kaibaLaneOperator = {
+      authority = "acknowledgement_only";
+      directHardwareAccess = false;
+      mutationCapable = false;
+      operationSelectionCapable = false;
+      physicalPathSelectionCapable = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-lane-operator";
+      description = "Private authenticated Kaiba physical-lane acknowledgement client";
+      platforms = lib.platforms.linux;
+    };
   };
 
   # This generic command can finalize public signed-boot records, but it is
@@ -471,6 +493,11 @@ let
   laneGuard = servicePackage {
     binary = "kaiba-provision-lane-guard";
     description = "Kaiba one-lane privileged Raspberry Pi 5 provisioning guard";
+  };
+
+  laneWorkflow = servicePackage {
+    binary = "kaiba-provision-lane-workflow";
+    description = "Kaiba fixed Raspberry Pi 5 lane authority workflow";
   };
 
   liveStation = servicePackage {
@@ -1311,6 +1338,8 @@ in
     goSource
     integratedRehearsal
     laneGuard
+    laneOperator
+    laneWorkflow
     liveStation
     mediaContractTool
     mediaStager

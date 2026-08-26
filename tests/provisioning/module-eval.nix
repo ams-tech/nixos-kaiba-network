@@ -266,10 +266,39 @@ let
       '';
 
   provisioningLaneGuard = {
+    users.users.provisioner.isNormalUser = true;
     services.kaiba-provisioning-lane-guard = {
       enable = true;
       package = kaibaLaneGuardPackage;
+      operators = [ "provisioner" ];
     };
+  };
+
+  duplicateLaneGuardOperators = lib.recursiveUpdate provisioningLaneGuard {
+    services.kaiba-provisioning-lane-guard.operators = [
+      "provisioner"
+      "provisioner"
+    ];
+  };
+
+  unsafeLaneOperatorPackage = pkgs.runCommand "kaiba-unsafe-lane-operator-fixture"
+    {
+      passthru.kaibaLaneOperator = {
+        authority = "acknowledgement_only";
+        directHardwareAccess = true;
+        mutationCapable = false;
+        operationSelectionCapable = false;
+        physicalPathSelectionCapable = false;
+      };
+    }
+    ''
+      mkdir -p "$out/bin"
+      touch "$out/bin/kaiba-provision-lane-operator"
+      chmod 0555 "$out/bin/kaiba-provision-lane-operator"
+    '';
+
+  provisioningLaneGuardUnsafeOperator = lib.recursiveUpdate provisioningLaneGuard {
+    services.kaiba-provisioning-lane-guard.operatorPackage = unsafeLaneOperatorPackage;
   };
 
   unlinkedLaneGuardPackage = pkgs.runCommand "kaiba-unlinked-lane-guard-fixture" { } ''
@@ -397,6 +426,9 @@ let
     laneGuardMutatingCustomSocketConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
   laneGuardReconcileService =
     laneGuardReconcileConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
+  laneGuardOperatorWrappers = builtins.filter (
+    package: package ? kaibaLaneOperatorWrapper
+  ) laneGuardConfig.environment.systemPackages;
   authorityBridgeCustomSocketService =
     laneGuardMutatingCustomSocketConfig.systemd.services.kaiba-provisioning-authority-bridge.serviceConfig;
   signingGateService = signingGateConfig.systemd.services.kaiba-provision-signing-gate.serviceConfig;
@@ -564,6 +596,9 @@ let
     lib.hasInfix ''"--rpiboot-sysfs" "/sys/bus/usb/devices/1-1"'' laneGuardService.ExecStart
     && lib.hasInfix ''"--draft" "/var/lib/kaiba-provision-lane-guard/draft.json"'' laneGuardService.ExecStart
     && lib.hasInfix ''"--bridge-socket" "/run/kaiba-provision-authority-bridge/bridge.sock"'' laneGuardService.ExecStart
+    && lib.hasInfix ''"--operator-socket" "/run/kaiba-provision-lane-guard/operator.sock"'' laneGuardService.ExecStart
+    && lib.hasInfix ''"--operator-group" "kaiba-provision-operator"'' laneGuardService.ExecStart
+    && lib.hasInfix ''"--attempt-directory" "/var/lib/kaiba-provision-lane-guard/attempts"'' laneGuardService.ExecStart
     && !(lib.hasInfix ''"--plan"'' laneGuardService.ExecStart)
     && !(lib.hasInfix ''"--request"'' laneGuardService.ExecStart)
     && !(lib.hasInfix "--enable-mutations" laneGuardService.ExecStart)
@@ -580,8 +615,26 @@ let
       laneGuardMutatingConfig.systemd.services.kaiba-provisioning-lane-guard.requires
       == [ "kaiba-provisioning-authority-bridge.service" ]
     && laneGuardService.User == "root"
-    && laneGuardService.StateDirectory == "kaiba-provision-lane-guard"
+    && laneGuardService.Group == "kaiba-provision-operator"
+    && laneGuardService.StateDirectory == [
+      "kaiba-provision-lane-guard"
+      "kaiba-provision-lane-guard/attempts"
+    ]
     && laneGuardService.StateDirectoryMode == "0700"
+    && laneGuardService.RuntimeDirectory == "kaiba-provision-lane-guard"
+    && laneGuardService.RuntimeDirectoryMode == "0750"
+    && laneGuardConfig.users.groups ? kaiba-provision-operator
+    && builtins.elem "kaiba-provision-operator" laneGuardConfig.users.users.provisioner.extraGroups
+    && builtins.length laneGuardOperatorWrappers == 1
+    && (builtins.head laneGuardOperatorWrappers).kaibaLaneOperatorWrapper == {
+      acceptsArguments = false;
+      group = "kaiba-provision-operator";
+      mutationCapable = false;
+      operationSelectionCapable = false;
+      physicalPathSelectionCapable = false;
+      socketPath = "/run/kaiba-provision-lane-guard/operator.sock";
+    }
+    && laneGuardService.TimeoutStopSec == "45s"
     && laneGuardService.DevicePolicy == "closed"
     && builtins.elem "/dev/gpiochip0 rw" laneGuardService.DeviceAllow
     && builtins.elem "/dev/serial/by-id/kaiba-target-uart r" laneGuardService.DeviceAllow
@@ -746,6 +799,12 @@ assert lib.assertMsg (
 assert lib.assertMsg (
   !assertionsPass duplicateProbeOperators
 ) "duplicate probe operators were accepted";
+assert lib.assertMsg (
+  !assertionsPass duplicateLaneGuardOperators
+) "duplicate lane-guard operators were accepted";
+assert lib.assertMsg (
+  !assertionsPass provisioningLaneGuardUnsafeOperator
+) "a lane operator package with direct hardware access was accepted";
 assert lib.assertMsg probeBoundary
   "provisioning probe package, group, or narrow udev boundary is not enforced";
 assert lib.assertMsg referenceServiceBoundary
@@ -763,6 +822,18 @@ assert lib.assertMsg physicalServiceBoundary
 assert lib.assertMsg signingServiceBoundary
   "YubiKey signer credential, PC/SC, user, or sandbox boundary is not enforced";
 pkgs.runCommand "kaiba-provisioning-module-evaluation" { } ''
+  operator_wrapper=${builtins.head laneGuardOperatorWrappers}/bin/kaiba-provision-lane-acknowledge
+  test -x "$operator_wrapper"
+  grep -F -- '${pkgs.shadow}/bin/sg kaiba-provision-operator' "$operator_wrapper" > /dev/null
+  grep -F -- '--socket /run/kaiba-provision-lane-guard/operator.sock' "$operator_wrapper" > /dev/null
+  set +e
+  "$operator_wrapper" unexpected > wrapper.stdout 2> wrapper.stderr
+  wrapper_status="$?"
+  set -e
+  test "$wrapper_status" -eq 2
+  test ! -s wrapper.stdout
+  grep -Fx 'usage: kaiba-provision-lane-acknowledge' wrapper.stderr > /dev/null
+
   mkdir -p "$out"
   printf '%s\n' \
     'provisioning-probe-module: pass' \

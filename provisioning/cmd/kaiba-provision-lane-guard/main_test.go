@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,32 +15,82 @@ import (
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/authoritybridge"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/evidencefile"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/operatorprompt"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/physicalrpi5"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebindingmanifest"
 )
 
 type commandHardware struct {
+	journal      laneguard.Journal
 	observation  laneguard.Observation
 	observations int
 	executions   int
+	transitions  int
+	closed       int
+	closeErr     error
 	executeErr   error
 	poststate    laneguard.DirectState
 }
 
-func (hardware *commandHardware) Observe(context.Context, laneguard.Config) (laneguard.Observation, error) {
+func (hardware *commandHardware) Observe(_ context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.Observation, error) {
 	hardware.observations++
-	return hardware.observation, nil
+	hardware.transitions++
+	outcome, err := recordCommandBootTransition(hardware.journal, config, action, hardware.transitions, false)
+	observation := hardware.observation
+	observation.BootTransition = outcome
+	return observation, err
 }
 
-func (hardware *commandHardware) Execute(_ context.Context, _ laneguard.Config, _ laneguard.Operation) (laneguard.OperationResult, error) {
+func (hardware *commandHardware) Execute(_ context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.OperationResult, error) {
 	hardware.executions++
+	hardware.transitions++
 	hardware.observation.State = hardware.poststate
-	return laneguard.OperationResult{OutputDigest: commandDigest("f"), Detail: "fake physical execution"}, hardware.executeErr
+	outcome, transitionErr := recordCommandBootTransition(hardware.journal, config, action, hardware.transitions, hardware.executeErr != nil)
+	return laneguard.OperationResult{
+		OutputDigest: commandDigest("f"), Detail: "fake physical execution", BootTransition: outcome,
+	}, errors.Join(hardware.executeErr, transitionErr)
+}
+
+func (hardware *commandHardware) Close() error {
+	hardware.closed++
+	return hardware.closeErr
+}
+
+type commandPromptServer struct {
+	closed   int
+	closeErr error
+}
+
+func (*commandPromptServer) Present(context.Context, operatorprompt.Prompt) (operatorprompt.Acknowledgement, error) {
+	return operatorprompt.Acknowledgement{}, errors.New("fake hardware must not call the operator server")
+}
+
+func (server *commandPromptServer) Close() error {
+	server.closed++
+	return server.closeErr
 }
 
 func TestDisabledCommandValidatesLaneWithoutMutationInputs(t *testing.T) {
+	restoreCommandGlobals(t)
+	lookupOperatorGroup = func(string) (*user.Group, error) {
+		t.Fatal("disabled command resolved an operator group")
+		return nil, nil
+	}
+	listenOperatorPrompt = func(operatorprompt.Config) (operatorPromptServer, error) {
+		t.Fatal("disabled command created an operator prompt socket")
+		return nil, nil
+	}
+	validateAttemptDestination = func(string) error {
+		t.Fatal("disabled command validated an attempt destination")
+		return nil
+	}
+	buildHardware = func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+		t.Fatal("disabled command constructed hardware")
+		return nil, nil
+	}
 	if err := run(context.Background(), nil); err != nil {
 		t.Fatalf("disabled run: %v", err)
 	}
@@ -63,13 +116,13 @@ func TestEnabledCommandRequiresRootAndImmutableBuildPaths(t *testing.T) {
 	}
 
 	effectiveUID = func() int { return 0 }
+	if err := run(context.Background(), []string{"--enable-mutations"}); err == nil || !strings.Contains(err.Error(), "operator-socket") {
+		t.Fatalf("missing operator integration flags error = %v", err)
+	}
 	plan, _ := commandPlanAndRequest()
 	directory := t.TempDir()
 	draftPath := writeJSON(t, directory, "draft.json", commandDraft(plan))
-	err := run(context.Background(), []string{
-		"--enable-mutations", "--draft", draftPath, "--bridge-socket", filepath.Join(directory, "bridge.sock"),
-		"--journal", filepath.Join(directory, "journal.json"),
-	})
+	err := run(context.Background(), commandMutationArguments(t, directory, draftPath, filepath.Join(directory, "journal.json")))
 	if err == nil || !strings.Contains(err.Error(), "immutable") || !strings.Contains(err.Error(), "path") {
 		t.Fatalf("missing immutable-path error = %v", err)
 	}
@@ -88,23 +141,34 @@ func TestOneShotCommandUsesDurableJournalAndNoCallerArtifactPaths(t *testing.T) 
 		},
 		poststate: plan.Operations[0].ExpectedPoststate,
 	}
-	buildHardware = func(config physicalrpi5.Config) (laneguard.Hardware, error) {
+	server := &commandPromptServer{}
+	listenOperatorPrompt = func(config operatorprompt.Config) (operatorPromptServer, error) {
+		if !filepath.IsAbs(config.SocketPath) || filepath.Base(config.SocketPath) != "operator.sock" || config.AllowedPrimaryGID != 4242 {
+			t.Fatalf("operator prompt config = %#v", config)
+		}
+		return server, nil
+	}
+	buildHardware = func(config physicalrpi5.Config, dependencies physicalrpi5.Dependencies) (laneguard.Hardware, error) {
 		if config.Paths.RPIBootBinary != rpibootBinary || config.Paths.FreshCommitBundle != freshCommitBundle || !config.Paths.RequireNixStorePaths {
 			t.Fatalf("physical config = %#v", config)
 		}
+		if dependencies.Journal == nil || dependencies.Prompter != server {
+			t.Fatalf("physical dependencies = %#v", dependencies)
+		}
+		hardware.journal = dependencies.Journal
 		return hardware, nil
 	}
 	directory := t.TempDir()
 	draftPath := writeJSON(t, directory, "draft.json", commandDraft(plan))
 	journalPath := filepath.Join(directory, "journal.json")
-	if err := run(context.Background(), []string{
-		"--enable-mutations", "--draft", draftPath, "--bridge-socket", filepath.Join(directory, "bridge.sock"),
-		"--journal", journalPath,
-	}); err != nil {
+	var output bytes.Buffer
+	commandOutput = &output
+	arguments := commandMutationArguments(t, directory, draftPath, journalPath)
+	if err := run(context.Background(), arguments); err != nil {
 		t.Fatalf("one-shot run: %v", err)
 	}
-	if hardware.executions != 1 {
-		t.Fatalf("hardware executions = %d", hardware.executions)
+	if hardware.executions != 1 || hardware.closed != 1 || server.closed != 1 {
+		t.Fatalf("hardware lifecycle = executions:%d hardware-close:%d prompt-close:%d", hardware.executions, hardware.closed, server.closed)
 	}
 	store, err := laneguard.NewFileStore(journalPath)
 	if err != nil {
@@ -114,6 +178,37 @@ func TestOneShotCommandUsesDurableJournalAndNoCallerArtifactPaths(t *testing.T) 
 	attempt, ok, err := store.Get(key)
 	if err != nil || !ok || attempt.Status != laneguard.AttemptVerified {
 		t.Fatalf("durable attempt = %#v, %t, %v", attempt, ok, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var summary struct {
+		Path   string                  `json:"path"`
+		Status laneguard.AttemptStatus `json:"status"`
+		Key    string                  `json:"key"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &summary); err != nil || summary.Status != attempt.Status || summary.Key != attempt.Key {
+		t.Fatalf("attempt summary = %#v, %v; output=%q", summary, err, output.String())
+	}
+	published, err := os.ReadFile(summary.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(summary.Path)
+	if err != nil || info.Mode().Perm() != 0o444 {
+		t.Fatalf("attempt evidence mode = %v, %v", info, err)
+	}
+	canonical, err := json.Marshal(attempt)
+	if err != nil || !bytes.Equal(published, append(canonical, '\n')) {
+		t.Fatalf("canonical attempt evidence mismatch: %v\n%s", err, published)
+	}
+	if err := run(context.Background(), arguments); err == nil || !strings.Contains(err.Error(), "destination") {
+		t.Fatalf("second publication error = %v", err)
+	}
+	after, err := os.ReadFile(summary.Path)
+	if err != nil || !bytes.Equal(after, published) || hardware.executions != 1 || hardware.closed != 1 || server.closed != 1 {
+		t.Fatalf("existing evidence changed or resources were reopened: %v executions=%d hardware-close=%d prompt-close=%d",
+			err, hardware.executions, hardware.closed, server.closed)
 	}
 
 	if err := run(context.Background(), []string{"--rpiboot-binary", "/tmp/evil"}); err == nil {
@@ -168,19 +263,26 @@ func TestCommandReconcilesRestartWithModeAutoAndNoRedispatch(t *testing.T) {
 		executeErr: errors.New("response lost after target commit"),
 	}
 	var adapterModes []string
-	buildHardware = func(config physicalrpi5.Config) (laneguard.Hardware, error) {
+	buildHardware = func(config physicalrpi5.Config, dependencies physicalrpi5.Dependencies) (laneguard.Hardware, error) {
 		adapterModes = append(adapterModes, config.InitialMode)
+		hardware.journal = dependencies.Journal
 		return hardware, nil
 	}
 	directory := t.TempDir()
 	draftPath := writeJSON(t, directory, "draft.json", commandDraft(plan))
 	journalPath := filepath.Join(directory, "journal.json")
-	common := []string{
-		"--enable-mutations", "--draft", draftPath,
-		"--bridge-socket", filepath.Join(directory, "bridge.sock"), "--journal", journalPath,
-	}
+	common := commandMutationArguments(t, directory, draftPath, journalPath)
 	if err := run(context.Background(), common); !errors.Is(err, laneguard.ErrReconciliationRequired) {
 		t.Fatalf("uncertain execution = %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(directory, "attempts"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("uncertain attempt publications = %v, %v", entries, err)
+	}
+	var uncertain laneguard.Attempt
+	data, err := os.ReadFile(filepath.Join(directory, "attempts", entries[0].Name()))
+	if err != nil || json.Unmarshal(data, &uncertain) != nil || uncertain.Status != laneguard.AttemptUncertain {
+		t.Fatalf("uncertain attempt evidence = %#v, %v", uncertain, err)
 	}
 	if err := run(context.Background(), append(append([]string(nil), common...), "--mode", "reconcile")); err != nil {
 		t.Fatalf("restart reconciliation = %v", err)
@@ -191,6 +293,10 @@ func TestCommandReconcilesRestartWithModeAutoAndNoRedispatch(t *testing.T) {
 	if hardware.executions != 1 || hardware.observations != 2 {
 		t.Fatalf("reconciliation redispatch/double observation: executions=%d observations=%d", hardware.executions, hardware.observations)
 	}
+	entries, err = os.ReadDir(filepath.Join(directory, "attempts"))
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("execute and reconciliation publications = %v, %v", entries, err)
+	}
 }
 
 func TestCommandRejectsMismatchedRequestBeforeConstructingHardware(t *testing.T) {
@@ -200,17 +306,14 @@ func TestCommandRejectsMismatchedRequestBeforeConstructingHardware(t *testing.T)
 	plan, request := commandPlanAndRequest()
 	request.OperationDigest = commandDigest("9")
 	stubAuthorityResult(t, plan, request)
-	buildHardware = func(physicalrpi5.Config) (laneguard.Hardware, error) {
+	buildHardware = func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error) {
 		t.Fatal("mismatched request reached hardware construction")
 		return nil, nil
 	}
 	directory := t.TempDir()
-	err := run(context.Background(), []string{
-		"--enable-mutations",
-		"--draft", writeJSON(t, directory, "draft.json", commandDraft(plan)),
-		"--bridge-socket", filepath.Join(directory, "bridge.sock"),
-		"--journal", filepath.Join(directory, "journal.json"),
-	})
+	err := run(context.Background(), commandMutationArguments(
+		t, directory, writeJSON(t, directory, "draft.json", commandDraft(plan)), filepath.Join(directory, "journal.json"),
+	))
 	if !errors.Is(err, laneguard.ErrPlanMismatch) {
 		t.Fatalf("error = %v, want plan mismatch", err)
 	}
@@ -228,17 +331,14 @@ func TestCommandRejectsReleaseThatDiffersFromImmutableBuild(t *testing.T) {
 		return material, err
 	}
 	stubAuthorityResult(t, plan, request)
-	buildHardware = func(physicalrpi5.Config) (laneguard.Hardware, error) {
+	buildHardware = func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error) {
 		t.Fatal("release-binding mismatch reached hardware construction")
 		return nil, nil
 	}
 	directory := t.TempDir()
-	err := run(context.Background(), []string{
-		"--enable-mutations",
-		"--draft", writeJSON(t, directory, "draft.json", commandDraft(plan)),
-		"--bridge-socket", filepath.Join(directory, "bridge.sock"),
-		"--journal", filepath.Join(directory, "journal.json"),
-	})
+	err := run(context.Background(), commandMutationArguments(
+		t, directory, writeJSON(t, directory, "draft.json", commandDraft(plan)), filepath.Join(directory, "journal.json"),
+	))
 	if !errors.Is(err, laneguard.ErrPlanMismatch) {
 		t.Fatalf("error = %v, want plan mismatch", err)
 	}
@@ -257,17 +357,14 @@ func TestCommandRejectsExpiredApprovalBeforeConstructingHardware(t *testing.T) {
 	request.PlanDigest = plan.PlanDigest
 	request.ApprovalExpiresAt = plan.ApprovalExpiresAt
 	stubAuthorityResult(t, plan, request)
-	buildHardware = func(physicalrpi5.Config) (laneguard.Hardware, error) {
+	buildHardware = func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error) {
 		t.Fatal("expired approval reached hardware construction")
 		return nil, nil
 	}
 	directory := t.TempDir()
-	err = run(context.Background(), []string{
-		"--enable-mutations",
-		"--draft", writeJSON(t, directory, "draft.json", commandDraft(plan)),
-		"--bridge-socket", filepath.Join(directory, "bridge.sock"),
-		"--journal", filepath.Join(directory, "journal.json"),
-	})
+	err = run(context.Background(), commandMutationArguments(
+		t, directory, writeJSON(t, directory, "draft.json", commandDraft(plan)), filepath.Join(directory, "journal.json"),
+	))
 	if !errors.Is(err, laneguard.ErrApprovalExpired) {
 		t.Fatalf("error = %v, want approval expired", err)
 	}
@@ -290,6 +387,255 @@ func TestStrictInputRejectsDuplicateFieldsAndSymlinks(t *testing.T) {
 	if err := loadStrictJSON(symlinkPath, 1024, &request); err == nil || !strings.Contains(err.Error(), "non-symlink") {
 		t.Fatalf("symlink error = %v", err)
 	}
+}
+
+func TestAttemptDestinationIsDigestBoundAndUnsafePathsFailBeforeHardware(t *testing.T) {
+	restoreCommandGlobals(t)
+	setImmutableTestGlobals(t)
+	effectiveUID = func() int { return 0 }
+	plan, request := commandPlanAndRequest()
+	reconcile := laneguard.ReconcileRequest{
+		SchemaVersion: laneguard.ReconcileRequestSchemaVersion, OriginalRequest: request,
+		Claim: laneguard.ReconciliationClaim{
+			StationID: plan.StationID, LaneID: plan.LaneID, TransactionID: plan.TransactionID,
+			TargetFingerprint: plan.TargetFingerprint, ClaimID: "claim-2", FenceEpoch: plan.FenceEpoch + 1,
+			ExpiresAt: time.Now().UTC().Add(10 * time.Minute),
+		},
+	}
+	directory := t.TempDir()
+	attemptDirectory := filepath.Join(directory, "attempts")
+	if err := os.Mkdir(attemptDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executePath, err := plannedAttemptEvidencePath(attemptDirectory, "execute", request, laneguard.ReconcileRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconcilePath, err := plannedAttemptEvidencePath(attemptDirectory, "reconcile", laneguard.ExecuteRequest{}, reconcile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executePath == reconcilePath || filepath.Dir(executePath) != attemptDirectory ||
+		!strings.HasPrefix(filepath.Base(executePath), "lane-attempt-") || !strings.HasSuffix(executePath, ".json") {
+		t.Fatalf("digest-bound paths = execute:%q reconcile:%q", executePath, reconcilePath)
+	}
+	if _, err := plannedAttemptEvidencePath("relative", "execute", request, laneguard.ReconcileRequest{}); err == nil {
+		t.Fatal("relative attempt directory was accepted")
+	}
+
+	stubAuthorityResult(t, plan, request)
+	original := []byte("existing immutable evidence")
+	if err := os.WriteFile(executePath, original, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	listenOperatorPrompt = func(operatorprompt.Config) (operatorPromptServer, error) {
+		t.Fatal("preexisting attempt destination reached prompt setup")
+		return nil, nil
+	}
+	buildHardware = func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+		t.Fatal("preexisting attempt destination reached hardware")
+		return nil, nil
+	}
+	draft := writeJSON(t, directory, "draft.json", commandDraft(plan))
+	journal := filepath.Join(directory, "journal.json")
+	err = run(context.Background(), commandMutationArguments(t, directory, draft, journal))
+	if err == nil || !strings.Contains(err.Error(), "destination") {
+		t.Fatalf("pre-mutation destination validation error = %v", err)
+	}
+	unchanged, readErr := os.ReadFile(executePath)
+	if readErr != nil || !bytes.Equal(unchanged, original) {
+		t.Fatalf("preexisting attempt evidence changed: %q, %v", unchanged, readErr)
+	}
+	if _, statErr := os.Stat(journal + ".lock"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("journal was opened before destination validation: %v", statErr)
+	}
+}
+
+func TestInvalidOperatorGroupFailsBeforeJournalAndPromptSetup(t *testing.T) {
+	restoreCommandGlobals(t)
+	setImmutableTestGlobals(t)
+	effectiveUID = func() int { return 0 }
+	plan, request := commandPlanAndRequest()
+	stubAuthorityResult(t, plan, request)
+	validateAttemptDestination = func(string) error { return nil }
+	lookupOperatorGroup = func(string) (*user.Group, error) {
+		return &user.Group{Name: "kaiba-operator", Gid: "not-a-gid"}, nil
+	}
+	listenOperatorPrompt = func(operatorprompt.Config) (operatorPromptServer, error) {
+		t.Fatal("invalid group reached prompt setup")
+		return nil, nil
+	}
+	buildHardware = func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+		t.Fatal("invalid group reached hardware")
+		return nil, nil
+	}
+	directory := t.TempDir()
+	journal := filepath.Join(directory, "journal.json")
+	err := run(context.Background(), commandMutationArguments(
+		t, directory, writeJSON(t, directory, "draft.json", commandDraft(plan)), journal,
+	))
+	if err == nil || !strings.Contains(err.Error(), "invalid numeric GID") {
+		t.Fatalf("invalid group error = %v", err)
+	}
+	if _, statErr := os.Stat(journal + ".lock"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("journal was opened for invalid group: %v", statErr)
+	}
+}
+
+func TestAttemptAndOperationErrorsAreJoinedAndResourcesClose(t *testing.T) {
+	restoreCommandGlobals(t)
+	setImmutableTestGlobals(t)
+	effectiveUID = func() int { return 0 }
+	plan, request := commandPlanAndRequest()
+	stubAuthorityResult(t, plan, request)
+	executionErr := errors.New("target response lost")
+	publicationErr := errors.New("attempt publication failed")
+	hardwareCloseErr := errors.New("hardware close failed")
+	promptCloseErr := errors.New("prompt close failed")
+	hardware := &commandHardware{
+		observation: laneguard.Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+		},
+		poststate: plan.Operations[0].ExpectedPoststate, executeErr: executionErr, closeErr: hardwareCloseErr,
+	}
+	server := &commandPromptServer{closeErr: promptCloseErr}
+	listenOperatorPrompt = func(operatorprompt.Config) (operatorPromptServer, error) { return server, nil }
+	buildHardware = func(_ physicalrpi5.Config, dependencies physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+		hardware.journal = dependencies.Journal
+		if dependencies.Prompter != server {
+			t.Fatalf("prompter dependency = %#v", dependencies.Prompter)
+		}
+		return hardware, nil
+	}
+	validateAttemptDestination = func(string) error { return nil }
+	var publishedPath string
+	var publishedAttempt laneguard.Attempt
+	writeAttemptEvidence = func(path string, data []byte) error {
+		publishedPath = path
+		if decodeErr := json.Unmarshal(data, &publishedAttempt); decodeErr != nil {
+			t.Fatalf("decode published uncertain attempt: %v", decodeErr)
+		}
+		return publicationErr
+	}
+	directory := t.TempDir()
+	journal := filepath.Join(directory, "journal.json")
+	err := run(context.Background(), commandMutationArguments(
+		t, directory, writeJSON(t, directory, "draft.json", commandDraft(plan)), journal,
+	))
+	for _, expected := range []error{laneguard.ErrReconciliationRequired, executionErr, publicationErr, hardwareCloseErr, promptCloseErr} {
+		if !errors.Is(err, expected) {
+			t.Fatalf("combined error %v does not contain %v", err, expected)
+		}
+	}
+	if publishedPath == "" || publishedAttempt.Status != laneguard.AttemptUncertain || hardware.closed != 1 || server.closed != 1 {
+		t.Fatalf("publication/close state = path:%q attempt:%#v hardware:%d prompt:%d", publishedPath, publishedAttempt, hardware.closed, server.closed)
+	}
+	store, openErr := laneguard.NewFileStore(journal)
+	if openErr != nil {
+		t.Fatalf("lane journal remained locked after errors: %v", openErr)
+	}
+	if closeErr := store.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+}
+
+func recordCommandBootTransition(
+	journal laneguard.Journal,
+	config laneguard.Config,
+	action laneguard.HardwareAction,
+	ordinal int,
+	failed bool,
+) (laneguard.BootTransitionOutcome, error) {
+	if journal == nil {
+		return laneguard.BootTransitionOutcome{}, errors.New("command fake has no shared journal")
+	}
+	started := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC).Add(time.Duration(ordinal) * time.Minute)
+	transition, err := journal.BeginBootTransition(laneguard.BeginBootTransitionRequest{
+		Action: action, StartedAt: started, RecordedAt: started.Add(2 * time.Second),
+		PowerOffObservedAt: started.Add(time.Second), USBAbsentObservedAt: started.Add(2 * time.Second),
+		ColdIntervalEndsAt: started.Add(4 * time.Second), PromptID: "hold_prompt",
+		PromptDigest: commandDigest("a"), PromptExpiresAt: started.Add(2 * time.Minute),
+	})
+	if err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	if failed {
+		transition.Status = laneguard.BootTransitionAbortedSafeOff
+		transition.Failure = laneguard.BootTransitionFailureHardware
+		transition.SafeOffObservedAt = started.Add(3 * time.Second)
+		transition.UpdatedAt = transition.SafeOffObservedAt
+		if err := journal.PutBootTransition(transition); err != nil {
+			return laneguard.BootTransitionOutcome{}, err
+		}
+		return transition.Outcome()
+	}
+	transition.Status = laneguard.BootTransitionAwaitingOperator
+	transition.UpdatedAt = transition.ColdIntervalEndsAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	transition.Status = laneguard.BootTransitionOperatorAcknowledged
+	transition.Operator = laneguard.OperatorPeer{UID: 1000, GID: 4242, PID: int32(2000 + ordinal)}
+	transition.OperatorAcknowledgedAt = transition.ColdIntervalEndsAt.Add(time.Second)
+	transition.UpdatedAt = transition.OperatorAcknowledgedAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	transition.Status = laneguard.BootTransitionPowerApplied
+	transition.PowerAppliedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
+	transition.UpdatedAt = transition.PowerAppliedAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	transition.Status = laneguard.BootTransitionModeObserved
+	transition.ModeObservedAt = transition.PowerAppliedAt.Add(time.Second)
+	transition.ObservedMode = action.RequestedBootMode
+	transition.RPIBootSysfsPath = config.RPIBootSysfsPath
+	transition.RPIBootObservationMethod = laneguard.RPIBootObservationSysfsPoll
+	transition.RPIBootPollInterval = 50 * time.Millisecond
+	if action.RequestedBootMode == laneguard.BootModeRPIBoot {
+		transition.RPIBootEligibleTargets = 1
+		transition.ReleasePromptID = "release_prompt"
+		transition.ReleasePromptDigest = commandDigest("b")
+		transition.ReleasePromptExpiresAt = transition.ModeObservedAt.Add(time.Minute)
+	} else {
+		transition.UARTPath = config.UARTPath
+		transition.UARTOutputDigest = commandDigest("c")
+		transition.RPIBootNotObservedThrough = transition.ModeObservedAt
+	}
+	transition.UpdatedAt = transition.ModeObservedAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	if action.RequestedBootMode == laneguard.BootModeRPIBoot {
+		transition.Status = laneguard.BootTransitionOperatorReleased
+		transition.ReleaseOperator = transition.Operator
+		transition.OperatorReleasedAt = transition.ModeObservedAt.Add(time.Second)
+		transition.UpdatedAt = transition.OperatorReleasedAt
+		if err := journal.PutBootTransition(transition); err != nil {
+			return laneguard.BootTransitionOutcome{}, err
+		}
+	}
+	transition.Status = laneguard.BootTransitionCompleted
+	transition.SafeOffObservedAt = transition.ModeObservedAt.Add(2 * time.Second)
+	if !transition.OperatorReleasedAt.IsZero() {
+		transition.SafeOffObservedAt = transition.OperatorReleasedAt.Add(time.Second)
+	}
+	transition.CompletedAt = transition.SafeOffObservedAt
+	transition.UpdatedAt = transition.CompletedAt
+	evidence, err := transition.Evidence()
+	if err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	transition.EvidenceDigest, err = evidence.Digest()
+	if err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	return transition.Outcome()
 }
 
 func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
@@ -404,6 +750,23 @@ func writeJSON(t *testing.T, directory, name string, value any) string {
 	return path
 }
 
+func commandMutationArguments(t *testing.T, directory, draftPath, journalPath string) []string {
+	t.Helper()
+	attemptDirectory := filepath.Join(directory, "attempts")
+	if err := os.MkdirAll(attemptDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return []string{
+		"--enable-mutations",
+		"--draft", draftPath,
+		"--bridge-socket", filepath.Join(directory, "bridge.sock"),
+		"--journal", journalPath,
+		"--operator-socket", filepath.Join(directory, "operator.sock"),
+		"--operator-group", "kaiba-operator",
+		"--attempt-directory", attemptDirectory,
+	}
+}
+
 func setImmutableTestGlobals(t *testing.T) {
 	t.Helper()
 	rpibootBinary = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-rpiboot/bin/rpiboot"
@@ -418,6 +781,21 @@ func setImmutableTestGlobals(t *testing.T) {
 	expectedEEPROMHash = strings.Repeat("e", 64)
 	expectedBootImageDigest = "sha256:" + strings.Repeat("b", 64)
 	signedReleaseManifestDigest = commandDigest("f")
+	lookupOperatorGroup = func(name string) (*user.Group, error) {
+		if name != "kaiba-operator" {
+			t.Fatalf("operator group name = %q", name)
+		}
+		return &user.Group{Name: name, Gid: "4242"}, nil
+	}
+	listenOperatorPrompt = func(config operatorprompt.Config) (operatorPromptServer, error) {
+		if !filepath.IsAbs(config.SocketPath) || config.AllowedPrimaryGID != 4242 {
+			t.Fatalf("operator prompt config = %#v", config)
+		}
+		return &commandPromptServer{}, nil
+	}
+	validateAttemptDestination = evidencefile.ValidateNewPath
+	writeAttemptEvidence = evidencefile.WriteCanonicalNew
+	commandOutput = io.Discard
 	currentExecutable = func() (string, error) {
 		return "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lane-guard/bin/kaiba-provision-lane-guard", nil
 	}
@@ -458,6 +836,8 @@ func restoreCommandGlobals(t *testing.T) {
 	t.Helper()
 	savedUID, savedFactory, savedAuthority := effectiveUID, buildHardware, requestAuthority
 	savedExecutable, savedDeriver := currentExecutable, deriveReleaseMaterial
+	savedLookupGroup, savedListenPrompt := lookupOperatorGroup, listenOperatorPrompt
+	savedValidateAttempt, savedWriteAttempt, savedOutput := validateAttemptDestination, writeAttemptEvidence, commandOutput
 	values := []string{
 		rpibootBinary, gpioSetBinary, freshReadbackBundle, freshCommitBundle,
 		ownedReadbackBundle, ownedRecoveryBundle, negativeBootBundle, rootIntegrityBundle,
@@ -467,6 +847,8 @@ func restoreCommandGlobals(t *testing.T) {
 	t.Cleanup(func() {
 		effectiveUID, buildHardware, requestAuthority = savedUID, savedFactory, savedAuthority
 		currentExecutable, deriveReleaseMaterial = savedExecutable, savedDeriver
+		lookupOperatorGroup, listenOperatorPrompt = savedLookupGroup, savedListenPrompt
+		validateAttemptDestination, writeAttemptEvidence, commandOutput = savedValidateAttempt, savedWriteAttempt, savedOutput
 		rpibootBinary, gpioSetBinary = values[0], values[1]
 		freshReadbackBundle, freshCommitBundle = values[2], values[3]
 		ownedReadbackBundle, ownedRecoveryBundle = values[4], values[5]

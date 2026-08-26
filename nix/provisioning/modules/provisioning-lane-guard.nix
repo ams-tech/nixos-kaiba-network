@@ -1,6 +1,7 @@
 {
   config,
   lib,
+  pkgs,
   utils,
   ...
 }:
@@ -15,6 +16,7 @@ let
     mkOption
     optional
     types
+    unique
     ;
 
   cfg = config.services.kaiba-provisioning-lane-guard;
@@ -22,8 +24,32 @@ let
   bridgeClientGroup = "kaiba-provision-bridge";
   bridgeRuntimeDirectory = "kaiba-provision-authority-bridge";
   bridgeSocketPath = "/run/${bridgeRuntimeDirectory}/${bridgeCfg.socketName}";
+  operatorGroup = "kaiba-provision-operator";
+  operatorRuntimeDirectory = "kaiba-provision-lane-guard";
+  operatorSocketPath = "/run/${operatorRuntimeDirectory}/operator.sock";
   stateDirectory = "kaiba-provision-lane-guard";
   stateRoot = "/var/lib/${stateDirectory}";
+  attemptDirectory = "${stateRoot}/attempts";
+  defaultOperatorPackage = (import ../packages.nix { inherit pkgs lib; }).laneOperator;
+  operatorWrapper = pkgs.writeShellApplication {
+    name = "kaiba-provision-lane-acknowledge";
+    text = ''
+      if (( $# != 0 )); then
+        printf '%s\n' 'usage: kaiba-provision-lane-acknowledge' >&2
+        exit 2
+      fi
+      exec ${pkgs.shadow}/bin/sg ${operatorGroup} -c \
+        '${getExe' cfg.operatorPackage "kaiba-provision-lane-operator"} --socket ${operatorSocketPath}'
+    '';
+    derivationArgs.passthru.kaibaLaneOperatorWrapper = {
+      group = operatorGroup;
+      socketPath = operatorSocketPath;
+      acceptsArguments = false;
+      mutationCapable = false;
+      operationSelectionCapable = false;
+      physicalPathSelectionCapable = false;
+    };
+  };
   statePaths = [
     cfg.journalPath
     cfg.draftPath
@@ -73,6 +99,12 @@ let
         cfg.draftPath
         "--bridge-socket"
         bridgeSocketPath
+        "--operator-socket"
+        operatorSocketPath
+        "--operator-group"
+        operatorGroup
+        "--attempt-directory"
+        attemptDirectory
         "--mode"
         cfg.mode
       ]
@@ -101,6 +133,31 @@ in
         executable and compiled-artifact identities are derived by reopening
         those immutable store paths; there is deliberately no independently
         caller-declared bundle or digest input.
+      '';
+    };
+
+    operatorPackage = mkOption {
+      type = types.package;
+      default = defaultOperatorPackage;
+      defaultText = lib.literalExpression "the acknowledgement-only kaiba-provision-lane-operator package from the provisioning source tree";
+      description = ''
+        Unprivileged client containing bin/kaiba-provision-lane-operator. The
+        package can only display and acknowledge the exact active prompt chosen
+        by the privileged lane service; it cannot select an operation, target,
+        boot mode, physical path, or mutation.
+      '';
+    };
+
+    operators = mkOption {
+      type = types.listOf (types.strMatching "[a-z_][a-z0-9_-]{0,30}");
+      default = [ ];
+      example = [ "provisioner" ];
+      description = ''
+        Existing local users allowed to acknowledge the lane service's active
+        physical prompt. The server authenticates the connecting process's
+        primary group, so operators invoke the client through an approved
+        primary-group transition such as sg(1); supplementary membership alone
+        does not authorize an acknowledgement.
       '';
     };
 
@@ -200,6 +257,26 @@ in
           message = "services.kaiba-provisioning-lane-guard.package must resolve to an immutable Nix store path";
         }
         {
+          assertion =
+            hasPrefix "${builtins.storeDir}/" (toString cfg.operatorPackage)
+            && cfg.operatorPackage ? kaibaLaneOperator
+            && (cfg.operatorPackage.kaibaLaneOperator.authority or "") == "acknowledgement_only"
+            && !(cfg.operatorPackage.kaibaLaneOperator.directHardwareAccess or true)
+            && !(cfg.operatorPackage.kaibaLaneOperator.mutationCapable or true)
+            && !(cfg.operatorPackage.kaibaLaneOperator.operationSelectionCapable or true)
+            && !(cfg.operatorPackage.kaibaLaneOperator.physicalPathSelectionCapable or true);
+          message = ''
+            services.kaiba-provisioning-lane-guard.operatorPackage must be the
+            immutable acknowledgement-only lane operator package and must not
+            expose hardware, mutation, operation-selection, or path-selection
+            authority.
+          '';
+        }
+        {
+          assertion = builtins.length cfg.operators == builtins.length (unique cfg.operators);
+          message = "services.kaiba-provisioning-lane-guard.operators must not contain duplicates";
+        }
+        {
           assertion = cfg.package == null || cfg.package ? kaibaPhysicalLaneGuard;
           message = ''
             services.kaiba-provisioning-lane-guard.package must be produced by
@@ -241,8 +318,16 @@ in
           message = "lane-guard journal and draft paths must be distinct";
         }
         {
+          assertion = builtins.all (path: path != attemptDirectory && !hasPrefix "${attemptDirectory}/" path) statePaths;
+          message = "lane-guard journal and draft paths must remain outside the immutable attempt-receipt directory";
+        }
+        {
           assertion = isCleanRuntimeSocket bridgeSocketPath;
           message = "the module-derived authority-bridge socket must be a clean absolute non-store .sock path below /run";
+        }
+        {
+          assertion = isCleanRuntimeSocket operatorSocketPath;
+          message = "the module-derived operator socket must be a clean absolute non-store .sock path below /run";
         }
         {
           assertion = !cfg.enableMutations || config.services.kaiba-provisioning-authority-bridge.enable;
@@ -265,6 +350,19 @@ in
     }
 
     (mkIf (cfg.package != null) {
+      # Only the fixed wrapper enters PATH. It changes the client's effective
+      # primary group to the peer-authenticated operator group and supplies the
+      # module-owned socket; the underlying client accepts no operation, mode,
+      # target, or physical selector through this supported entry point.
+      environment.systemPackages = [ operatorWrapper ];
+      users.groups.${operatorGroup} = { };
+      users.users = builtins.listToAttrs (
+        map (name: {
+          inherit name;
+          value.extraGroups = [ operatorGroup ];
+        }) cfg.operators
+      );
+
       systemd.services.kaiba-provisioning-lane-guard = {
         description = "One-shot Kaiba physical Raspberry Pi 5 provisioning lane guard";
         after = optional cfg.enableMutations "kaiba-provisioning-authority-bridge.service";
@@ -272,15 +370,23 @@ in
         serviceConfig = {
           Type = "oneshot";
           User = "root";
-          Group = "root";
+          Group = operatorGroup;
           SupplementaryGroups = optional cfg.enableMutations bridgeClientGroup;
           ExecStart = utils.escapeSystemdExecArgs args;
-          StateDirectory = stateDirectory;
+          StateDirectory = [
+            stateDirectory
+            "${stateDirectory}/attempts"
+          ];
           StateDirectoryMode = "0700";
+          RuntimeDirectory = operatorRuntimeDirectory;
+          RuntimeDirectoryMode = "0750";
           WorkingDirectory = stateRoot;
           UMask = "0077";
           TimeoutStartSec = "10min";
-          TimeoutStopSec = "5s";
+          # The adapter gets a 30-second cancellation-independent window to
+          # release the relay and prove USB disappearance. Give systemd enough
+          # margin to persist the resulting terminal transition as well.
+          TimeoutStopSec = "45s";
           KillMode = "control-group";
 
           # GPIO and UART are exact device nodes. USB bus numbers and device
@@ -295,7 +401,10 @@ in
           PrivateDevices = false;
 
           ReadOnlyPaths = [ cfg.draftPath ];
-          ReadWritePaths = [ stateRoot ];
+          ReadWritePaths = [
+            stateRoot
+            "/run/${operatorRuntimeDirectory}"
+          ];
 
           AmbientCapabilities = "";
           CapabilityBoundingSet = "";
