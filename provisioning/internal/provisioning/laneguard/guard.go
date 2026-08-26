@@ -15,8 +15,8 @@ import (
 // target-facing behavior. Implementations must use Config's fixed resources
 // and build-time-pinned artifacts.
 type Hardware interface {
-	Observe(context.Context, Config) (Observation, error)
-	Execute(context.Context, Config, Operation) (OperationResult, error)
+	Observe(context.Context, Config, HardwareAction) (Observation, error)
+	Execute(context.Context, Config, HardwareAction) (OperationResult, error)
 }
 
 type Clock interface {
@@ -31,18 +31,18 @@ type Guard struct {
 	mu                 sync.Mutex
 	config             Config
 	hardware           Hardware
-	store              AttemptStore
+	store              Journal
 	clock              Clock
 	plan               *Plan
 	reconciliationOnly bool
 	lockedOut          bool
 }
 
-func New(config Config, hardware Hardware, store AttemptStore) (*Guard, error) {
+func New(config Config, hardware Hardware, store Journal) (*Guard, error) {
 	return NewWithClock(config, hardware, store, systemClock{})
 }
 
-func NewWithClock(config Config, hardware Hardware, store AttemptStore, clock Clock) (*Guard, error) {
+func NewWithClock(config Config, hardware Hardware, store Journal, clock Clock) (*Guard, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -165,7 +165,11 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 			return Attempt{}, ErrOutOfOrder
 		}
 	}
-	observation, err := guard.observeBoundTarget(ctx, plan.TargetFingerprint)
+	preAction, err := makeHardwareAction(plan, operation, HardwarePhasePreObservation, nil)
+	if err != nil {
+		return Attempt{}, err
+	}
+	observation, err := guard.observeBoundTarget(ctx, plan.TargetFingerprint, preAction)
 	if err != nil {
 		return Attempt{}, err
 	}
@@ -192,23 +196,49 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 		Sequence: operation.Sequence, Operation: operation.Operation,
 		OperationDigest: operation.OperationDigest, Status: AttemptStarted,
 		StartedAt: now, UpdatedAt: now, ObservedState: observation.State,
-		Detail: "durable intent recorded before hardware execution",
+		PreObservationTransition: observation.BootTransition,
+		Detail:                   "durable intent recorded before hardware execution",
 	}
 	if err := guard.store.Put(attempt); err != nil {
 		return Attempt{}, fmt.Errorf("record execute-once intent: %w", err)
 	}
-	result, executeErr := guard.hardware.Execute(ctx, guard.config, operation.Operation)
+	executionAction, err := makeHardwareAction(plan, operation, HardwarePhaseExecute, nil)
+	if err != nil {
+		return Attempt{}, err
+	}
+	result, executeErr := guard.hardware.Execute(ctx, guard.config, executionAction)
+	transitionErr := guard.validateBootTransitionOutcome(executionAction, result.BootTransition, executeErr == nil)
 	if executeErr != nil {
+		if transitionErr == nil {
+			attempt.ExecutionTransition = result.BootTransition
+		}
 		attempt.Status = AttemptUncertain
 		attempt.UpdatedAt = guard.clock.Now().UTC()
 		attempt.Detail = "hardware call returned without an authoritative postcondition"
 		if storeErr := guard.store.Put(attempt); storeErr != nil {
-			return attempt, errors.Join(ErrReconciliationRequired, executeErr, fmt.Errorf("record uncertain outcome: %w", storeErr))
+			return attempt, errors.Join(ErrReconciliationRequired, executeErr, transitionErr, fmt.Errorf("record uncertain outcome: %w", storeErr))
 		}
-		return attempt, errors.Join(ErrReconciliationRequired, executeErr)
+		return attempt, errors.Join(ErrReconciliationRequired, executeErr, transitionErr)
 	}
+	if transitionErr != nil {
+		attempt.Status = AttemptUncertain
+		attempt.UpdatedAt = guard.clock.Now().UTC()
+		attempt.Detail = "hardware returned an invalid or non-durable boot-transition outcome"
+		if storeErr := guard.store.Put(attempt); storeErr != nil {
+			return attempt, errors.Join(ErrReconciliationRequired, transitionErr, fmt.Errorf("record uncertain outcome: %w", storeErr))
+		}
+		return attempt, errors.Join(ErrReconciliationRequired, transitionErr)
+	}
+	attempt.ExecutionTransition = result.BootTransition
 	attempt.Result = bindOperationResult(plan, operation, result)
-	postObservation, observeErr := guard.observeBoundTarget(ctx, plan.TargetFingerprint)
+	postAction, err := makeHardwareAction(plan, operation, HardwarePhasePostObservation, nil)
+	if err != nil {
+		return attempt, err
+	}
+	postObservation, observeErr := guard.observeBoundTarget(ctx, plan.TargetFingerprint, postAction)
+	if postObservation.BootTransition != (BootTransitionOutcome{}) {
+		attempt.PostObservationTransition = postObservation.BootTransition
+	}
 	if observeErr != nil {
 		if errors.Is(observeErr, ErrTargetContinuity) {
 			attempt.Status = AttemptQuarantined
@@ -276,7 +306,14 @@ func (guard *Guard) reconcileLocked(ctx context.Context, request ReconcileReques
 	if !LeaseCoversOperation(guard.clock.Now(), request.Claim.ExpiresAt, ReconciliationObservationBudget, guard.config.LeaseSafetyMargin) {
 		return Attempt{}, ErrLeaseInvalid
 	}
-	observation, err := guard.observeBoundTarget(ctx, plan.TargetFingerprint)
+	reconciliationAction, err := makeHardwareAction(plan, operation, HardwarePhaseReconciliation, &request.Claim)
+	if err != nil {
+		return Attempt{}, err
+	}
+	observation, err := guard.observeBoundTarget(ctx, plan.TargetFingerprint, reconciliationAction)
+	if observation.BootTransition != (BootTransitionOutcome{}) {
+		attempt.ReconciliationTransition = observation.BootTransition
+	}
 	if err != nil {
 		if errors.Is(err, ErrTargetContinuity) {
 			attempt.Status = AttemptQuarantined
@@ -286,6 +323,11 @@ func (guard *Guard) reconcileLocked(ctx context.Context, request ReconcileReques
 				return attempt, errors.Join(ErrQuarantined, err, fmt.Errorf("record quarantine: %w", storeErr))
 			}
 			return attempt, errors.Join(ErrQuarantined, err)
+		}
+		attempt.UpdatedAt = guard.clock.Now().UTC()
+		attempt.Detail = "direct reconciliation observation failed"
+		if storeErr := guard.store.Put(attempt); storeErr != nil {
+			return attempt, errors.Join(ErrReconciliationRequired, err, fmt.Errorf("record reconciliation failure: %w", storeErr))
 		}
 		return attempt, errors.Join(ErrReconciliationRequired, err)
 	}
@@ -333,6 +375,8 @@ func bindOperationResult(plan Plan, operation OperationSpec, result OperationRes
 		operation.OperationDigest,
 		operation.AuthorizationID,
 		result.OutputDigest,
+		result.BootTransition.Reference.TransitionKey,
+		result.BootTransition.Reference.EvidenceDigest,
 	} {
 		_, _ = digest.Write([]byte(value))
 		_, _ = digest.Write([]byte{0})
@@ -514,15 +558,73 @@ func attemptMatchesIntent(attempt Attempt, plan Plan, operation OperationSpec) b
 		attempt.IntentSequence == plan.IntentSequence && attempt.Sequence == operation.Sequence
 }
 
-func (guard *Guard) observeBoundTarget(ctx context.Context, fingerprint string) (Observation, error) {
-	observation, err := guard.hardware.Observe(ctx, guard.config)
-	if err != nil {
-		return Observation{}, fmt.Errorf("observe lane target: %w", err)
+func (guard *Guard) observeBoundTarget(ctx context.Context, fingerprint string, action HardwareAction) (Observation, error) {
+	observation, hardwareErr := guard.hardware.Observe(ctx, guard.config, action)
+	transitionErr := guard.validateBootTransitionOutcome(action, observation.BootTransition, hardwareErr == nil)
+	if transitionErr != nil {
+		return Observation{}, errors.Join(fmt.Errorf("observe lane target boot transition: %w", transitionErr), hardwareErr)
+	}
+	if hardwareErr != nil {
+		return observation, fmt.Errorf("observe lane target: %w", hardwareErr)
 	}
 	if observation.EligibleTargets != 1 || observation.RPIBootSysfsPath != guard.config.RPIBootSysfsPath || observation.TargetFingerprint != fingerprint {
-		return Observation{}, ErrTargetContinuity
+		return observation, ErrTargetContinuity
 	}
 	return observation, nil
+}
+
+func (guard *Guard) validateBootTransitionOutcome(action HardwareAction, outcome BootTransitionOutcome, completed bool) error {
+	if err := outcome.ValidateForAction(action); err != nil {
+		return fmt.Errorf("%w: %v", ErrBootTransitionOutcome, err)
+	}
+	if (outcome.Reference.Status == BootTransitionCompleted) != completed {
+		return fmt.Errorf("%w: terminal status does not match the hardware return", ErrBootTransitionOutcome)
+	}
+	transition, found, err := guard.store.GetBootTransition(outcome.Reference.TransitionKey)
+	if err != nil {
+		return fmt.Errorf("%w: read durable transition: %v", ErrBootTransitionOutcome, err)
+	}
+	if !found {
+		return fmt.Errorf("%w: referenced transition is not durable", ErrBootTransitionOutcome)
+	}
+	durable, err := transition.Outcome()
+	if err != nil {
+		return fmt.Errorf("%w: invalid durable transition: %v", ErrBootTransitionOutcome, err)
+	}
+	if durable != outcome {
+		return fmt.Errorf("%w: returned outcome differs from the durable transition", ErrBootTransitionOutcome)
+	}
+	return nil
+}
+
+func makeHardwareAction(plan Plan, operation OperationSpec, phase HardwarePhase, claim *ReconciliationClaim) (HardwareAction, error) {
+	action := HardwareAction{
+		SchemaVersion: BootTransitionActionSchemaVersion,
+		StationID:     plan.StationID, LaneID: plan.LaneID, TransactionID: plan.TransactionID,
+		PlanDigest: plan.PlanDigest, TargetFingerprint: plan.TargetFingerprint, FenceEpoch: plan.FenceEpoch,
+		ApprovalID: plan.ApprovalID, IntentReceipt: plan.IntentReceipt, IntentSequence: plan.IntentSequence,
+		Sequence: operation.Sequence, Operation: operation.Operation, OperationDigest: operation.OperationDigest,
+		AuthorizationID: operation.AuthorizationID, Phase: phase,
+		OperationRequiredBootMode: operation.RequiredBootMode, RequestedBootMode: BootModeRPIBoot,
+	}
+	if phase == HardwarePhaseExecute {
+		action.RequestedBootMode = operation.RequiredBootMode
+	}
+	if phase == HardwarePhaseReconciliation {
+		if claim == nil {
+			return HardwareAction{}, errors.New("reconciliation hardware action requires a current claim")
+		}
+		action.StationID = claim.StationID
+		action.LaneID = claim.LaneID
+		action.ReconciliationClaimID = claim.ClaimID
+		action.ReconciliationFenceEpoch = claim.FenceEpoch
+	} else if claim != nil {
+		return HardwareAction{}, errors.New("non-reconciliation hardware action must not carry a claim")
+	}
+	if err := action.Validate(); err != nil {
+		return HardwareAction{}, fmt.Errorf("derive hardware action: %w", err)
+	}
+	return action, nil
 }
 
 func attemptKey(plan Plan, sequence uint32) string {

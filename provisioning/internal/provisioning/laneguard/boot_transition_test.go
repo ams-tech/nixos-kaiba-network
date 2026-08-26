@@ -2,6 +2,7 @@ package laneguard
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,6 +157,10 @@ func TestBootTransitionForwardOnlyCompletionRequiresReleaseAndBindsEvidence(t *t
 	if err != nil || reference.Status != BootTransitionCompleted || reference.EvidenceDigest != transition.EvidenceDigest {
 		t.Fatalf("completed reference = %#v, %v", reference, err)
 	}
+	outcome, err := transition.Outcome()
+	if err != nil || outcome.Action != transition.Action || outcome.Reference != reference || outcome.Evidence != evidence {
+		t.Fatalf("completed outcome = %#v, %v", outcome, err)
+	}
 
 	mutatedEvidence := evidence
 	mutatedEvidence.ReleasePromptDigest = digest("e")
@@ -238,6 +243,10 @@ func TestBootTransitionBeginAllocatesGenerationAndBlocksOpenPhase(t *testing.T) 
 	if err != nil || reference.Status != BootTransitionInterruptedSafeOff || reference.Failure != BootTransitionFailureInterrupted {
 		t.Fatalf("interrupted reference = %#v, %v", reference, err)
 	}
+	outcome, err := interrupted.Outcome()
+	if err != nil || outcome.Reference != reference || outcome.Evidence != (BootTransitionEvidence{}) {
+		t.Fatalf("interrupted outcome = %#v, %v", outcome, err)
+	}
 
 	secondRequest := request
 	secondRequest.StartedAt = secondRequest.StartedAt.Add(time.Minute)
@@ -297,12 +306,22 @@ func TestFileStorePersistsUnifiedJournalAndRejectsAmbiguousFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("persist requested transition: %v", err)
 	}
+	attemptAction := testHardwareAction(HardwarePhasePreObservation, OperationColdPowerCycle)
+	attemptAction.TransactionID = "attempt-transaction"
+	preObservation, err := recordFakeBootTransition(store, testConfig(), attemptAction, 100, false)
+	if err != nil {
+		t.Fatalf("persist attempt pre-observation: %v", err)
+	}
 	now := transition.StartedAt
 	attempt := Attempt{
-		SchemaVersion: AttemptSchemaVersion, Key: "transaction/plan/1/1", TransactionID: "transaction",
-		PlanDigest: digest("a"), TargetFingerprint: "target", FenceEpoch: 1, ApprovalID: "approval",
-		IntentReceipt: "intent", IntentSequence: 1, Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM,
-		OperationDigest: digest("b"), Status: AttemptStarted, StartedAt: now, UpdatedAt: now,
+		SchemaVersion: AttemptSchemaVersion,
+		Key:           fmt.Sprintf("%s/%s/%d/%d", attemptAction.TransactionID, attemptAction.PlanDigest, attemptAction.FenceEpoch, attemptAction.Sequence),
+		TransactionID: attemptAction.TransactionID, PlanDigest: attemptAction.PlanDigest,
+		TargetFingerprint: attemptAction.TargetFingerprint, FenceEpoch: attemptAction.FenceEpoch,
+		ApprovalID: attemptAction.ApprovalID, IntentReceipt: attemptAction.IntentReceipt,
+		IntentSequence: attemptAction.IntentSequence, Sequence: attemptAction.Sequence, Operation: attemptAction.Operation,
+		OperationDigest: attemptAction.OperationDigest, Status: AttemptStarted, StartedAt: now, UpdatedAt: now,
+		PreObservationTransition: preObservation,
 	}
 	if err := store.Put(attempt); err != nil {
 		t.Fatalf("persist attempt beside transition: %v", err)

@@ -19,8 +19,8 @@ type AttemptStatus string
 const (
 	maximumLaneJournalBytes = 8 * 1024 * 1024
 
-	AttemptSchemaVersion      = "provisioning.kaiba.network/lane-guard-attempt/v1alpha1"
-	AttemptStoreSchemaVersion = "provisioning.kaiba.network/lane-guard-attempt-store/v1alpha2"
+	AttemptSchemaVersion      = "provisioning.kaiba.network/lane-guard-attempt/v1alpha2"
+	AttemptStoreSchemaVersion = "provisioning.kaiba.network/lane-guard-attempt-store/v1alpha3"
 
 	AttemptStarted             AttemptStatus = "started"
 	AttemptUncertain           AttemptStatus = "uncertain"
@@ -33,24 +33,28 @@ const (
 // hardware call, so a restart can only observe/reconcile that call, never
 // repeat it.
 type Attempt struct {
-	SchemaVersion     string          `json:"schema_version"`
-	Key               string          `json:"key"`
-	TransactionID     string          `json:"transaction_id"`
-	PlanDigest        string          `json:"plan_digest"`
-	TargetFingerprint string          `json:"target_fingerprint"`
-	FenceEpoch        uint64          `json:"fence_epoch"`
-	ApprovalID        string          `json:"approval_id"`
-	IntentReceipt     string          `json:"intent_receipt"`
-	IntentSequence    uint32          `json:"intent_sequence"`
-	Sequence          uint32          `json:"sequence"`
-	Operation         Operation       `json:"operation"`
-	OperationDigest   string          `json:"operation_digest"`
-	Status            AttemptStatus   `json:"status"`
-	StartedAt         time.Time       `json:"started_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
-	Result            OperationResult `json:"result"`
-	ObservedState     DirectState     `json:"observed_state"`
-	Detail            string          `json:"detail"`
+	SchemaVersion             string                `json:"schema_version"`
+	Key                       string                `json:"key"`
+	TransactionID             string                `json:"transaction_id"`
+	PlanDigest                string                `json:"plan_digest"`
+	TargetFingerprint         string                `json:"target_fingerprint"`
+	FenceEpoch                uint64                `json:"fence_epoch"`
+	ApprovalID                string                `json:"approval_id"`
+	IntentReceipt             string                `json:"intent_receipt"`
+	IntentSequence            uint32                `json:"intent_sequence"`
+	Sequence                  uint32                `json:"sequence"`
+	Operation                 Operation             `json:"operation"`
+	OperationDigest           string                `json:"operation_digest"`
+	Status                    AttemptStatus         `json:"status"`
+	StartedAt                 time.Time             `json:"started_at"`
+	UpdatedAt                 time.Time             `json:"updated_at"`
+	Result                    OperationResult       `json:"result"`
+	ObservedState             DirectState           `json:"observed_state"`
+	PreObservationTransition  BootTransitionOutcome `json:"pre_observation_transition"`
+	ExecutionTransition       BootTransitionOutcome `json:"execution_transition"`
+	PostObservationTransition BootTransitionOutcome `json:"post_observation_transition"`
+	ReconciliationTransition  BootTransitionOutcome `json:"reconciliation_transition"`
+	Detail                    string                `json:"detail"`
 }
 
 type AttemptStore interface {
@@ -112,6 +116,9 @@ func (store *MemoryStore) Put(attempt Attempt) error {
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if err := validateAttemptJournalBindings(attempt, store.bootTransitions); err != nil {
+		return err
+	}
 	if existing, ok := store.attempts[attempt.Key]; ok {
 		if err := validAttemptTransition(existing, attempt); err != nil {
 			return err
@@ -253,6 +260,9 @@ func (store *FileStore) Put(attempt Attempt) error {
 	if err != nil {
 		return err
 	}
+	if err := validateAttemptJournalBindings(attempt, state.BootTransitions); err != nil {
+		return err
+	}
 	if existing, ok := state.Attempts[attempt.Key]; ok {
 		if err := validAttemptTransition(existing, attempt); err != nil {
 			return err
@@ -391,6 +401,11 @@ func (store *FileStore) load() (journalState, error) {
 		}
 		if err := transition.Validate(); err != nil {
 			return journalState{}, fmt.Errorf("invalid boot-transition journal record: %w", err)
+		}
+	}
+	for _, attempt := range envelope.Attempts {
+		if err := validateAttemptJournalBindings(attempt, envelope.BootTransitions); err != nil {
+			return journalState{}, fmt.Errorf("invalid attempt boot-transition binding: %w", err)
 		}
 	}
 	return journalState{Attempts: envelope.Attempts, BootTransitions: envelope.BootTransitions}, nil
@@ -564,8 +579,14 @@ func sameBootTransitionScope(left, right HardwareAction) bool {
 }
 
 func validateAttempt(attempt Attempt) error {
-	if attempt.SchemaVersion != AttemptSchemaVersion || attempt.Key == "" || attempt.TransactionID == "" || attempt.PlanDigest == "" || attempt.TargetFingerprint == "" || attempt.FenceEpoch == 0 || attempt.ApprovalID == "" || attempt.IntentReceipt == "" || attempt.IntentSequence == 0 || attempt.IntentSequence != attempt.Sequence || attempt.Sequence == 0 || attempt.OperationDigest == "" {
+	if attempt.SchemaVersion != AttemptSchemaVersion {
+		return fmt.Errorf("unsupported attempt schema %q", attempt.SchemaVersion)
+	}
+	if attempt.Key == "" || attempt.TransactionID == "" || attempt.PlanDigest == "" || attempt.TargetFingerprint == "" || attempt.FenceEpoch == 0 || attempt.ApprovalID == "" || attempt.IntentReceipt == "" || attempt.IntentSequence == 0 || attempt.IntentSequence != attempt.Sequence || attempt.Sequence == 0 || attempt.OperationDigest == "" {
 		return errors.New("attempt is missing required immutable bindings")
+	}
+	if attempt.Key != fmt.Sprintf("%s/%s/%d/%d", attempt.TransactionID, attempt.PlanDigest, attempt.FenceEpoch, attempt.Sequence) {
+		return errors.New("attempt key does not match its immutable bindings")
 	}
 	if _, allowed := operationClass(attempt.Operation); !allowed {
 		return errors.New("attempt contains an unknown operation")
@@ -577,6 +598,101 @@ func validateAttempt(attempt Attempt) error {
 	}
 	if attempt.StartedAt.IsZero() || attempt.UpdatedAt.IsZero() {
 		return errors.New("attempt is missing timestamps")
+	}
+	if err := validateAttemptBootTransitionOutcomes(attempt); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAttemptBootTransitionOutcomes(attempt Attempt) error {
+	pre := attempt.PreObservationTransition
+	if pre == (BootTransitionOutcome{}) || pre.Reference.Status != BootTransitionCompleted {
+		return errors.New("attempt requires a completed pre-observation boot transition")
+	}
+	if !attemptMatchesHardwareAction(attempt, pre.Action) || pre.Action.Phase != HardwarePhasePreObservation ||
+		pre.Action.RequestedBootMode != BootModeRPIBoot {
+		return errors.New("attempt pre-observation transition does not match its immutable bindings")
+	}
+	if err := pre.ValidateForAction(pre.Action); err != nil {
+		return fmt.Errorf("attempt pre-observation transition: %w", err)
+	}
+
+	validatePhase := func(name string, outcome BootTransitionOutcome, phase HardwarePhase) error {
+		if outcome == (BootTransitionOutcome{}) {
+			return nil
+		}
+		expected := pre.Action
+		expected.Phase = phase
+		expected.RequestedBootMode = BootModeRPIBoot
+		expected.ReconciliationClaimID = ""
+		expected.ReconciliationFenceEpoch = 0
+		if phase == HardwarePhaseExecute {
+			expected.RequestedBootMode = expected.OperationRequiredBootMode
+		}
+		if phase == HardwarePhaseReconciliation {
+			expected.StationID = outcome.Action.StationID
+			expected.LaneID = outcome.Action.LaneID
+			expected.ReconciliationClaimID = outcome.Action.ReconciliationClaimID
+			expected.ReconciliationFenceEpoch = outcome.Action.ReconciliationFenceEpoch
+		}
+		if err := outcome.ValidateForAction(expected); err != nil {
+			return fmt.Errorf("attempt %s transition: %w", name, err)
+		}
+		return nil
+	}
+	if err := validatePhase("execution", attempt.ExecutionTransition, HardwarePhaseExecute); err != nil {
+		return err
+	}
+	if err := validatePhase("post-observation", attempt.PostObservationTransition, HardwarePhasePostObservation); err != nil {
+		return err
+	}
+	if err := validatePhase("reconciliation", attempt.ReconciliationTransition, HardwarePhaseReconciliation); err != nil {
+		return err
+	}
+	if attempt.PostObservationTransition != (BootTransitionOutcome{}) &&
+		(attempt.ExecutionTransition == (BootTransitionOutcome{}) || attempt.ExecutionTransition.Reference.Status != BootTransitionCompleted) {
+		return errors.New("attempt cannot contain a post-observation transition without completed execution")
+	}
+	if attempt.Result != (OperationResult{}) {
+		if attempt.ExecutionTransition.Reference.Status != BootTransitionCompleted || attempt.Result.BootTransition != attempt.ExecutionTransition {
+			return errors.New("attempt result does not match its completed execution transition")
+		}
+	} else if attempt.ExecutionTransition.Reference.Status == BootTransitionCompleted {
+		return errors.New("attempt completed execution transition requires its operation result")
+	}
+	return nil
+}
+
+func attemptMatchesHardwareAction(attempt Attempt, action HardwareAction) bool {
+	return action.TransactionID == attempt.TransactionID && action.PlanDigest == attempt.PlanDigest &&
+		action.TargetFingerprint == attempt.TargetFingerprint && action.FenceEpoch == attempt.FenceEpoch &&
+		action.ApprovalID == attempt.ApprovalID && action.IntentReceipt == attempt.IntentReceipt &&
+		action.IntentSequence == attempt.IntentSequence && action.Sequence == attempt.Sequence &&
+		action.Operation == attempt.Operation && action.OperationDigest == attempt.OperationDigest
+}
+
+func validateAttemptJournalBindings(attempt Attempt, transitions map[string]BootTransition) error {
+	for _, outcome := range []BootTransitionOutcome{
+		attempt.PreObservationTransition,
+		attempt.ExecutionTransition,
+		attempt.PostObservationTransition,
+		attempt.ReconciliationTransition,
+	} {
+		if outcome == (BootTransitionOutcome{}) {
+			continue
+		}
+		transition, found := transitions[outcome.Reference.TransitionKey]
+		if !found {
+			return errors.New("attempt references a missing durable boot transition")
+		}
+		durable, err := transition.Outcome()
+		if err != nil {
+			return fmt.Errorf("attempt references an invalid durable boot transition: %w", err)
+		}
+		if durable != outcome {
+			return errors.New("attempt boot-transition outcome differs from its durable record")
+		}
 	}
 	return nil
 }
@@ -593,6 +709,12 @@ func validAttemptTransition(existing, next Attempt) error {
 	}
 	if existing.Status == AttemptUncertain && next.Status == AttemptStarted {
 		return errors.New("an uncertain attempt cannot return to started")
+	}
+	if existing.PreObservationTransition != next.PreObservationTransition ||
+		(existing.ExecutionTransition != (BootTransitionOutcome{}) && existing.ExecutionTransition != next.ExecutionTransition) ||
+		(existing.PostObservationTransition != (BootTransitionOutcome{}) && existing.PostObservationTransition != next.PostObservationTransition) ||
+		(existing.Result != (OperationResult{}) && existing.Result != next.Result) {
+		return errors.New("attempt recorded hardware evidence cannot change")
 	}
 	return nil
 }

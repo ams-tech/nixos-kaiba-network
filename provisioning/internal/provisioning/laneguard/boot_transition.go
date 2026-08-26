@@ -14,6 +14,7 @@ const (
 	BootTransitionSchemaVersion          = "provisioning.kaiba.network/boot-transition/v1alpha1"
 	BootTransitionEvidenceSchemaVersion  = "provisioning.kaiba.network/boot-transition-evidence/v1alpha1"
 	BootTransitionReferenceSchemaVersion = "provisioning.kaiba.network/boot-transition-reference/v1alpha1"
+	BootTransitionOutcomeSchemaVersion   = "provisioning.kaiba.network/boot-transition-outcome/v1alpha1"
 
 	bootTransitionEvidenceDigestDomain = "kaiba.provisioning.boot-transition-evidence.v1alpha1"
 )
@@ -271,6 +272,77 @@ func (reference BootTransitionReference) Validate() error {
 		}
 	default:
 		return errors.New("boot-transition reference requires a terminal status")
+	}
+	return nil
+}
+
+// BootTransitionOutcome is the comparable hardware-return envelope. It binds
+// every terminal reference to the exact action and generation that produced
+// it. Completed outcomes additionally carry the complete digest-bound
+// evidence; failed outcomes carry only their terminal failure reference.
+type BootTransitionOutcome struct {
+	SchemaVersion string                  `json:"schema_version"`
+	Action        HardwareAction          `json:"action"`
+	Generation    uint64                  `json:"generation"`
+	Reference     BootTransitionReference `json:"reference"`
+	Evidence      BootTransitionEvidence  `json:"evidence"`
+}
+
+func (transition BootTransition) Outcome() (BootTransitionOutcome, error) {
+	reference, err := transition.Reference()
+	if err != nil {
+		return BootTransitionOutcome{}, err
+	}
+	outcome := BootTransitionOutcome{
+		SchemaVersion: BootTransitionOutcomeSchemaVersion,
+		Action:        transition.Action,
+		Generation:    transition.Generation,
+		Reference:     reference,
+	}
+	if transition.Status == BootTransitionCompleted {
+		outcome.Evidence, err = transition.Evidence()
+		if err != nil {
+			return BootTransitionOutcome{}, err
+		}
+	}
+	return outcome, outcome.ValidateForAction(transition.Action)
+}
+
+func (outcome BootTransitionOutcome) ValidateForAction(expected HardwareAction) error {
+	if outcome.SchemaVersion != BootTransitionOutcomeSchemaVersion || outcome.Generation == 0 {
+		return errors.New("boot-transition outcome is missing its schema or generation")
+	}
+	if err := expected.Validate(); err != nil {
+		return fmt.Errorf("expected boot-transition action: %w", err)
+	}
+	if outcome.Action != expected {
+		return errors.New("boot-transition outcome does not match the exact requested action")
+	}
+	if err := outcome.Reference.Validate(); err != nil {
+		return fmt.Errorf("boot-transition outcome reference: %w", err)
+	}
+	if outcome.Reference.TransitionKey != BootTransitionKey(outcome.Action, outcome.Generation) {
+		return errors.New("boot-transition outcome reference does not match its action and generation")
+	}
+	if outcome.Reference.Status == BootTransitionCompleted {
+		if err := outcome.Evidence.Validate(); err != nil {
+			return fmt.Errorf("boot-transition outcome evidence: %w", err)
+		}
+		if outcome.Evidence.Action != outcome.Action || outcome.Evidence.Generation != outcome.Generation ||
+			outcome.Evidence.TransitionKey != outcome.Reference.TransitionKey {
+			return errors.New("boot-transition outcome evidence does not match its action, generation, or reference")
+		}
+		digest, err := outcome.Evidence.Digest()
+		if err != nil {
+			return err
+		}
+		if digest != outcome.Reference.EvidenceDigest {
+			return errors.New("boot-transition outcome evidence digest does not match its reference")
+		}
+		return nil
+	}
+	if outcome.Evidence != (BootTransitionEvidence{}) {
+		return errors.New("failed boot-transition outcome must not contain completed evidence")
 	}
 	return nil
 }
