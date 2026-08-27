@@ -31,6 +31,7 @@ type commandHardware struct {
 	transitions  int
 	closed       int
 	closeErr     error
+	observeErr   error
 	executeErr   error
 	poststate    laneguard.DirectState
 }
@@ -38,10 +39,12 @@ type commandHardware struct {
 func (hardware *commandHardware) Observe(_ context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.Observation, error) {
 	hardware.observations++
 	hardware.transitions++
-	outcome, err := recordCommandBootTransition(hardware.journal, config, action, hardware.transitions, false)
+	outcome, transitionErr := recordCommandBootTransition(
+		hardware.journal, config, action, hardware.transitions, hardware.observeErr != nil,
+	)
 	observation := hardware.observation
 	observation.BootTransition = outcome
-	return observation, err
+	return observation, errors.Join(hardware.observeErr, transitionErr)
 }
 
 func (hardware *commandHardware) Execute(_ context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.OperationResult, error) {
@@ -422,6 +425,214 @@ func TestCommandReconcilesRestartWithModeAutoAndNoRedispatch(t *testing.T) {
 	entries, err = os.ReadDir(filepath.Join(directory, "attempts"))
 	if err != nil || len(entries) != 2 {
 		t.Fatalf("execute and reconciliation publications = %v, %v", entries, err)
+	}
+}
+
+func TestTerminalReconciliationReceiptReplayIsPublicationOnly(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		status  laneguard.AttemptStatus
+		wantErr error
+	}{
+		{name: "verified", status: laneguard.AttemptVerified},
+		{name: "confirmed not applied", status: laneguard.AttemptConfirmedNotApplied},
+		{name: "quarantined", status: laneguard.AttemptQuarantined, wantErr: laneguard.ErrQuarantined},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			restoreCommandGlobals(t)
+			effectiveUID = func() int { return 0 }
+			setImmutableTestGlobals(t)
+			plan, executeRequest := commandPlanAndRequest()
+			reconcileRequest := commandReconcileRequest(plan, executeRequest)
+			authorityCalls := 0
+			requestAuthority = func(_ context.Context, socketPath string, request authoritybridge.BridgeRequest) (authoritybridge.BoundRequest, error) {
+				authorityCalls++
+				if !filepath.IsAbs(socketPath) || request.SchemaVersion != authoritybridge.RequestSchemaVersion ||
+					request.Mode != authoritybridge.ModeReconcile || request.TransactionID != plan.TransactionID ||
+					request.DraftSnapshot.PlanDigest != plan.PlanDigest {
+					t.Fatalf("reconciliation authority request = %#v via %q", request, socketPath)
+				}
+				return authoritybridge.BoundRequest{Plan: plan, ReconcileRequest: &reconcileRequest}, nil
+			}
+
+			attempt := commandBoundAttempt(plan, executeRequest.Sequence, test.status)
+			journal := &seededCommandJournal{MemoryStore: laneguard.NewMemoryStore(), attempt: attempt}
+			openLaneJournal = func(string) (laneJournal, error) { return journal, nil }
+			promptCalls := 0
+			listenOperatorPrompt = func(operatorprompt.Config) (operatorPromptServer, error) {
+				promptCalls++
+				t.Fatal("terminal reconciliation replay reached prompt setup")
+				return nil, nil
+			}
+			hardwareBuilds := 0
+			buildHardware = func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+				hardwareBuilds++
+				t.Fatal("terminal reconciliation replay reached hardware")
+				return nil, nil
+			}
+
+			directory := t.TempDir()
+			arguments := append(
+				commandMutationArguments(
+					t, directory, writeJSON(t, directory, "draft.json", commandDraft(plan)), filepath.Join(directory, "journal.json"),
+				),
+				"--mode", "reconcile",
+			)
+			var output bytes.Buffer
+			commandOutput = &output
+			if err := run(context.Background(), arguments); !sameOptionalError(err, test.wantErr) {
+				t.Fatalf("publish durable reconciliation result error = %v, want %v", err, test.wantErr)
+			}
+			var first struct {
+				Path             string                  `json:"path"`
+				Status           laneguard.AttemptStatus `json:"status"`
+				Key              string                  `json:"key"`
+				AlreadyPublished bool                    `json:"already_published"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &first); err != nil || first.AlreadyPublished ||
+				first.Status != attempt.Status || first.Key != attempt.Key {
+				t.Fatalf("first reconciliation publication = %#v, %v; output=%q", first, err, output.String())
+			}
+			published, err := os.ReadFile(first.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonical, err := json.Marshal(attempt)
+			if err != nil || !bytes.Equal(published, append(canonical, '\n')) {
+				t.Fatalf("reconciliation receipt differs from durable attempt: %v\n%s", err, published)
+			}
+
+			writeAttemptEvidence = func(string, []byte) error {
+				t.Fatal("exact reconciliation receipt replay rewrote the receipt")
+				return nil
+			}
+			output.Reset()
+			if err := run(context.Background(), arguments); !sameOptionalError(err, test.wantErr) {
+				t.Fatalf("replay exact reconciliation receipt error = %v, want %v", err, test.wantErr)
+			}
+			var replay struct {
+				Path             string                  `json:"path"`
+				Status           laneguard.AttemptStatus `json:"status"`
+				Key              string                  `json:"key"`
+				AlreadyPublished bool                    `json:"already_published"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &replay); err != nil || !replay.AlreadyPublished ||
+				replay.Path != first.Path || replay.Status != attempt.Status || replay.Key != attempt.Key {
+				t.Fatalf("replayed reconciliation publication = %#v, %v; output=%q", replay, err, output.String())
+			}
+			after, err := os.ReadFile(first.Path)
+			if err != nil || !bytes.Equal(after, published) {
+				t.Fatalf("exact reconciliation receipt changed: %v", err)
+			}
+			if authorityCalls != 2 || promptCalls != 0 || hardwareBuilds != 0 || journal.closeCalls != 2 {
+				t.Fatalf("publication-only calls = authority:%d prompt:%d hardware:%d close:%d",
+					authorityCalls, promptCalls, hardwareBuilds, journal.closeCalls)
+			}
+		})
+	}
+}
+
+func TestUncertainReconciliationRetryReobservesWithoutExecuting(t *testing.T) {
+	restoreCommandGlobals(t)
+	effectiveUID = func() int { return 0 }
+	setImmutableTestGlobals(t)
+	plan, executeRequest := commandPlanAndRequest()
+	reconcileRequest := commandReconcileRequest(plan, executeRequest)
+
+	// Produce a fully valid durable AttemptUncertain, then make one read-only
+	// reconciliation observation fail. The command below is therefore retrying
+	// a reconciliation result rather than an unobserved execute response.
+	memory := laneguard.NewMemoryStore()
+	initialHardware := &commandHardware{
+		journal: memory,
+		observation: laneguard.Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+		},
+		poststate:  plan.Operations[0].ExpectedPoststate,
+		executeErr: errors.New("response lost after target commit"),
+	}
+	initialGuard, err := laneguard.New(commandLaneConfig(), initialHardware, memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := initialGuard.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if attempt, err := initialGuard.Execute(context.Background(), executeRequest); !errors.Is(err, laneguard.ErrReconciliationRequired) || attempt.Status != laneguard.AttemptUncertain {
+		t.Fatalf("seed uncertain execution = %#v, %v", attempt, err)
+	}
+	initialHardware.observeErr = errors.New("temporary reconciliation observation failure")
+	if attempt, err := initialGuard.Reconcile(context.Background(), reconcileRequest); !errors.Is(err, laneguard.ErrReconciliationRequired) || attempt.Status != laneguard.AttemptUncertain ||
+		!strings.Contains(attempt.Detail, "reconciliation observation failed") {
+		t.Fatalf("seed uncertain reconciliation = %#v, %v", attempt, err)
+	}
+
+	journal := &commandJournal{MemoryStore: memory}
+	openLaneJournal = func(string) (laneJournal, error) { return journal, nil }
+	authorityCalls := 0
+	requestAuthority = func(_ context.Context, socketPath string, request authoritybridge.BridgeRequest) (authoritybridge.BoundRequest, error) {
+		authorityCalls++
+		if !filepath.IsAbs(socketPath) || request.SchemaVersion != authoritybridge.RequestSchemaVersion ||
+			request.Mode != authoritybridge.ModeReconcile || request.TransactionID != plan.TransactionID ||
+			request.DraftSnapshot.PlanDigest != plan.PlanDigest {
+			t.Fatalf("reconciliation retry authority request = %#v via %q", request, socketPath)
+		}
+		return authoritybridge.BoundRequest{Plan: plan, ReconcileRequest: &reconcileRequest}, nil
+	}
+	server := &commandPromptServer{}
+	promptCalls := 0
+	listenOperatorPrompt = func(config operatorprompt.Config) (operatorPromptServer, error) {
+		promptCalls++
+		if !filepath.IsAbs(config.SocketPath) || config.AllowedPrimaryGID != 4242 {
+			t.Fatalf("operator prompt config = %#v", config)
+		}
+		return server, nil
+	}
+	retryHardware := &commandHardware{
+		observation: laneguard.Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
+		},
+	}
+	hardwareBuilds := 0
+	buildHardware = func(config physicalrpi5.Config, dependencies physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+		hardwareBuilds++
+		if config.InitialMode != physicalrpi5.ModeAuto || dependencies.Journal != journal || dependencies.Prompter != server {
+			t.Fatalf("reconciliation retry dependencies = mode:%q journal:%T prompt:%T", config.InitialMode, dependencies.Journal, dependencies.Prompter)
+		}
+		retryHardware.journal = dependencies.Journal
+		return retryHardware, nil
+	}
+
+	directory := t.TempDir()
+	arguments := append(
+		commandMutationArguments(
+			t, directory, writeJSON(t, directory, "draft.json", commandDraft(plan)), filepath.Join(directory, "journal.json"),
+		),
+		"--mode", "reconcile",
+	)
+	var output bytes.Buffer
+	commandOutput = &output
+	if err := run(context.Background(), arguments); err != nil {
+		t.Fatalf("retry uncertain reconciliation: %v", err)
+	}
+	var summary struct {
+		Path             string                  `json:"path"`
+		Status           laneguard.AttemptStatus `json:"status"`
+		Key              string                  `json:"key"`
+		AlreadyPublished bool                    `json:"already_published"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &summary); err != nil || summary.AlreadyPublished ||
+		summary.Status != laneguard.AttemptVerified || summary.Key != laneguard.AttemptJournalKey(plan, executeRequest.Sequence) {
+		t.Fatalf("reobserved reconciliation summary = %#v, %v; output=%q", summary, err, output.String())
+	}
+	if authorityCalls != 2 || promptCalls != 1 || hardwareBuilds != 1 ||
+		retryHardware.observations != 1 || retryHardware.executions != 0 || retryHardware.closed != 1 || server.closed != 1 ||
+		journal.closeCalls != 1 {
+		t.Fatalf("reconciliation retry calls = authority:%d prompt:%d hardware:%d observe:%d execute:%d hardware-close:%d prompt-close:%d journal-close:%d",
+			authorityCalls, promptCalls, hardwareBuilds, retryHardware.observations, retryHardware.executions,
+			retryHardware.closed, server.closed, journal.closeCalls)
 	}
 }
 
@@ -864,6 +1075,13 @@ func TestPublicationFailureAfterLinkRetriesWithoutMutation(t *testing.T) {
 	}
 }
 
+func sameOptionalError(got, want error) bool {
+	if want == nil {
+		return got == nil
+	}
+	return errors.Is(got, want)
+}
+
 func commandBoundAttempt(plan laneguard.Plan, sequence uint32, status laneguard.AttemptStatus) laneguard.Attempt {
 	operation := plan.Operations[sequence-1]
 	now := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)
@@ -1042,6 +1260,19 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 		ClaimExpiresAt: time.Now().Add(10 * time.Minute),
 	}
 	return plan, request
+}
+
+func commandReconcileRequest(plan laneguard.Plan, executeRequest laneguard.ExecuteRequest) laneguard.ReconcileRequest {
+	return laneguard.ReconcileRequest{
+		SchemaVersion:   laneguard.ReconcileRequestSchemaVersion,
+		OriginalRequest: executeRequest,
+		Claim: laneguard.ReconciliationClaim{
+			StationID: plan.StationID, LaneID: plan.LaneID,
+			TransactionID: plan.TransactionID, TargetFingerprint: plan.TargetFingerprint,
+			ClaimID: "reconciliation-claim", FenceEpoch: plan.FenceEpoch + 1,
+			ExpiresAt: time.Now().UTC().Add(10 * time.Minute),
+		},
+	}
 }
 
 func commandDraft(plan laneguard.Plan) laneguard.Plan {
