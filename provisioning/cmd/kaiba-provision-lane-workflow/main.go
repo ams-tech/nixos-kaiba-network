@@ -76,6 +76,8 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		err = proposeReconciliation(ctx, arguments[1:], stdout, stderr)
 	case "apply-reconciliation":
 		err = applyReconciliation(ctx, arguments[1:], stdout, stderr)
+	case "release-terminal-claim":
+		err = releaseTerminalClaim(ctx, arguments[1:], stdout, stderr)
 	default:
 		printUsage(stderr)
 		return exitUsage
@@ -676,6 +678,33 @@ func applyReconciliation(ctx context.Context, arguments []string, stdout, stderr
 	return writeSummary(stdout, transactionSummary("reconciliation_recorded", transaction))
 }
 
+func releaseTerminalClaim(ctx context.Context, arguments []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("release-terminal-claim", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	draftPath := flags.String("draft", "", "reviewed authority-free draft JSON path")
+	var network controlFlags
+	addControlFlags(flags, &network)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *draftPath == "" {
+		return fmt.Errorf("%w: release-terminal-claim requires --draft", errUsage)
+	}
+	draft, err := loadDraft(*draftPath)
+	if err != nil {
+		return err
+	}
+	client, err := network.client()
+	if err != nil {
+		return err
+	}
+	transaction, err := operatorworkflow.ReleaseTerminalClaim(ctx, draft, client)
+	if err != nil {
+		return err
+	}
+	return writeSummary(stdout, transactionSummary("terminal_claim_released", transaction))
+}
+
 func loadDraft(path string) (laneguard.Plan, error) {
 	var draft laneguard.Plan
 	if err := loadStrictJSON(path, &draft); err != nil {
@@ -806,4 +835,5 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow prepare-reconciliation --draft FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow propose-reconciliation --draft FILE --attempt FILE --proposal-out FILE [station control TLS flags]")
 	fmt.Fprintln(output, "       kaiba-provision-lane-workflow apply-reconciliation --proposal FILE [station control/audit TLS flags]")
+	fmt.Fprintln(output, "       kaiba-provision-lane-workflow release-terminal-claim --draft FILE [station control TLS flags]")
 }

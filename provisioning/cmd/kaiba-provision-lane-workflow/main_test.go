@@ -24,6 +24,7 @@ func TestCommandSurfaceHasNoGenericMutationOrHardwareSelectors(t *testing.T) {
 		"renew-pending-intent", "renew-ready-campaign",
 		"propose-security-applied", "apply-security-applied",
 		"prepare-reconciliation", "propose-reconciliation", "apply-reconciliation",
+		"release-terminal-claim",
 	} {
 		if !strings.Contains(usage, required) {
 			t.Fatalf("usage omits %q", required)
@@ -36,6 +37,12 @@ func TestCommandSurfaceHasNoGenericMutationOrHardwareSelectors(t *testing.T) {
 		if strings.Contains(usage, forbidden) {
 			t.Fatalf("usage exposes forbidden selector %q", forbidden)
 		}
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(context.Background(), []string{"release-terminal-claim"}, &stdout, &stderr); code != exitUsage ||
+		!strings.Contains(stderr.String(), "requires --draft") {
+		t.Fatalf("release-terminal-claim without reviewed draft = code %d, stderr %q", code, stderr.String())
 	}
 }
 

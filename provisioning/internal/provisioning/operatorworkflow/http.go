@@ -131,6 +131,10 @@ func (client *HTTPControlClient) TransferClaim(ctx context.Context, request cont
 	return client.command(ctx, "transfer_claim", request.TransactionID, request)
 }
 
+func (client *HTTPControlClient) ReleaseClaim(ctx context.Context, request controlplane.ReleaseClaimRequest) (controlplane.Transaction, error) {
+	return client.command(ctx, "release_claim", request.TransactionID, request)
+}
+
 func (client *HTTPControlClient) BindTarget(ctx context.Context, request controlplane.BindTargetRequest) (controlplane.Transaction, error) {
 	return client.command(ctx, "bind_target", request.TransactionID, request)
 }

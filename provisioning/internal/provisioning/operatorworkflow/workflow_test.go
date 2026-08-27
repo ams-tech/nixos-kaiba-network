@@ -259,6 +259,227 @@ func TestSecurityAppliedProposalAuditsThenTerminalizesExactCampaignIdempotently(
 	}
 }
 
+func TestReleaseTerminalClaimIsSelectorFreeAndIdempotent(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction := completedCampaign(t, &fixture)
+	proposal, err := NewSecurityAppliedProposal(snapshot, transaction, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = ApplySecurityApplied(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantClaim := *transaction.ActiveClaim
+
+	transaction, err = ReleaseTerminalClaim(context.Background(), snapshot, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.Status != controlplane.StatusSecurityApplied || transaction.ActiveClaim != nil ||
+		len(transaction.ClaimHistory) != 1 || transaction.ClaimHistory[0].Status != controlplane.ClaimReleased ||
+		transaction.ClaimHistory[0].ClosedAt == nil || !sameClaimAuthority(transaction.ClaimHistory[0], wantClaim) {
+		t.Fatalf("released terminal transaction = %#v", transaction)
+	}
+
+	version := transaction.ResourceVersion
+	replayed, err := ReleaseTerminalClaim(context.Background(), snapshot, fixture.control)
+	if err != nil {
+		t.Fatalf("replay terminal claim release: %v", err)
+	}
+	if replayed.ResourceVersion != version || replayed.ActiveClaim != nil || len(replayed.ClaimHistory) != 1 {
+		t.Fatalf("terminal claim release replay changed state: %#v", replayed)
+	}
+}
+
+func TestReleaseTerminalClaimRejectsNonterminalCampaign(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction := approvedEmptyCampaign(t, &fixture)
+	if _, err := ReleaseTerminalClaim(context.Background(), snapshot, fixture.control); !errors.Is(err, ErrStateMismatch) {
+		t.Fatalf("nonterminal release error = %v, want state mismatch", err)
+	}
+	current, err := fixture.control.GetTransaction(context.Background(), transaction.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ResourceVersion != transaction.ResourceVersion || current.ActiveClaim == nil {
+		t.Fatalf("rejected release changed control state: %#v", current)
+	}
+}
+
+func TestReleaseTerminalClaimAllowsConclusiveReconciliation(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, _ := uncertainFirstOperation(t, &fixture)
+	transaction, err := PrepareReconciliationClaim(context.Background(), snapshot, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := NewReconciliationProposal(snapshot, transaction, verifiedAttempt(snapshot, transaction, fixture.now), fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = ApplyReconciliation(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.Status != controlplane.StatusReconciled || transaction.ActiveClaim == nil ||
+		transaction.ActiveClaim.Mode != controlplane.ClaimModeReconciliation {
+		t.Fatalf("conclusive reconciliation transaction = %#v", transaction)
+	}
+	transaction, err = ReleaseTerminalClaim(context.Background(), snapshot, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.ActiveClaim != nil || len(transaction.ClaimHistory) == 0 ||
+		transaction.ClaimHistory[len(transaction.ClaimHistory)-1].Status != controlplane.ClaimReleased {
+		t.Fatalf("released reconciliation claim = %#v", transaction)
+	}
+}
+
+func TestReleaseTerminalClaimRejectsTamperedTerminalStateAndResponse(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction := completedCampaign(t, &fixture)
+	proposal, err := NewSecurityAppliedProposal(snapshot, transaction, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := ApplySecurityApplied(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stateTests := map[string]func(*controlplane.Transaction){
+		"approval plan":      func(value *controlplane.Transaction) { value.Approval.PlanDigest = testDigest("d") },
+		"operation plan":     func(value *controlplane.Transaction) { value.Operations[0].PlanDigest = testDigest("d") },
+		"authorization ID":   func(value *controlplane.Transaction) { value.Operations[0].ID = "authorization-other" },
+		"terminal evidence":  func(value *controlplane.Transaction) { value.SecurityApplied.EvidenceDigest = testDigest("d") },
+		"terminal receipt":   func(value *controlplane.Transaction) { value.SecurityApplied.AuditReceiptID = "invalid" },
+		"target fingerprint": func(value *controlplane.Transaction) { value.Target.Fingerprint = testDigest("d") },
+	}
+	for name, mutate := range stateTests {
+		t.Run("state "+name, func(t *testing.T) {
+			changed := cloneControlTransaction(t, terminal)
+			mutate(&changed)
+			control := &recordingClaimReleaser{transaction: changed}
+			if _, err := ReleaseTerminalClaim(context.Background(), snapshot, control); !errors.Is(err, ErrStateMismatch) {
+				t.Fatalf("tampered terminal state error = %v, want state mismatch", err)
+			}
+			if len(control.requests) != 0 {
+				t.Fatal("tampered terminal state crossed the release boundary")
+			}
+		})
+	}
+
+	validResponse := exactTerminalReleaseResponse(terminal, fixture.now.Add(time.Second))
+	responseTests := map[string]func(*controlplane.Transaction){
+		"target":      func(value *controlplane.Transaction) { value.Target.Fingerprint = testDigest("d") },
+		"operation":   func(value *controlplane.Transaction) { value.Operations[0].ID = "authorization-other" },
+		"disposition": func(value *controlplane.Transaction) { value.SecurityApplied.EvidenceDigest = testDigest("d") },
+		"prior history": func(value *controlplane.Transaction) {
+			value.ClaimHistory = append([]controlplane.Claim{{ID: "claim-other"}}, value.ClaimHistory...)
+		},
+	}
+	for name, mutate := range responseTests {
+		t.Run("response "+name, func(t *testing.T) {
+			changed := cloneControlTransaction(t, validResponse)
+			mutate(&changed)
+			control := &recordingClaimReleaser{transaction: terminal, released: changed}
+			if _, err := ReleaseTerminalClaim(context.Background(), snapshot, control); !errors.Is(err, ErrStateMismatch) {
+				t.Fatalf("tampered release response error = %v, want state mismatch", err)
+			}
+			if len(control.requests) != 1 {
+				t.Fatalf("release calls = %d, want 1", len(control.requests))
+			}
+		})
+	}
+}
+
+func TestReleaseTerminalClaimRetryNeverRetargetsALaterQuarantineClaim(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction := pendingFirstOperation(t, &fixture)
+	attempt := verifiedAttempt(snapshot, transaction, fixture.now)
+	attempt.Status = laneguard.AttemptQuarantined
+	proposal, err := NewEvidenceProposal(snapshot, transaction, attempt, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = ApplyEvidence(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.Status != controlplane.StatusQuarantined {
+		t.Fatalf("mutation quarantine transaction = %#v", transaction)
+	}
+	transaction, err = ReleaseTerminalClaim(context.Background(), snapshot, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = fixture.control.AcquireClaim(context.Background(), controlplane.AcquireClaimRequest{
+		SchemaVersion: controlplane.AcquireClaimRequestSchemaVersion, IdempotencyKey: "later-reconciliation-claim",
+		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+		StationID: snapshot.StationID, LaneID: snapshot.LaneID,
+		Mode: controlplane.ClaimModeReconciliation, AllowedStages: []string{"reconciliation"}, LeaseDurationSeconds: claimLeaseSeconds,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	laterClaim := *transaction.ActiveClaim
+	if _, err := ReleaseTerminalClaim(context.Background(), snapshot, fixture.control); !errors.Is(err, ErrStateMismatch) {
+		t.Fatalf("delayed release retry error = %v, want state mismatch", err)
+	}
+	current, err := fixture.control.GetTransaction(context.Background(), transaction.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ActiveClaim == nil || !sameClaimAuthority(*current.ActiveClaim, laterClaim) ||
+		current.ResourceVersion != transaction.ResourceVersion {
+		t.Fatalf("delayed retry retargeted the later claim: %#v", current)
+	}
+}
+
+func TestReleaseTerminalClaimAllowsReconciliationQuarantine(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, _ := uncertainFirstOperation(t, &fixture)
+	transaction, err := PrepareReconciliationClaim(context.Background(), snapshot, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := verifiedAttempt(snapshot, transaction, fixture.now)
+	attempt.Status = laneguard.AttemptUncertain
+	proposal, err := NewReconciliationProposal(snapshot, transaction, attempt, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = ApplyReconciliation(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.Status != controlplane.StatusQuarantined || transaction.ActiveClaim == nil ||
+		transaction.ActiveClaim.Mode != controlplane.ClaimModeReconciliation {
+		t.Fatalf("reconciliation quarantine transaction = %#v", transaction)
+	}
+	transaction, err = ReleaseTerminalClaim(context.Background(), snapshot, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.ActiveClaim != nil || transaction.ClaimHistory[len(transaction.ClaimHistory)-1].Status != controlplane.ClaimReleased {
+		t.Fatalf("released reconciliation quarantine = %#v", transaction)
+	}
+}
+
+func exactTerminalReleaseResponse(before controlplane.Transaction, updatedAt time.Time) controlplane.Transaction {
+	after := before
+	after.ResourceVersion++
+	after.UpdatedAt = updatedAt.UTC()
+	released := *before.ActiveClaim
+	released.Status = controlplane.ClaimReleased
+	closedAt := after.UpdatedAt
+	released.ClosedAt = &closedAt
+	after.ClaimHistory = append(append([]controlplane.Claim(nil), before.ClaimHistory...), released)
+	after.ActiveClaim = nil
+	return after
+}
+
 func TestSecurityAppliedRejectsProposalOrCompletedStateTamperingBeforeAudit(t *testing.T) {
 	fixture := newWorkflowFixture(t)
 	snapshot, transaction := completedCampaign(t, &fixture)
@@ -1845,6 +2066,22 @@ type recordingClaimRenewer struct {
 	transaction controlplane.Transaction
 	renewed     controlplane.Transaction
 	requests    []controlplane.RenewClaimRequest
+}
+
+type recordingClaimReleaser struct {
+	transaction controlplane.Transaction
+	released    controlplane.Transaction
+	requests    []controlplane.ReleaseClaimRequest
+	err         error
+}
+
+func (control *recordingClaimReleaser) GetTransaction(context.Context, string) (controlplane.Transaction, error) {
+	return control.transaction, nil
+}
+
+func (control *recordingClaimReleaser) ReleaseClaim(_ context.Context, request controlplane.ReleaseClaimRequest) (controlplane.Transaction, error) {
+	control.requests = append(control.requests, request)
+	return control.released, control.err
 }
 
 func (control *recordingClaimRenewer) GetTransaction(context.Context, string) (controlplane.Transaction, error) {

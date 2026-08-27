@@ -180,6 +180,43 @@ func TestHTTPControlClientMarkSecurityAppliedUsesFixedTypedOperation(t *testing.
 	}
 }
 
+func TestHTTPControlClientReleaseClaimUsesFixedTypedOperation(t *testing.T) {
+	want := controlplane.ReleaseClaimRequest{
+		SchemaVersion: controlplane.ReleaseClaimRequestSchemaVersion, IdempotencyKey: "release-terminal-1",
+		TransactionID: "transaction-1", ExpectedResourceVersion: 8, ClaimID: "claim-1", FenceEpoch: 3,
+	}
+	responseBody, err := json.Marshal(controlplane.Transaction{
+		SchemaVersion: controlplane.TransactionSchemaVersion, ID: want.TransactionID, ResourceVersion: 9,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var command controlplane.Command
+		if err := json.NewDecoder(request.Body).Decode(&command); err != nil {
+			t.Fatal(err)
+		}
+		if command.SchemaVersion != controlplane.CommandSchemaVersion || command.Operation != "release_claim" {
+			t.Fatalf("control command = %#v", command)
+		}
+		var got controlplane.ReleaseClaimRequest
+		if err := controlplane.DecodeStrict(command.Request, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("typed terminal release request = %#v, want %#v", got, want)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(string(responseBody))),
+		}, nil
+	})}
+	client := &HTTPControlClient{client: httpClient, origin: url.URL{Scheme: "https", Host: "control.example.test"}}
+	if _, err := client.ReleaseClaim(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHTTPControlClientApprovalPreflightUsesFixedTypedOperation(t *testing.T) {
 	want := controlplane.ApprovalPreflightRequest{
 		SchemaVersion: controlplane.ApprovalPreflightRequestSchemaVersion,

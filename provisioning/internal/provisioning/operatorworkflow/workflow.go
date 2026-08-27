@@ -166,6 +166,10 @@ type claimTransferer interface {
 	TransferClaim(context.Context, controlplane.TransferClaimRequest) (controlplane.Transaction, error)
 }
 
+type claimReleaser interface {
+	ReleaseClaim(context.Context, controlplane.ReleaseClaimRequest) (controlplane.Transaction, error)
+}
+
 type approvalRecorder interface {
 	RecordApproval(context.Context, controlplane.RecordApprovalRequest) (controlplane.Transaction, error)
 }
@@ -756,6 +760,75 @@ func RenewReadyCampaign(ctx context.Context, snapshot laneguard.Plan, now time.T
 		}
 	}
 	return renewed, nil
+}
+
+// ReleaseTerminalClaim promptly relinquishes the exact fixed lane claim after
+// the campaign reaches a terminal control state. The reviewed draft selects
+// the transaction and lane; callers cannot supply a claim, fence, status, or
+// release mode. A retry after the server committed but its response was lost
+// recognizes the exact released claim in durable history and performs no
+// second transition.
+func ReleaseTerminalClaim(ctx context.Context, snapshot laneguard.Plan, control interface {
+	transactionReader
+	claimReleaser
+}) (controlplane.Transaction, error) {
+	if control == nil {
+		return controlplane.Transaction{}, fmt.Errorf("%w: terminal claim control client is required", ErrInvalidInput)
+	}
+	if _, err := plancompiler.DraftFromSnapshot(snapshot); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("%w: terminal claim draft: %v", ErrInvalidInput, err)
+	}
+	transaction, err := control.GetTransaction(ctx, snapshot.TransactionID)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("read transaction before terminal claim release: %w", err)
+	}
+	if transaction.ActiveClaim == nil {
+		if err := matchReleasedTerminalClaim(snapshot, transaction); err != nil {
+			return controlplane.Transaction{}, err
+		}
+		released := transaction.ClaimHistory[len(transaction.ClaimHistory)-1]
+		if transaction.ResourceVersion <= 1 {
+			return controlplane.Transaction{}, fmt.Errorf("%w: released transaction has no valid pre-release version", ErrStateMismatch)
+		}
+		replayed, err := control.ReleaseClaim(ctx, terminalReleaseRequest(snapshot, transaction.ResourceVersion-1, released))
+		if err != nil {
+			return controlplane.Transaction{}, fmt.Errorf("prove terminal claim release replay: %w", err)
+		}
+		if digestJSON("terminal-claim-release-replay", replayed) != digestJSON("terminal-claim-release-replay", transaction) {
+			return controlplane.Transaction{}, fmt.Errorf("%w: terminal claim release replay returned changed control state", ErrStateMismatch)
+		}
+		return replayed, nil
+	}
+	for _, claim := range transaction.ClaimHistory {
+		if claim.Status == controlplane.ClaimReleased {
+			return controlplane.Transaction{}, fmt.Errorf("%w: a later active claim cannot be selected by replaying an earlier terminal release", ErrStateMismatch)
+		}
+	}
+	if err := matchActiveTerminalClaim(snapshot, transaction); err != nil {
+		return controlplane.Transaction{}, err
+	}
+	if transaction.ResourceVersion == ^uint64(0) {
+		return controlplane.Transaction{}, fmt.Errorf("%w: terminal transaction resource version cannot advance", ErrStateMismatch)
+	}
+	before := transaction
+	claim := *transaction.ActiveClaim
+	transaction, err = control.ReleaseClaim(ctx, terminalReleaseRequest(snapshot, transaction.ResourceVersion, claim))
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("release terminal campaign claim: %w", err)
+	}
+	if err := matchExactTerminalRelease(before, transaction); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("validate released terminal campaign claim: %w", err)
+	}
+	return transaction, nil
+}
+
+func terminalReleaseRequest(snapshot laneguard.Plan, expectedResourceVersion uint64, claim controlplane.Claim) controlplane.ReleaseClaimRequest {
+	return controlplane.ReleaseClaimRequest{
+		SchemaVersion:  controlplane.ReleaseClaimRequestSchemaVersion,
+		IdempotencyKey: workflowID("release-terminal-claim", snapshot.PlanDigest, claim.ID, fmt.Sprint(expectedResourceVersion)),
+		TransactionID:  snapshot.TransactionID, ExpectedResourceVersion: expectedResourceVersion,
+		ClaimID: claim.ID, FenceEpoch: claim.FenceEpoch,
+	}
 }
 
 func NewIntentProposal(snapshot laneguard.Plan, transaction controlplane.Transaction, sequence uint32, eventTime time.Time) (IntentProposal, error) {
@@ -2240,6 +2313,250 @@ func matchDraftTransaction(snapshot laneguard.Plan, transaction controlplane.Tra
 		return fmt.Errorf("%w: control transaction does not match the authority-free draft", ErrStateMismatch)
 	}
 	return nil
+}
+
+func matchActiveTerminalClaim(snapshot laneguard.Plan, transaction controlplane.Transaction) error {
+	if err := matchTerminalTransaction(snapshot, transaction); err != nil {
+		return err
+	}
+	claim := transaction.ActiveClaim
+	if claim == nil || claim.Status != controlplane.ClaimActive || claim.ClosedAt != nil {
+		return fmt.Errorf("%w: terminal transaction has no active releasable claim", ErrStateMismatch)
+	}
+	return matchTerminalClaim(snapshot, transaction, *claim)
+}
+
+func matchReleasedTerminalClaim(snapshot laneguard.Plan, transaction controlplane.Transaction) error {
+	if err := matchTerminalTransaction(snapshot, transaction); err != nil {
+		return err
+	}
+	if transaction.ActiveClaim != nil || len(transaction.ClaimHistory) == 0 {
+		return fmt.Errorf("%w: terminal transaction does not contain an exact released claim", ErrStateMismatch)
+	}
+	releasedCount := 0
+	for _, claim := range transaction.ClaimHistory {
+		if claim.Status == controlplane.ClaimReleased {
+			releasedCount++
+		}
+	}
+	if releasedCount != 1 {
+		return fmt.Errorf("%w: terminal release replay is ambiguous across %d released claims", ErrStateMismatch, releasedCount)
+	}
+	claim := transaction.ClaimHistory[len(transaction.ClaimHistory)-1]
+	if claim.Status != controlplane.ClaimReleased || claim.ClosedAt == nil || claim.ClosedAt.Before(claim.AcquiredAt) ||
+		claim.ClosedAt.After(claim.ExpiresAt) {
+		return fmt.Errorf("%w: terminal claim history is not a valid release", ErrStateMismatch)
+	}
+	return matchTerminalClaim(snapshot, transaction, claim)
+}
+
+func matchTerminalTransaction(snapshot laneguard.Plan, transaction controlplane.Transaction) error {
+	if transaction.SchemaVersion != controlplane.TransactionSchemaVersion || transaction.ID != snapshot.TransactionID ||
+		transaction.ResourceVersion == 0 || transaction.BundleDigest != snapshot.Release.SignedReleaseManifestDigest ||
+		transaction.ExpectedPrestateCustomerKeyHash != snapshot.Operations[0].ExpectedPrestate.CustomerKeyHash ||
+		transaction.ExpectedCustomerKeyHash != snapshot.Release.ExpectedCustomerKeyHash ||
+		!digestPattern.MatchString(transaction.TransactionDigest) || transaction.Target == nil ||
+		transaction.Target.Fingerprint != snapshot.TargetFingerprint || transaction.Target.FenceEpoch != snapshot.FenceEpoch ||
+		transaction.Target.CustomerKeyHash != snapshot.Operations[0].ExpectedPrestate.CustomerKeyHash ||
+		!digestPattern.MatchString(transaction.Target.ObservationDigest) {
+		return fmt.Errorf("%w: terminal control transaction differs from the authority-free draft", ErrStateMismatch)
+	}
+	switch transaction.Status {
+	case controlplane.StatusSecurityApplied:
+		record := transaction.SecurityApplied
+		if record == nil || transaction.Quarantine != nil || transaction.Abort != nil || transaction.Approval == nil ||
+			!digestPattern.MatchString(record.EvidenceDigest) || !digestPattern.MatchString(record.AuditReceiptID) ||
+			record.RollbackStatus != developmentRollbackStatus || record.ReleaseClassification != developmentReleaseClassification ||
+			record.RecordedAt.IsZero() || record.RecordedAt.After(transaction.UpdatedAt) ||
+			!approvalMatchesCampaign(*transaction.Approval, snapshot, transaction, record.RecordedAt) ||
+			len(transaction.Operations) != len(snapshot.Operations) {
+			return fmt.Errorf("%w: security-applied transaction lacks its unique terminal record", ErrStateMismatch)
+		}
+	case controlplane.StatusQuarantined:
+		record := transaction.Quarantine
+		if record == nil || transaction.SecurityApplied != nil || transaction.Abort != nil || transaction.Approval != nil ||
+			!identifierPattern.MatchString(record.ReasonCode) || !digestPattern.MatchString(record.ObservationDigest) ||
+			!digestPattern.MatchString(record.AuditReceiptID) || record.FenceEpoch == 0 ||
+			record.FenceEpoch > transaction.FenceEpoch || record.RecordedAt.IsZero() || record.RecordedAt.After(transaction.UpdatedAt) {
+			return fmt.Errorf("%w: quarantined transaction lacks its unique terminal record", ErrStateMismatch)
+		}
+	case controlplane.StatusReconciled:
+		if transaction.Quarantine != nil || transaction.SecurityApplied != nil || transaction.Abort != nil ||
+			transaction.Approval != nil || len(transaction.Operations) == 0 {
+			return fmt.Errorf("%w: reconciled transaction contains a conflicting disposition", ErrStateMismatch)
+		}
+		last := transaction.Operations[len(transaction.Operations)-1]
+		if last.Status != controlplane.OperationConfirmedApplied && last.Status != controlplane.OperationConfirmedNotApplied {
+			return fmt.Errorf("%w: reconciled transaction lacks a conclusive operation", ErrStateMismatch)
+		}
+	case controlplane.StatusAborted:
+		if transaction.Abort == nil || transaction.Quarantine != nil || transaction.SecurityApplied != nil ||
+			transaction.Approval != nil || len(transaction.Operations) != 0 ||
+			!digestPattern.MatchString(transaction.Abort.ReusableBaselineDigest) ||
+			!digestPattern.MatchString(transaction.Abort.AuditReceiptID) || transaction.Abort.RecordedAt.IsZero() ||
+			transaction.Abort.RecordedAt.After(transaction.UpdatedAt) {
+			return fmt.Errorf("%w: aborted transaction lacks its unique clean-abort record", ErrStateMismatch)
+		}
+	default:
+		return fmt.Errorf("%w: transaction status %q is not terminal and releasable", ErrStateMismatch, transaction.Status)
+	}
+	return matchTerminalOperationHistory(snapshot, transaction)
+}
+
+func matchTerminalClaim(snapshot laneguard.Plan, transaction controlplane.Transaction, claim controlplane.Claim) error {
+	if !identifierPattern.MatchString(claim.ID) || claim.AssetID != transaction.AssetID ||
+		claim.StationID != snapshot.StationID || claim.LaneID != snapshot.LaneID ||
+		claim.FenceEpoch != transaction.FenceEpoch || claim.AcquiredAt.IsZero() || !claim.ExpiresAt.After(claim.AcquiredAt) {
+		return fmt.Errorf("%w: terminal claim identity differs from the reviewed campaign", ErrStateMismatch)
+	}
+	switch transaction.Status {
+	case controlplane.StatusSecurityApplied, controlplane.StatusAborted:
+		if claim.Mode != controlplane.ClaimModeMutation || transaction.FenceEpoch != snapshot.FenceEpoch ||
+			!equalStrings(claim.AllowedStages, planOperations(snapshot)) {
+			return fmt.Errorf("%w: terminal mutation claim differs from the reviewed campaign", ErrStateMismatch)
+		}
+	case controlplane.StatusReconciled:
+		if claim.Mode != controlplane.ClaimModeReconciliation || claim.FenceEpoch <= snapshot.FenceEpoch ||
+			!equalStrings(claim.AllowedStages, []string{"reconciliation"}) {
+			return fmt.Errorf("%w: reconciled claim is not fixed read-only authority", ErrStateMismatch)
+		}
+	case controlplane.StatusQuarantined:
+		validMutation := claim.Mode == controlplane.ClaimModeMutation && transaction.FenceEpoch == snapshot.FenceEpoch &&
+			equalStrings(claim.AllowedStages, planOperations(snapshot))
+		validReconciliation := claim.Mode == controlplane.ClaimModeReconciliation && claim.FenceEpoch > snapshot.FenceEpoch &&
+			equalStrings(claim.AllowedStages, []string{"reconciliation"})
+		if !validMutation && !validReconciliation {
+			return fmt.Errorf("%w: quarantined claim is not fixed campaign authority", ErrStateMismatch)
+		}
+	}
+	if transaction.Status == controlplane.StatusSecurityApplied {
+		verification := transaction
+		active := claim
+		active.Status = controlplane.ClaimActive
+		active.ClosedAt = nil
+		verification.ActiveClaim = &active
+		evidenceDigest, err := completedCampaignEvidence(snapshot, verification, transaction.SecurityApplied.RecordedAt)
+		if err != nil || evidenceDigest != transaction.SecurityApplied.EvidenceDigest {
+			return fmt.Errorf("%w: security-applied evidence does not bind the exact reviewed campaign", ErrStateMismatch)
+		}
+	}
+	return nil
+}
+
+func matchTerminalOperationHistory(snapshot laneguard.Plan, transaction controlplane.Transaction) error {
+	if len(transaction.Operations) > len(snapshot.Operations) {
+		return fmt.Errorf("%w: terminal operation history exceeds the reviewed campaign", ErrStateMismatch)
+	}
+	terminalAt := transaction.UpdatedAt
+	switch transaction.Status {
+	case controlplane.StatusSecurityApplied:
+		terminalAt = transaction.SecurityApplied.RecordedAt
+	case controlplane.StatusQuarantined:
+		terminalAt = transaction.Quarantine.RecordedAt
+	case controlplane.StatusReconciled:
+		if transaction.Operations[len(transaction.Operations)-1].EvidenceAt == nil {
+			return fmt.Errorf("%w: reconciled transaction lacks terminal evidence time", ErrStateMismatch)
+		}
+		terminalAt = *transaction.Operations[len(transaction.Operations)-1].EvidenceAt
+	case controlplane.StatusAborted:
+		return nil
+	}
+	draft, err := plancompiler.DraftFromSnapshot(snapshot)
+	if err != nil {
+		return fmt.Errorf("%w: terminal operation draft: %v", ErrInvalidInput, err)
+	}
+	var previousEvidenceAt time.Time
+	for index, record := range transaction.Operations {
+		operation := snapshot.Operations[index]
+		prestateDigest, err := draft.PrestateDigest(operation.Sequence)
+		if err != nil {
+			return err
+		}
+		if record.ID != operation.AuthorizationID || record.Operation != string(operation.Operation) ||
+			record.PlanDigest != snapshot.PlanDigest || record.Release != snapshot.Release ||
+			!record.ApprovalExpiresAt.Equal(snapshot.ApprovalExpiresAt) ||
+			!approvalSnapshotMatchesCampaign(record.Approval, snapshot, transaction, record.IntentAt) ||
+			!record.Approval.ExpiresAt.After(record.IntentAt) || record.InputDigest != snapshot.PlanDigest ||
+			record.PrestateDigest != prestateDigest || !digestPattern.MatchString(record.IntentAuditReceiptID) ||
+			record.IntentFenceEpoch != snapshot.FenceEpoch || record.IntentAt.IsZero() || record.IntentAt.After(terminalAt) ||
+			(!previousEvidenceAt.IsZero() && record.IntentAt.Before(previousEvidenceAt)) {
+			return fmt.Errorf("%w: terminal operation history differs at sequence %d", ErrStateMismatch, index+1)
+		}
+		last := index == len(transaction.Operations)-1
+		if !last && record.Status != controlplane.OperationSucceeded {
+			return fmt.Errorf("%w: terminal operation %d left a non-successful prefix", ErrStateMismatch, index+1)
+		}
+		switch record.Status {
+		case controlplane.OperationSucceeded, controlplane.OperationFailed:
+			if record.EvidenceAt == nil || record.EvidenceAt.Before(record.IntentAt) || record.EvidenceAt.After(terminalAt) ||
+				!digestPattern.MatchString(record.OutputDigest) || !digestPattern.MatchString(record.ObservationDigest) ||
+				!digestPattern.MatchString(record.EvidenceAuditReceiptID) || record.ReconciliationAuditReceiptID != "" {
+				return fmt.Errorf("%w: terminal direct evidence differs at sequence %d", ErrStateMismatch, index+1)
+			}
+		case controlplane.OperationConfirmedApplied, controlplane.OperationConfirmedNotApplied:
+			if !last || record.EvidenceAt == nil || record.EvidenceAt.Before(record.IntentAt) || record.EvidenceAt.After(terminalAt) ||
+				!digestPattern.MatchString(record.OutputDigest) || !digestPattern.MatchString(record.ObservationDigest) ||
+				(record.EvidenceAuditReceiptID != "" && !digestPattern.MatchString(record.EvidenceAuditReceiptID)) ||
+				!digestPattern.MatchString(record.ReconciliationAuditReceiptID) {
+				return fmt.Errorf("%w: terminal reconciliation evidence differs at sequence %d", ErrStateMismatch, index+1)
+			}
+		case controlplane.OperationUncertain:
+			if !last || transaction.Status != controlplane.StatusQuarantined || record.EvidenceAt == nil ||
+				record.EvidenceAt.Before(record.IntentAt) || record.EvidenceAt.After(terminalAt) ||
+				!digestPattern.MatchString(record.OutputDigest) || !digestPattern.MatchString(record.ObservationDigest) ||
+				(record.EvidenceAuditReceiptID == "" && record.ReconciliationAuditReceiptID == "") ||
+				(record.EvidenceAuditReceiptID != "" && !digestPattern.MatchString(record.EvidenceAuditReceiptID)) ||
+				(record.ReconciliationAuditReceiptID != "" && !digestPattern.MatchString(record.ReconciliationAuditReceiptID)) {
+				return fmt.Errorf("%w: terminal uncertain evidence differs at sequence %d", ErrStateMismatch, index+1)
+			}
+		case controlplane.OperationIntentRecorded:
+			if !last || transaction.Status != controlplane.StatusQuarantined || record.OutputDigest != "" ||
+				record.ObservationDigest != "" || record.EvidenceAuditReceiptID != "" || record.EvidenceAt != nil ||
+				record.ReconciliationAuditReceiptID != "" {
+				return fmt.Errorf("%w: quarantined pending intent differs at sequence %d", ErrStateMismatch, index+1)
+			}
+		default:
+			return fmt.Errorf("%w: terminal operation %d has unsupported status %q", ErrStateMismatch, index+1, record.Status)
+		}
+		if record.EvidenceAt != nil {
+			previousEvidenceAt = *record.EvidenceAt
+		}
+	}
+	if transaction.Status == controlplane.StatusSecurityApplied {
+		for index, record := range transaction.Operations {
+			if record.Status != controlplane.OperationSucceeded {
+				return fmt.Errorf("%w: security-applied operation %d is not directly successful", ErrStateMismatch, index+1)
+			}
+		}
+	}
+	return nil
+}
+
+func matchExactTerminalRelease(before, after controlplane.Transaction) error {
+	if before.ActiveClaim == nil || after.ResourceVersion != before.ResourceVersion+1 || after.UpdatedAt.IsZero() ||
+		after.UpdatedAt.Before(before.UpdatedAt) {
+		return fmt.Errorf("%w: terminal release version or update time is invalid", ErrStateMismatch)
+	}
+	expected := before
+	expected.ResourceVersion = after.ResourceVersion
+	expected.UpdatedAt = after.UpdatedAt
+	released := *before.ActiveClaim
+	released.Status = controlplane.ClaimReleased
+	closedAt := after.UpdatedAt
+	released.ClosedAt = &closedAt
+	expected.ClaimHistory = append(append([]controlplane.Claim(nil), before.ClaimHistory...), released)
+	expected.ActiveClaim = nil
+	if digestJSON("terminal-claim-release-response", after) != digestJSON("terminal-claim-release-response", expected) {
+		return fmt.Errorf("%w: terminal release changed state beyond the exact claim closure", ErrStateMismatch)
+	}
+	return nil
+}
+
+func sameClaimAuthority(left, right controlplane.Claim) bool {
+	return left.ID == right.ID && left.Mode == right.Mode && left.StationID == right.StationID &&
+		left.LaneID == right.LaneID && left.AssetID == right.AssetID && left.FenceEpoch == right.FenceEpoch &&
+		left.AcquiredAt.Equal(right.AcquiredAt) && left.ExpiresAt.Equal(right.ExpiresAt) &&
+		equalStrings(left.AllowedStages, right.AllowedStages)
 }
 
 // preflightCurrentClaimBeforeAudit uses the control plane's clock to reject an

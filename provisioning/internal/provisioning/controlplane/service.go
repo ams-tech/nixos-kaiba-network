@@ -327,9 +327,9 @@ func (s *Service) ReleaseClaim(_ context.Context, request ReleaseClaimRequest) (
 			return err
 		}
 		switch transaction.Status {
-		case StatusSecurityApplied, StatusQuarantined, StatusAborted:
+		case StatusSecurityApplied, StatusQuarantined, StatusReconciled, StatusAborted:
 		default:
-			return fmt.Errorf("%w: claims may be released only after security_applied, quarantine, or proven clean abort", ErrIllegalTransition)
+			return fmt.Errorf("%w: claims may be released only after security_applied, quarantine, conclusive reconciliation, or proven clean abort", ErrIllegalTransition)
 		}
 		closed := *claim
 		closed.Status = ClaimReleased
