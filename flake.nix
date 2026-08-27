@@ -231,6 +231,12 @@
           inherit provisioning system;
         };
 
+      ubuntuSigningGateDeploymentFor =
+        system:
+        import ./nix/ubuntu-signing-gate-deployment.nix {
+          pkgs = import nixpkgs { inherit system; };
+        };
+
       rpi5PrototypeRelease =
         let
           system = "x86_64-linux";
@@ -276,6 +282,27 @@
           trustedPublicKeyFingerprint = developmentSigning.metadata.publicKeyFingerprint;
           unsignedArtifacts = rpi5PrototypeRelease.unsignedArtifacts;
         };
+
+      mkRpi5PrototypeSignedRelease =
+        let
+          system = "x86_64-linux";
+        in
+        import ./nix/rpi5-prototype-signed-release.nix {
+          inherit lib provisioning;
+          pkgs = import nixpkgs { inherit system; };
+          prototype = rpi5PrototypeRelease;
+          signingProfile = developmentSigningFor system;
+        };
+
+      mkRpi5PrototypeOwnedRecoveryPlan =
+        let
+          system = "x86_64-linux";
+        in
+        import ./nix/rpi5-prototype-owned-recovery-plan.nix {
+          inherit lib provisioning;
+          prototype = rpi5PrototypeRelease;
+          signingProfile = developmentSigningFor system;
+        };
     in
     {
       nixosModules = {
@@ -308,6 +335,8 @@
       lib = provisioning.lib // {
         inherit
           mkRpi5PrototypeVerifiedUnfusedCapsule
+          mkRpi5PrototypeOwnedRecoveryPlan
+          mkRpi5PrototypeSignedRelease
           mkRpi5SecureBootTarget
           rpi5SecureBootFirmwareAllowlist
           ;
@@ -321,6 +350,7 @@
         {
           default = compatibilitySuiteFor system;
           rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
+          ubuntu-signing-gate-deployment = ubuntuSigningGateDeploymentFor system;
           inherit (dns.packages.${system})
             kaiba-agent
             kaiba-controller
@@ -339,6 +369,8 @@
             kaiba-provision-rehearsal
             kaiba-provision-signer-foundation
             kaiba-provision-signing-client-foundation
+            kaiba-provision-signing-approval
+            kaiba-provision-signing-receipts
             kaiba-provision-signing-gate-foundation
             kaiba-provision-finalize-release
             kaiba-provision-sign-boot
@@ -412,6 +444,10 @@
           rpi5-signed-release-manifest = provisioning.checks.${system}.signed-release-manifest;
           rpi5-signed-release = provisioning.checks.${system}.rpi5-signed-release;
           signed-boot-plan = provisioning.checks.${system}.signed-boot-plan;
+          signing-approval = provisioning.checks.${system}.signing-approval;
+          signing-receipts = provisioning.checks.${system}.signing-receipts;
+          signing-receipts-integration = provisioning.checks.${system}.signing-receipts-integration;
+          ubuntu-signing-gate-deployment = ubuntuSigningGateDeploymentFor system;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
               {
@@ -476,6 +512,18 @@
             inherit lib pkgs;
             prototype = rpi5PrototypeRelease;
             signingProfile = developmentSigning;
+          };
+          rpi5-root-integrity-record = import ./tests/rpi5-root-integrity-record.nix {
+            inherit lib pkgs;
+          };
+          rpi5-prototype-signed-release-eval = import ./tests/rpi5-prototype-signed-release-eval.nix {
+            inherit
+              lib
+              mkRpi5PrototypeOwnedRecoveryPlan
+              mkRpi5PrototypeSignedRelease
+              pkgs
+              ;
+            prototype = rpi5PrototypeRelease;
           };
         }
       );

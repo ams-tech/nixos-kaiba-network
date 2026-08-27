@@ -90,6 +90,10 @@
           { system, ... }@args:
           (packagesFor system).mkRpi5VerifiedRPIBootBundles (builtins.removeAttrs args [ "system" ]);
 
+        mkRpi5VerifiedSigningReceipts =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5VerifiedSigningReceipts (builtins.removeAttrs args [ "system" ]);
+
         mkRpi5VerifiedSignedRelease =
           { system, ... }@args:
           (packagesFor system).mkRpi5VerifiedSignedRelease (builtins.removeAttrs args [ "system" ]);
@@ -152,6 +156,8 @@
           kaiba-provision-signer-foundation = built.signerFoundation;
           kaiba-provision-signing-client-foundation = built.signingClientFoundation;
           kaiba-provision-signing-gate-foundation = built.signingGateFoundation;
+          kaiba-provision-signing-approval = built.signingApprovalTool;
+          kaiba-provision-signing-receipts = built.signingReceiptsTool;
           kaiba-provision-sign-boot = built.signedBootTool;
           kaiba-provision-sign-eeprom = built.eepromSigningTool;
           kaiba-provision-rpiboot-bundles = built.rpibootBundleTool;
@@ -197,6 +203,9 @@
           production-media-staging = provisioning.productionMediaStagingContract;
           signed-release-manifest = provisioning.signedReleaseManifestContract;
           signed-boot-plan = provisioning.signedBootPlanContract;
+          signing-approval = built.signingApprovalTool;
+          signing-receipts = built.signingReceiptsTool;
+          signing-receipts-integration = provisioning.signingReceiptVerificationContract;
           unfused-capsule = provisioning.unfusedCapsuleContract;
           station-ui =
             pkgs.runCommand "kaiba-provisioning-station-ui-check"

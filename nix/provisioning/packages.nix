@@ -146,6 +146,91 @@ let
     doCheck = false;
   };
 
+  signingApprovalTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-signing-approval";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-signing-approval" ];
+    vendorHash = null;
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      go test ./internal/provisioning/signingapproval \
+        ./cmd/kaiba-provision-signing-approval
+      runHook postCheck
+    '';
+    postInstall = ''
+      mkdir -p "$out/share/kaiba/schemas"
+      install -m 0444 \
+        ${goSource}/schemas/rpi5-signing-approval-v1alpha1.schema.json \
+        "$out/share/kaiba/schemas/rpi5-signing-approval-v1alpha1.schema.json"
+      install -m 0444 \
+        ${goSource}/schemas/signing-grant-registry-v1alpha2.schema.json \
+        "$out/share/kaiba/schemas/signing-grant-registry-v1alpha2.schema.json"
+    '';
+    passthru.kaibaSigningApproval = {
+      approvalSchemaVersion = "kaiba.provisioning.rpi5-signing-approval/v1alpha1";
+      grantRegistrySchemaVersion = "kaiba.provisioning.signing-grant-registry/v1alpha2";
+      exactGrantCount = 5;
+      maximumLifetimeHours = 24;
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      mutationCapable = false;
+      privateKeyAccess = false;
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-signing-approval";
+      description = "Canonical reviewer-attributed approval and exact-grant authoring for Raspberry Pi 5 release signing";
+      platforms = lib.platforms.linux;
+    };
+  };
+
+  signingReceiptsTool = pkgs.buildGoModule {
+    pname = "kaiba-provision-signing-receipts";
+    inherit version;
+    src = goSource;
+    subPackages = [ "cmd/kaiba-provision-signing-receipts" ];
+    vendorHash = null;
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      go test ./internal/provisioning/signinggate \
+        ./internal/provisioning/signingreceipts \
+        ./cmd/kaiba-provision-signing-receipts
+      runHook postCheck
+    '';
+    postInstall = ''
+      mkdir -p "$out/share/kaiba/schemas"
+      install -m 0444 \
+        ${goSource}/schemas/signing-gate-receipt-export-v1alpha2.schema.json \
+        "$out/share/kaiba/schemas/signing-gate-receipt-export-v1alpha2.schema.json"
+      install -m 0444 \
+        ${goSource}/schemas/signing-gate-receipt-verification-v1alpha2.schema.json \
+        "$out/share/kaiba/schemas/signing-gate-receipt-verification-v1alpha2.schema.json"
+      install -m 0444 \
+        ${goSource}/schemas/signing-request-v1alpha2.schema.json \
+        "$out/share/kaiba/schemas/signing-request-v1alpha2.schema.json"
+    '';
+    passthru.kaibaSigningReceipts = {
+      exportSchemaVersion = "kaiba.provisioning.signing-gate-receipt-export/v1alpha2";
+      receiptAttestationRequired = true;
+      receiptAttestationSchemaVersion = "kaiba.provisioning.signing-gate-receipt-attestation/v1alpha1";
+      receiptSchemaVersion = "kaiba.provisioning.signing-gate-receipt/v1alpha3";
+      verificationSchemaVersion = "kaiba.provisioning.signing-gate-receipt-verification/v1alpha2";
+      blockDeviceWriteCapable = false;
+      directHardwareAccess = false;
+      mutationCapable = false;
+      privateKeyAccess = false;
+      signingAuthorityConfigured = false;
+    };
+    meta = {
+      mainProgram = "kaiba-provision-signing-receipts";
+      description = "Authenticated export and offline verification of signing-gate receipts";
+      platforms = lib.platforms.linux;
+    };
+  };
+
   laneOperator = pkgs.buildGoModule {
     pname = "kaiba-provision-lane-operator";
     inherit version;
@@ -711,6 +796,7 @@ let
     passthru.kaibaSignedReleaseTool = {
       inherit eepromReplayFinalizer;
       artifactRoleCount = 18;
+      authenticatedSigningReceiptCount = 5;
       blockDeviceWriteCapable = false;
       deterministicEEPROMReplayRequired = true;
       deterministicOwnedRecoveryReplayRequired = true;
@@ -722,6 +808,7 @@ let
       privateKeyAccess = false;
       publicationSchemaVersion = "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1";
       signingAuthorityConfigured = false;
+      signingReceiptVerificationRequired = true;
     };
     meta = {
       mainProgram = "kaiba-provision-finalize-release";
@@ -799,6 +886,11 @@ let
   };
   inherit (rpibootBundleFactories) mkRpi5VerifiedRPIBootBundles;
 
+  signingReceiptFactories = import ./signing-receipts.nix {
+    inherit lib pkgs signingReceiptsTool;
+  };
+  inherit (signingReceiptFactories) mkRpi5VerifiedSigningReceipts;
+
   signedReleaseFactories = import ./signed-release.nix {
     inherit lib pkgs signedReleaseTool;
   };
@@ -853,8 +945,10 @@ let
     let
       releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
       verifiedRPIBootBundles = releaseContract.verifiedRPIBootBundles or null;
+      signingReceiptVerification = releaseContract.signingReceiptVerification or null;
       verifiedReleaseContract =
         (releaseContract.artifactRoleCount or null) == 18
+        && (releaseContract.authenticatedSigningReceiptCount or null) == 5
         && (releaseContract.contentAddressedPublication or false)
         && (releaseContract.deterministicEEPROMReplayRequired or false)
         && (releaseContract.deterministicOwnedRecoveryReplayRequired or false)
@@ -869,6 +963,8 @@ let
         && storeBacked verifiedRPIBootBundles
         && builtins.isAttrs verifiedRPIBootBundles
         && verifiedRPIBootBundles ? kaibaVerifiedRPIBootBundles
+        && signingReceiptVerification != null
+        && storeBacked signingReceiptVerification
         && lib.all (value: value == false) [
           (releaseContract.blockDeviceWriteCapable or null)
           (releaseContract.directHardwareAccess or null)
@@ -1198,16 +1294,19 @@ let
       inherit name;
       paths = [
         customerKeyContract
+        eepromSigningTool
         signedBoot
         signer
         signingClient
         signingGate
+        signingReceiptsTool
         yubiKeyWrapper
       ];
       passthru.kaibaSigning = {
         inherit
           cohortID
           customerKeyContract
+          eepromSigningTool
           expectedCustomerKeyHash
           grantRegistryPath
           opensslConfiguration
@@ -1220,6 +1319,7 @@ let
           signerPolicyDigest
           signingClient
           signingGate
+          signingReceiptsTool
           socketPath
           stateDirectoryPath
           ykcs11Module
@@ -1240,6 +1340,12 @@ let
         customerPublicKeyBinary = "${customerKeyContract}/share/kaiba/customer-public-key.bin";
         signerPolicyDigestFile = "${customerKeyContract}/share/kaiba/signer-policy-digest";
         signerPolicyJSON = "${customerKeyContract}/share/kaiba/signer-policy.json";
+        minimumArtifactSignatureOperationsPerCompletedGrant = 1;
+        minimumReceiptAttestationOperationsPerCompletedGrant = 1;
+        minimumPrivateKeyOperationsPerCompletedGrant = 2;
+        operationCountSemantics = "minimum_successful_path";
+        incompleteGrantRetryPolicy = "stop_and_review";
+        privateKeyOperationUpperBoundDeclared = false;
       };
       meta = {
         mainProgram = "kaiba-provision-signer";
@@ -1380,6 +1486,7 @@ in
     mkRpi5MediaStagingFixture
     mkRpi5OwnedRecoverySigningPlan
     mkRpi5VerifiedRPIBootBundles
+    mkRpi5VerifiedSigningReceipts
     mkRpi5VerifiedSignedRelease
     mkRpi5ReleaseIntent
     mkRpi5UnfusedVerifier
@@ -1406,6 +1513,8 @@ in
     signingClientFoundation
     signingGateFoundation
     signedBootTool
+    signingApprovalTool
+    signingReceiptsTool
     signedReleaseTool
     suite
     yubiKeyWrapperFoundation

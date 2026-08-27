@@ -4,12 +4,15 @@
 }:
 let
   reviewedPublicKeyPEM = ../provisioning/signers/development-prototype/reviewed-boot-public.pem;
+  independentReviewPath = ../provisioning/signers/development-prototype/independent-review-2026-08-27.json;
+  independentReview = builtins.fromJSON (builtins.readFile independentReviewPath);
 
   metadata = {
     schemaVersion = "kaiba.provisioning.development-boot-root/v1alpha1";
     classification = "development-sacrificial";
     productionApproved = false;
-    independentReviewComplete = false;
+    independentReviewComplete = independentReview.status == "passed";
+    independentReviewID = independentReview.review_id;
 
     signerID = "signer:prototype";
     cohortID = "cohort:prototype";
@@ -41,8 +44,29 @@ in
 assert builtins.hashFile "sha256" reviewedPublicKeyPEM == metadata.publicKeyFileSHA256;
 assert metadata.pivSlot == "9c";
 assert signing.kaibaSigning.pkcs11URI == metadata.pkcs11URI;
+assert independentReview.schema_version == "kaiba.provisioning.signer-independent-review/v1alpha1";
+assert independentReview.scope == "development-sacrificial-signer";
+assert independentReview.token.serial == metadata.tokenSerial;
+assert independentReview.token.piv_slot == metadata.pivSlot;
+assert independentReview.token.key_algorithm == "rsa-2048";
+assert independentReview.token.key_origin == "generated-on-device";
+assert independentReview.token.pin_policy == "always";
+assert independentReview.token.touch_policy == "always";
+assert independentReview.public_bindings.public_key_file_sha256 == metadata.publicKeyFileSHA256;
+assert independentReview.public_bindings.public_key_fingerprint == metadata.publicKeyFingerprint;
+assert
+  independentReview.public_bindings.customer_key_hash == "sha256:${metadata.expectedCustomerKeyHash}";
+assert independentReview.public_bindings.signer_policy_digest == metadata.signerPolicyDigest;
+assert independentReview.signing_authorized == false;
+assert independentReview.production_approved == false;
 {
-  inherit metadata reviewedPublicKeyPEM signing;
+  inherit
+    independentReview
+    independentReviewPath
+    metadata
+    reviewedPublicKeyPEM
+    signing
+    ;
 
   unfusedVerifier = provisioning.lib.mkRpi5UnfusedVerifier {
     inherit system;

@@ -1,0 +1,44 @@
+{
+  "schema_version": "kaiba.provisioning.signer-independent-review/v1alpha1",
+  "review_id": "review:signer:prototype:2026-08-27",
+  "completed_on": "2026-08-27",
+  "status": "passed",
+  "scope": "development-sacrificial-signer",
+  "reviewed_repository_revision": "40465e2110ceca77aa78a8067b44490418c03d59",
+  "review_method": [
+    "fresh-independent-checkout",
+    "separate-unprivileged-local-account",
+    "independent-public-build",
+    "independent-vendor-chain-verification",
+    "byte-exact-public-key-comparison"
+  ],
+  "token": {
+    "serial": "35454358",
+    "firmware_version": "5.7.4",
+    "form_factor": "usb-a-nano",
+    "piv_slot": "9c",
+    "key_algorithm": "rsa-2048",
+    "key_origin": "generated-on-device",
+    "pin_policy": "always",
+    "touch_policy": "always"
+  },
+  "evidence": {
+    "review_packet_sha256": "0e4822b19ca59c49e7fa4781d673497e23f9bd2115d2e821a14b049b61998802",
+    "slot_attestation_sha256": "d70767f0523c01a8c3c44c72db83e59b53454cb5598be8eceba271cfe94c2ef6",
+    "slot_attestation_certificate_sha256": "4ca6aa761371243d61355fd43b37de7b78552aedcc879e7a4e060e66b9da950e",
+    "vendor_root_sha256": "9271d914d48d05487666703586aea27d9a69ad0c8ddf8c2fc4c8734a04285887",
+    "vendor_intermediate_bundle_sha256": "ec0172fe38838e3de174aae4e058bb44920be47cebd8d658a0fba1634b82aee1",
+    "slot_metadata_sha256": "36a24039381034715deec6e392527cd2659568723fe20cc5c77cc5b5e1607d33",
+    "token_metadata_sha256": "dd683c6d9a3f599cc7104325a207aba3b412465dc710ef94bc7ee8be3784ca30",
+    "certificate_chain_verified": true
+  },
+  "public_bindings": {
+    "public_key_file_sha256": "93923fb1b289c39e8b336b90defb881f5d15ce3832c74655b295e1a35bfdab80",
+    "public_key_fingerprint": "sha256:0e68e7196fedc382ca435b995598e92d0fe36e4b1a1f949f85f5f2e6e2920fb9",
+    "customer_key_hash": "sha256:b8818acea4e71173903ee003e33ed37e969def7d2ea67bec15c0b73cb36c3895",
+    "signer_policy_digest": "sha256:c49608752c7aaf96da1976e174fb0e9f853b517bfc6df3a7f91f907ff9ca0db9"
+  },
+  "signing_authorized": false,
+  "production_approved": false,
+  "evidence_retention": "external-access-controlled-archive"
+}

@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/signer-independent-review-v1alpha1.schema.json",
+  "title": "Kaiba development signer independent review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "review_id",
+    "completed_on",
+    "status",
+    "scope",
+    "reviewed_repository_revision",
+    "review_method",
+    "token",
+    "evidence",
+    "public_bindings",
+    "signing_authorized",
+    "production_approved",
+    "evidence_retention"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.signer-independent-review/v1alpha1"
+    },
+    "review_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "completed_on": {
+      "type": "string",
+      "format": "date"
+    },
+    "status": {
+      "const": "passed"
+    },
+    "scope": {
+      "const": "development-sacrificial-signer"
+    },
+    "reviewed_repository_revision": {
+      "$ref": "#/$defs/revision"
+    },
+    "review_method": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "fresh-independent-checkout",
+          "separate-unprivileged-local-account",
+          "independent-public-build",
+          "independent-vendor-chain-verification",
+          "byte-exact-public-key-comparison"
+        ]
+      }
+    },
+    "token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "serial",
+        "firmware_version",
+        "form_factor",
+        "piv_slot",
+        "key_algorithm",
+        "key_origin",
+        "pin_policy",
+        "touch_policy"
+      ],
+      "properties": {
+        "serial": { "type": "string", "pattern": "^[1-9][0-9]{0,11}$" },
+        "firmware_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "form_factor": { "const": "usb-a-nano" },
+        "piv_slot": { "const": "9c" },
+        "key_algorithm": { "const": "rsa-2048" },
+        "key_origin": { "const": "generated-on-device" },
+        "pin_policy": { "const": "always" },
+        "touch_policy": { "const": "always" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_packet_sha256",
+        "slot_attestation_sha256",
+        "slot_attestation_certificate_sha256",
+        "vendor_root_sha256",
+        "vendor_intermediate_bundle_sha256",
+        "slot_metadata_sha256",
+        "token_metadata_sha256",
+        "certificate_chain_verified"
+      ],
+      "properties": {
+        "review_packet_sha256": { "$ref": "#/$defs/raw_digest" },
+        "slot_attestation_sha256": { "$ref": "#/$defs/raw_digest" },
+        "slot_attestation_certificate_sha256": { "$ref": "#/$defs/raw_digest" },
+        "vendor_root_sha256": { "$ref": "#/$defs/raw_digest" },
+        "vendor_intermediate_bundle_sha256": { "$ref": "#/$defs/raw_digest" },
+        "slot_metadata_sha256": { "$ref": "#/$defs/raw_digest" },
+        "token_metadata_sha256": { "$ref": "#/$defs/raw_digest" },
+        "certificate_chain_verified": { "const": true }
+      }
+    },
+    "public_bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "public_key_file_sha256",
+        "public_key_fingerprint",
+        "customer_key_hash",
+        "signer_policy_digest"
+      ],
+      "properties": {
+        "public_key_file_sha256": { "$ref": "#/$defs/raw_digest" },
+        "public_key_fingerprint": { "$ref": "#/$defs/digest" },
+        "customer_key_hash": { "$ref": "#/$defs/digest" },
+        "signer_policy_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "signing_authorized": { "const": false },
+    "production_approved": { "const": false },
+    "evidence_retention": {
+      "const": "external-access-controlled-archive"
+    }
+  },
+  "$defs": {
+    "raw_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+    }
+  }
+}

@@ -2,7 +2,6 @@ package signinggate
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -98,7 +97,7 @@ func (g *Gate) Sign(ctx context.Context, artifact []byte) (Result, error) {
 		}
 		signature, err := g.backend.Sign(ctx, signing.AlgorithmRSA2048SHA256, artifact)
 		if err != nil {
-			return fmt.Errorf("fixed signing backend: %w", err)
+			return fmt.Errorf("fixed artifact-signing backend (durable intent retained; stop and review before retry): %w", err)
 		}
 		signatureHex, err := canonicalSignature(signature)
 		if err != nil {
@@ -108,21 +107,41 @@ func (g *Gate) Sign(ctx context.Context, artifact []byte) (Result, error) {
 		if err != nil {
 			return err
 		}
+		attestedAt := g.now().UTC()
+		currentGrant, err := g.registry.CurrentGrant(digest, attestedAt)
+		if err != nil {
+			return fmt.Errorf("authorize receipt attestation: %w", err)
+		}
+		if currentGrant != grant {
+			return errors.New("receipt attestation authorization changed after artifact signing")
+		}
 		receipt := Receipt{
-			SchemaVersion: ReceiptSchemaV1Alpha2, Grant: grant, RequestDigest: requestDigest,
+			SchemaVersion: ReceiptSchemaV1Alpha3, Grant: grant, RequestDigest: requestDigest,
 			BackendID: g.backendID, SignatureHex: signatureHex,
-			SignatureDigest: bundle.Sum(signature), SignedAt: canonicalTime(g.now()),
+			SignatureDigest: bundle.Sum(signature), SignedAt: canonicalTime(attestedAt),
+		}
+		attestation, err := receipt.CanonicalAttestation()
+		if err != nil {
+			return fmt.Errorf("construct receipt attestation: %w", err)
+		}
+		attestationSignature, err := g.backend.Sign(ctx, signing.AlgorithmRSA2048SHA256, attestation)
+		if err != nil {
+			return fmt.Errorf("fixed receipt-attestation backend (durable intent retained; stop and review before retry): %w", err)
+		}
+		receipt, err = receipt.WithAttestationSignature(attestationSignature)
+		if err != nil {
+			return err
 		}
 		complete, err := g.store.RecordComplete(grant, state, receipt)
 		if err != nil {
-			return fmt.Errorf("record signing completion: %w", err)
+			return fmt.Errorf("record signing completion (stop and inspect durable state before retry): %w", err)
 		}
 		receiptDigest, err := complete.Receipt.Digest()
 		if err != nil {
 			return err
 		}
 		result = Result{
-			SignatureHex: hex.EncodeToString(signature), ReceiptDigest: receiptDigest,
+			SignatureHex: signatureHex, ReceiptDigest: receiptDigest,
 			ReleaseIntentDigest: grant.Request.Approval.ReleaseIntentDigest,
 			GrantID:             grant.GrantID,
 		}

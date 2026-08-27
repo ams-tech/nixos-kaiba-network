@@ -84,9 +84,11 @@ The repository already contains useful foundations:
   finalizer;
 - a canonical cohort-scoped release intent that fixes five signing inputs and
   all 18 required outputs before any signature exists;
-- v1alpha2 release-intent lineage through signing grants, requests, gate
-  receipts, the normal-boot plan and result, and the complete signed-release
-  manifest;
+- v1alpha2 release-intent lineage through signing grants and requests,
+  v1alpha3 gate wire responses and receipts, the normal-boot plan and result,
+  and the complete signed-release manifest; each receipt carries a
+  domain-separated canonical metadata attestation, and v1alpha2 receipt export
+  and verification check it together with the artifact signature;
 - a public fresh-board EEPROM signing plan, approval-gated adapter, and offline
   finalizer exercised only with synthetic/offline evidence; and
 - an isolated fixed-extent media-staging prototype, a deterministic synthetic
@@ -321,16 +323,21 @@ preconditions, not on changing the probe's intentionally false
 - [ ] Exercise a real token through the complete wrapper, signing gate, and
   client chain. Cover success plus wrong token, token removal, PIN failure,
   touch timeout, expired grant, digest mismatch, signer mismatch, and service
-  restart.
+  restart. Each of the five grants requires two ordered token operations and
+  touches—one artifact signature followed by one gate-derived canonical
+  receipt-attestation signature—for a minimum of ten private-key operations
+  and touches on the failure-free path. A failed or ambiguous attempt stops for
+  review; ten is not an upper bound and does not authorize a blind retry.
 - [ ] Document the development exception that this cohort has no backup token.
   Loss or failure of the token strands the sacrificial cohort and requires its
   retirement.
 
 ### Exit criteria
 
-The private key has never left the token, every signing operation is bound to
-an immutable approved request, and the team can distinguish the ordinary key
-fingerprint from the irreversible Raspberry Pi customer-key hash.
+The private key has never left the token, every artifact signature is bound to
+an immutable approved request, every v1alpha3 receipt authenticates its
+canonical metadata, and the team can distinguish the ordinary key fingerprint
+from the irreversible Raspberry Pi customer-key hash.
 
 ## Workstream 3: build and verify a complete signed release
 
@@ -391,14 +398,20 @@ The same reviewed cohort release may ultimately be staged on more than one
 separately approved board, but the intent itself cannot authorize any device
 execution.
 
-Every v1alpha2 signing grant, request, gate result, normal-boot plan, and
-normal-boot result carries the `release_intent_digest`. The v1alpha2 complete
-signed-release manifest also requires that digest and rejects v1alpha1
-manifests without lineage. Only after all 18 outputs are resolved and verified
-may its `signed_release_manifest_digest` enter a per-device lane plan and
-control approval. That later authorization binds the exact transaction,
-target, station and lane, current claim and fence, ordered operations, and
-expiry; it does not retroactively broaden the cohort signing grant.
+Every v1alpha2 signing grant, request, normal-boot plan, and normal-boot result,
+and every v1alpha3 gate wire response and receipt, carries the
+`release_intent_digest`. The v1alpha3 receipt's second RSA signature covers
+domain-separated canonical grant, request, request-digest, backend,
+artifact-signature, and `signed_at` metadata; the v1alpha2 exporter and
+verification record require both that attestation and the artifact signature.
+`signed_at` is authenticated gate-clock metadata, not an external timestamp
+authority. The v1alpha2 complete signed-release manifest also requires the
+lineage digest and rejects v1alpha1 manifests without lineage. Only after all
+18 outputs are resolved and verified may its `signed_release_manifest_digest`
+enter a per-device lane plan and control approval. That later authorization
+binds the exact transaction, target, station and lane, current claim and fence,
+ordered operations, and expiry; it does not retroactively broaden the cohort
+signing grant.
 
 ### Deliverables
 
@@ -417,9 +430,10 @@ expiry; it does not retroactively broaden the cohort signing grant.
   all source, EEPROM-release, signer, and customer-key bindings plus the exact
   five signing inputs and 18 required output roles.
 - [x] Carry and validate `release_intent_digest` through the v1alpha2 signing
-  grant, request, result, gate response, normal-boot plan and result, and
-  v1alpha2 signed-release manifest. Older signed-boot and signed-release
-  records without lineage fail closed.
+  grant, request, result, normal-boot plan and result, v1alpha3 gate response
+  and receipt, and v1alpha2 signed-release manifest. Older signed-boot,
+  gate-response, receipt, and signed-release records without the current
+  lineage and attestation fail closed.
 - [x] Implement the bounded public fresh-board EEPROM signing plan, adapter,
   result, and offline finalizer foundation for the pinned `-f` workflow and
   synthetic fixtures. This completed item is a contract/tooling foundation,
@@ -482,15 +496,17 @@ incomplete.
 
 The public EEPROM foundation narrows fresh signing to `-f` and owned recovery
 to a separately authorized `-fr` plan. Owned recovery makes exactly one new
-gate request, reuses the three independently verified fresh-EEPROM signatures,
-and requires the replayed EEPROM image and update metadata to remain
-byte-identical. The canonical bundle-set finalizer creates exact fresh commit,
-fresh and owned readback, owned recovery, unauthorized-recovery, and
-root-integrity fixture trees. It binds every path, mode, size, and digest and
-keeps `program_pubkey=1` confined to the fresh commit tree. Its current
-evidence remains synthetic/offline: it does not establish production token
-outputs, write EEPROM or target media, enter a hardware lane, change OTP, or
-observe a board.
+gate request, which creates one new artifact signature and its canonical
+receipt attestation. It reuses the three independently verified fresh-EEPROM
+artifact signatures without extra recovery signatures or attestations for
+those reused artifacts, and requires the replayed EEPROM image and update
+metadata to remain byte-identical. The canonical bundle-set finalizer creates
+exact fresh commit, fresh and owned readback, owned recovery,
+unauthorized-recovery, and root-integrity fixture trees. It binds every path,
+mode, size, and digest and keeps `program_pubkey=1` confined to the fresh commit
+tree. Its current evidence remains synthetic/offline: it does not establish
+production token outputs, write EEPROM or target media, enter a hardware lane,
+change OTP, or observe a board.
 
 - [x] Implement the non-mutating normal-boot signing slice: immutable v1alpha2
   public plan and result, fixed approval-gated adapter, canonical `boot.sig`,
@@ -514,12 +530,14 @@ observe a board.
   SHA-256 digest before approval.
 - [ ] Exercise the completed authorization-lineage foundation for one real
   release: issue independently reviewed cohort grants for every exact signing
-  input, authenticate and retain their live gate receipts, assemble and verify
-  all 18 outputs, compute the final `signed_release_manifest_digest`, and only
-  then authorize a per-device lane plan. Do not reuse one ambiguous
-  `plan_digest` before and after signatures exist.
-- [ ] Verify every signature offline against the reviewed development public
-  key and independently inspect the complete boot-image allowlist and size.
+  input, authenticate and retain their live v1alpha3 gate receipts, verify each
+  artifact and receipt-attestation signature, assemble and verify all 18
+  outputs, compute the final `signed_release_manifest_digest`, and only then
+  authorize a per-device lane plan. Do not reuse one ambiguous `plan_digest`
+  before and after signatures exist.
+- [ ] Verify every artifact signature and canonical receipt-attestation
+  signature offline against the reviewed development public key and
+  independently inspect the complete boot-image allowlist and size.
 - [ ] Scan every artifact for signing material, shared enrollment secrets,
   production credentials, unintended mutable state, and unapproved recovery
   capability.
@@ -533,7 +551,8 @@ the exact six-directory set, and its software-evidence boundary.
 
 One canonical manifest binds every byte needed for preparation, commit,
 normal boot, owned readback, recovery, and the complete acceptance campaign.
-Two independent verification paths agree on every digest and signature.
+Two independent verification paths agree on every digest, artifact signature,
+and receipt-attestation signature.
 
 ## Workstream 4: stage and verify target NVMe
 
@@ -1062,8 +1081,9 @@ It must contain:
 - the exact clean source revision and successful CI run identifiers;
 - the station system closure and configuration digests;
 - target inventory binding and pre-commit fingerprint;
-- the cohort release intent, authenticated signing receipts, complete v1alpha2
-  signed manifest, and independent verification record;
+- the cohort release intent, authenticated v1alpha3 signing receipts, complete
+  v1alpha2 signed manifest, and v1alpha2 independent receipt-verification
+  record;
 - the development signer identity and expected customer-key hash;
 - the expected EEPROM and boot-image digests;
 - the exact NVMe staging and cold-readback content evidence, explicitly without
@@ -1132,8 +1152,9 @@ only.
    claim, and bind the fixed station and lane.
 3. Re-establish the fresh-board observation and exact target continuity, then
    close every deferred baseline check.
-4. Verify the cohort release intent, its signing-receipt lineage, the complete
-   v1alpha2 signed manifest, and all artifact bytes and signatures.
+4. Verify the cohort release intent, its v1alpha3 signing-receipt lineage and
+   canonical receipt attestations, the complete v1alpha2 signed manifest, and
+   all artifact bytes and signatures.
 5. Stage the explicitly authorized, runtime-safety-checked NVMe, remove power,
    and reconcile the cold-readback digests on a fresh attachment. Do not infer
    physical-medium identity from this result.

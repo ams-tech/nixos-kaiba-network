@@ -46,6 +46,9 @@ jobs:
       - name: Check formatting
         run: nix --accept-flake-config fmt -- --ci
 
+      - name: Test the inert Ubuntu signing-gate deployment
+        run: tests/deployment/ubuntu_signing_gate_test.sh
+
       - name: Evaluate every flake system
         run: |
           nix --accept-flake-config flake check --all-systems --no-build -L
@@ -62,10 +65,16 @@ jobs:
             .#checks.x86_64-linux.ci-workflow \
             .#checks.x86_64-linux.module-eval \
             .#checks.x86_64-linux.rpi5-provisioning-image-eval \
+            .#checks.x86_64-linux.rpi5-prototype-signed-release-eval \
+            .#checks.x86_64-linux.rpi5-root-integrity-record \
             .#checks.x86_64-linux.rpi5-production-media-staging \
             .#checks.x86_64-linux.rpi5-qualification-ceremony \
             .#checks.x86_64-linux.rpi5-secure-boot-target-eval \
             .#checks.x86_64-linux.unit \
+            .#checks.x86_64-linux.signing-approval \
+            .#checks.x86_64-linux.signing-receipts \
+            .#checks.x86_64-linux.signing-receipts-integration \
+            .#checks.x86_64-linux.ubuntu-signing-gate-deployment \
             ./nix/provisioning#checks.x86_64-linux.development-yubikey-signing \
             ./nix/provisioning#checks.x86_64-linux.device-profile-schema \
             ./nix/provisioning#checks.x86_64-linux.module-eval \

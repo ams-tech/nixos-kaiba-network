@@ -1209,7 +1209,10 @@ five live gates remain:
 1. Complete the development-token ceremony and assemble the exact signed
    release from authenticated live-token results, including PIN, touch,
    wrong-token, timeout, receipt-lineage, and independent offline-verification
-   evidence. This is a development release, not a production release.
+   evidence. Follow the
+   [Ubuntu development signing ceremony](ubuntu-rpi5-development-signing-ceremony.md)
+   for the software-only signing and assembly portion. This is a development
+   release, not a production release.
 2. Use the typed sacrificial hardware configuration to stage the approved
    layout on the actual fixed `/dev/nvme0n1`, remove power and reattach it, and
    complete independent cold readback of every manifest-bound byte and

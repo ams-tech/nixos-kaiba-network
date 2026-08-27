@@ -157,6 +157,8 @@ let
   developmentYubiKeyPublicKeyPEM = pkgs.writeText "kaiba-development-boot-public-key.pem" (
     builtins.readFile ./fixtures/development-boot-public.pem
   );
+  emptySigningGrantRegistryEvaluationFixture = pkgs.writeText "kaiba-empty-signing-grant-registry-evaluation.json" "{}\n";
+  emptySigningReceiptExportEvaluationFixture = pkgs.writeText "kaiba-empty-signing-receipt-export-evaluation.json" "{}\n";
   releaseIntentEEPROMBootcodeInput = pkgs.writeText "kaiba-release-intent-eeprom-bootcode-input" ''
     synthetic EEPROM bootcode signing preimage
   '';
@@ -550,18 +552,66 @@ let
   };
   signedReleasePlatformAdapterEvaluationFixture = pkgs.writeText "kaiba-rpi5-platform-adapter-evaluation" "immutable adapter fixture\n";
   signedReleaseRootIntegrityEvaluationFixture = pkgs.writeText "kaiba-rpi5-root-integrity-evaluation.json" "{}\n";
+  signedReleaseReceiptVerificationEvaluationFixture = built.mkRpi5VerifiedSigningReceipts {
+    name = "kaiba-rpi5-signing-receipt-verification-evaluation.json";
+    reviewedPublicKeyPEM = developmentYubiKeyPublicKeyPEM;
+    signingGrantRegistry = emptySigningGrantRegistryEvaluationFixture;
+    signingReceiptExport = emptySigningReceiptExportEvaluationFixture;
+    verifiedOwnedRecovery = verifiedOwnedRecoveryEvaluationFixture;
+    verifiedSignedBoot = signedReleaseVerifiedBootEvaluationFixture;
+    verifiedSignedEEPROM = verifiedSignedEEPROMEvaluationFixture;
+  };
   signedReleaseEvaluationFixture = built.mkRpi5VerifiedSignedRelease {
     name = "kaiba-rpi5-verified-signed-release-evaluation";
     deviceProfile = ../../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
     eepromRelease = built.rpi5EEPROMRelease;
     platformAdapter = signedReleasePlatformAdapterEvaluationFixture;
     rootIntegrity = signedReleaseRootIntegrityEvaluationFixture;
+    signingReceiptVerification = signedReleaseReceiptVerificationEvaluationFixture;
     unsignedArtifacts = secureBootFixtureA;
     verifiedOwnedRecovery = verifiedOwnedRecoveryEvaluationFixture;
     verifiedRPIBootBundles = signedReleaseRPIBootBundleEvaluationFixture;
     verifiedSignedBoot = signedReleaseVerifiedBootEvaluationFixture;
     verifiedSignedEEPROM = verifiedSignedEEPROMEvaluationFixture;
   };
+  untypedSigningReceiptVerificationEvaluationFixture =
+    pkgs.writeText "kaiba-untyped-signing-receipt-verification-evaluation.json"
+      (
+        builtins.toJSON {
+          schema_version = "kaiba.provisioning.signing-gate-receipt-verification/v1alpha2";
+          status = "valid";
+          export_digest = "sha256:${builtins.concatStringsSep "" (builtins.genList (_: "6") 64)}";
+          registry_digest = "sha256:${builtins.concatStringsSep "" (builtins.genList (_: "7") 64)}";
+          release_intent_digest = "sha256:${builtins.concatStringsSep "" (builtins.genList (_: "8") 64)}";
+          public_key_fingerprint = developmentYubiKeyPublicKeyFingerprint;
+          receipt_digests =
+            map (digit: "sha256:${builtins.concatStringsSep "" (builtins.genList (_: digit) 64)}")
+              [
+                "1"
+                "2"
+                "3"
+                "4"
+                "5"
+              ];
+        }
+      );
+  signedReleaseReceiptVerificationInputAccepted =
+    signingReceiptVerification:
+    (builtins.tryEval (
+      (built.mkRpi5VerifiedSignedRelease {
+        name = "kaiba-rpi5-signed-release-receipt-input-evaluation";
+        deviceProfile = ../../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
+        eepromRelease = built.rpi5EEPROMRelease;
+        platformAdapter = signedReleasePlatformAdapterEvaluationFixture;
+        rootIntegrity = signedReleaseRootIntegrityEvaluationFixture;
+        inherit signingReceiptVerification;
+        unsignedArtifacts = secureBootFixtureA;
+        verifiedOwnedRecovery = verifiedOwnedRecoveryEvaluationFixture;
+        verifiedRPIBootBundles = signedReleaseRPIBootBundleEvaluationFixture;
+        verifiedSignedBoot = signedReleaseVerifiedBootEvaluationFixture;
+        verifiedSignedEEPROM = verifiedSignedEEPROMEvaluationFixture;
+      }).drvPath
+    )).success;
   signedBootFinalizerBootImage = pkgs.writeText "kaiba-signed-boot-finalizer-boot.img" ''
     kaiba signed-boot finalizer fixture
   '';
@@ -842,6 +892,42 @@ let
     sourceRevision = canonicalSourceRevision40;
     unsignedArtifacts = productionMediaUnsignedArtifacts;
   };
+  productionMediaSigningReceiptEvidence =
+    pkgs.runCommand "kaiba-production-media-authenticated-signing-receipts-fixture"
+      {
+        nativeBuildInputs = [
+          pkgs.findutils
+          pkgs.go
+          pkgs.jq
+          pkgs.python3
+        ];
+      }
+      ''
+        set -euo pipefail
+        export CGO_ENABLED=0
+        export GOCACHE="$TMPDIR/go-cache"
+        export GOPATH="$TMPDIR/go-path"
+        export LC_ALL=C
+
+        python3 ${./deterministic-rsa-fixture.py} --private "$TMPDIR/private.pem"
+        cd ${built.goSource}
+        go run ./internal/provisioning/signingreceipts/testfixture \
+          --release-intent ${productionMediaReleaseIntent}/release-intent.json \
+          --private-key "$TMPDIR/private.pem" \
+          --artifact rpi5.boot_image=${productionMediaUnsignedArtifacts}/unsigned/boot.img \
+          --artifact rpi5.eeprom_bootcode=${eepromReleaseSigningInputsFixture}/eeprom-bootcode.signing-input \
+          --artifact rpi5.eeprom_bootsys=${eepromReleaseSigningInputsFixture}/eeprom-bootsys.signing-input \
+          --artifact rpi5.eeprom_config=${eepromReleaseSigningInputsFixture}/eeprom-config.signing-input \
+          --artifact rpi5.owned_recovery_bootcode=${eepromReleaseSigningInputsFixture}/owned-recovery-bootcode.signing-input \
+          --output "$out"
+
+        test "$(find "$out" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)" = \
+          $'approval.json\npublic.pem\nreceipt-digests.json\nsigning-grants.json\nsigning-receipts.json'
+        cmp "$out/public.pem" ${productionMediaFixturePublicKey}
+        test "$(jq -r 'length' "$out/receipt-digests.json")" -eq 5
+        test "$(jq -r '[.[].receipt_digest] | unique | length' \
+          "$out/receipt-digests.json")" -eq 5
+      '';
   productionMediaBootSigningPlan = built.mkRpi5BootSigningPlan {
     name = "kaiba-production-media-boot-signing-plan-fixture";
     bootImage = "${productionMediaUnsignedArtifacts}/unsigned/boot.img";
@@ -889,6 +975,9 @@ let
           --argjson plan "$plan_json" \
           --arg signature_digest "sha256:$(sha256sum "$out/boot.sig" | cut -d ' ' -f 1)" \
           --argjson signature_size "$(stat --format=%s "$out/boot.sig")" \
+          --arg gate_receipt_digest "$(jq -er \
+            '.[] | select(.role == "rpi5.boot_image") | .receipt_digest' \
+            ${productionMediaSigningReceiptEvidence}/receipt-digests.json)" \
           '{
             schema_version: "kaiba.provisioning.rpi5-boot-signing-result/v1alpha2",
             plan_id: $plan.plan_id,
@@ -900,7 +989,7 @@ let
             boot_signature_size_bytes: $signature_size,
             public_key_fingerprint: $plan.public_key_fingerprint,
             signer_policy_digest: $plan.signer_policy_digest,
-            gate_receipt_digest: "sha256:9b55aa2f08bf8e984fba72becfaf48d7cf4cd26d6b72ca0a848e40634397a672",
+            gate_receipt_digest: $gate_receipt_digest,
             source_date_epoch: $plan.source_date_epoch
           }' > "$out/signing-result.json"
         chmod 0444 "$out/boot.sig" "$out/signing-result.json"
@@ -1000,13 +1089,22 @@ let
           --arg sig0 "sha256:$(sha256sum "$KAIBA_TEST_SIGNATURE_DIR/signature-0.bin" | cut -d ' ' -f 1)" \
           --arg sig1 "sha256:$(sha256sum "$KAIBA_TEST_SIGNATURE_DIR/signature-1.bin" | cut -d ' ' -f 1)" \
           --arg sig2 "sha256:$(sha256sum "$KAIBA_TEST_SIGNATURE_DIR/signature-2.bin" | cut -d ' ' -f 1)" \
+          --arg receipt0 "$(jq -er \
+            '.[] | select(.role == "rpi5.eeprom_bootcode") | .receipt_digest' \
+            ${productionMediaSigningReceiptEvidence}/receipt-digests.json)" \
+          --arg receipt1 "$(jq -er \
+            '.[] | select(.role == "rpi5.eeprom_bootsys") | .receipt_digest' \
+            ${productionMediaSigningReceiptEvidence}/receipt-digests.json)" \
+          --arg receipt2 "$(jq -er \
+            '.[] | select(.role == "rpi5.eeprom_config") | .receipt_digest' \
+            ${productionMediaSigningReceiptEvidence}/receipt-digests.json)" \
           '.signing_inputs | to_entries | map({
             role: .value.role,
             input_digest: .value.digest,
             input_size_bytes: .value.size_bytes,
             signature_digest: ([$sig0, $sig1, $sig2][.key]),
             signature_size_bytes: 256,
-            gate_receipt_digest: "sha256:9b55aa2f08bf8e984fba72becfaf48d7cf4cd26d6b72ca0a848e40634397a672"
+            gate_receipt_digest: ([$receipt0, $receipt1, $receipt2][.key])
           })' "$plan/plan.json")"
         jq -cn \
           --arg plan_digest "$plan_digest" \
@@ -1106,6 +1204,9 @@ let
           --arg plan_digest "$plan_digest" \
           --argjson plan "$plan_json" \
           --arg signature_digest "sha256:$(sha256sum "$KAIBA_TEST_SIGNATURE_DIR/signature-0.bin" | cut -d ' ' -f 1)" \
+          --arg gate_receipt_digest "$(jq -er \
+            '.[] | select(.role == "rpi5.owned_recovery_bootcode") | .receipt_digest' \
+            ${productionMediaSigningReceiptEvidence}/receipt-digests.json)" \
           --argjson recovery "$(file_record "$out/bootcode5.bin")" \
           --argjson eeprom "$(file_record "$out/pieeprom.bin")" \
           --argjson metadata "$(file_record "$out/pieeprom.sig")" \
@@ -1127,7 +1228,7 @@ let
               input_size_bytes: $plan.owned_recovery_signing_input.size_bytes,
               signature_digest: $signature_digest,
               signature_size_bytes: 256,
-              gate_receipt_digest: "sha256:9b55aa2f08bf8e984fba72becfaf48d7cf4cd26d6b72ca0a848e40634397a672"
+              gate_receipt_digest: $gate_receipt_digest
             },
             owned_recovery_bootcode: $recovery,
             replayed_signed_eeprom: $eeprom,
@@ -1158,12 +1259,22 @@ let
   productionMediaPlatformAdapter = pkgs.writeText "kaiba-production-media-platform-adapter-fixture" ''
     immutable Raspberry Pi 5 production-media platform adapter fixture
   '';
+  productionMediaSigningReceiptVerification = built.mkRpi5VerifiedSigningReceipts {
+    name = "kaiba-production-media-signing-receipt-verification.json";
+    reviewedPublicKeyPEM = productionMediaFixturePublicKey;
+    signingGrantRegistry = "${productionMediaSigningReceiptEvidence}/signing-grants.json";
+    signingReceiptExport = "${productionMediaSigningReceiptEvidence}/signing-receipts.json";
+    verifiedOwnedRecovery = productionMediaVerifiedOwnedRecovery;
+    verifiedSignedBoot = productionMediaVerifiedSignedBoot;
+    verifiedSignedEEPROM = productionMediaVerifiedSignedEEPROM;
+  };
   productionMediaSignedReleaseFixture = built.mkRpi5VerifiedSignedRelease {
     name = "kaiba-production-media-verified-signed-release-fixture";
     deviceProfile = ../../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
     eepromRelease = built.rpi5EEPROMRelease;
     platformAdapter = productionMediaPlatformAdapter;
     rootIntegrity = productionMediaRootIntegrity;
+    signingReceiptVerification = productionMediaSigningReceiptVerification;
     unsignedArtifacts = productionMediaUnsignedArtifacts;
     verifiedOwnedRecovery = productionMediaVerifiedOwnedRecovery;
     verifiedRPIBootBundles = productionMediaRPIBootBundles;
@@ -1500,15 +1611,109 @@ let
           ${built.goSource}/schemas/rpi5-media-verification-receipt-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-media-verification-receipt-v1alpha2.schema.json \
           ${built.goSource}/schemas/rpi5-media-verification-report-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-platform-adapter-v1alpha1.schema.json \
+          ${built.goSource}/schemas/rpi5-signing-approval-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-unfused-runtime-facts-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-release-intent-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-rpiboot-directory-tree-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-signed-release-manifest-v1alpha2.schema.json \
           ${built.goSource}/schemas/secure-boot-bundle-v1alpha1.schema.json \
           ${built.goSource}/schemas/signing-grant-registry-v1alpha2.schema.json \
+          ${built.goSource}/schemas/signing-gate-receipt-export-v1alpha2.schema.json \
+          ${built.goSource}/schemas/signing-gate-receipt-verification-v1alpha2.schema.json \
           ${built.goSource}/schemas/signing-request-v1alpha2.schema.json \
+          ${built.goSource}/schemas/signer-independent-review-v1alpha1.schema.json \
           ${built.goSource}/schemas/unsigned-artifact-set-v1alpha1.schema.json \
           ${built.goSource}/schemas/yubikey-signing-policy-v1alpha1.schema.json
+
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/rpi5-platform-adapter-v1alpha1.schema.json \
+          ${built.goSource}/config/rpi5-prototype-release/platform-adapter-v1alpha1.json
+        check-jsonschema \
+          --schemafile ${built.goSource}/schemas/signer-independent-review-v1alpha1.schema.json \
+          ${built.goSource}/signers/development-prototype/independent-review-2026-08-27.json
+
+        readonly signing_approval_schema=${built.goSource}/schemas/rpi5-signing-approval-v1alpha1.schema.json
+        readonly signing_approval_instance="$TMPDIR/rpi5-signing-approval-valid.json"
+        jq -cn '{
+          schema_version: "kaiba.provisioning.rpi5-signing-approval/v1alpha1",
+          approval_id: ("approval:" + ("a" * 64)),
+          approval_digest: ("sha256:" + ("a" * 64)),
+          decision: "approved",
+          reviewer_id: "reviewer:software-only-fixture",
+          approved_at: "2026-08-27T12:00:00Z",
+          expires_at: "2026-08-27T16:00:00Z",
+          release_id: "release:rpi5-software-only-fixture:1",
+          source_revision: ("b" * 40),
+          release_intent_digest: ("sha256:" + ("b" * 64)),
+          signing_inputs: [
+            {role: "rpi5.boot_image", digest: ("sha256:" + ("1" * 64)), size_bytes: 4096},
+            {role: "rpi5.eeprom_bootcode", digest: ("sha256:" + ("2" * 64)), size_bytes: 4096},
+            {role: "rpi5.eeprom_bootsys", digest: ("sha256:" + ("3" * 64)), size_bytes: 4096},
+            {role: "rpi5.eeprom_config", digest: ("sha256:" + ("4" * 64)), size_bytes: 4096},
+            {role: "rpi5.owned_recovery_bootcode", digest: ("sha256:" + ("5" * 64)), size_bytes: 4096}
+          ]
+        }' > "$signing_approval_instance"
+        check-jsonschema \
+          --schemafile "$signing_approval_schema" \
+          "$signing_approval_instance"
+
+        readonly signing_receipt_export_schema=${built.goSource}/schemas/signing-gate-receipt-export-v1alpha2.schema.json
+        readonly signing_receipt_export_instance="$TMPDIR/signing-gate-receipt-export-valid.json"
+        jq -cn '{
+          schema_version: "kaiba.provisioning.signing-gate-receipt-export/v1alpha2",
+          registry_digest: ("sha256:" + ("6" * 64)),
+          release_intent_digest: ("sha256:" + ("b" * 64)),
+          public_key_fingerprint: ("sha256:" + ("7" * 64)),
+          receipts: [{
+            receipt_digest: ("sha256:" + ("8" * 64)),
+            receipt: {
+              schema_version: "kaiba.provisioning.signing-gate-receipt/v1alpha3",
+              grant: {
+                schema_version: "kaiba.provisioning.signing-grant/v1alpha2",
+                grant_id: "grant:software-only-fixture:1",
+                expires_at: "2026-08-27T16:00:00Z",
+                request: {
+                  schema_version: "kaiba.provisioning.signing-request/v1alpha2",
+                  request_id: "request:software-only-fixture:1",
+                  algorithm: "rsa2048-sha256",
+                  role: "rpi5.boot_image",
+                  artifact_digest: ("sha256:" + ("1" * 64)),
+                  approval: {
+                    approval_id: ("approval:" + ("a" * 64)),
+                    approval_digest: ("sha256:" + ("a" * 64)),
+                    release_intent_digest: ("sha256:" + ("b" * 64)),
+                    role: "rpi5.boot_image",
+                    artifact_digest: ("sha256:" + ("1" * 64))
+                  }
+                }
+              },
+              request_digest: ("sha256:" + ("9" * 64)),
+              backend_id: "backend:software-only-fixture",
+              signature_hex: ("ab" * 256),
+              signature_digest: ("sha256:" + ("c" * 64)),
+              signed_at: "2026-08-27T12:01:00Z",
+              attestation_signature_hex: ("cd" * 256),
+              attestation_signature_digest: ("sha256:" + ("d" * 64))
+            }
+          }]
+        }' > "$signing_receipt_export_instance"
+        check-jsonschema \
+          --base-uri file://${built.goSource}/schemas/ \
+          --schemafile "$signing_receipt_export_schema" \
+          "$signing_receipt_export_instance"
+        jq 'del(.receipts[0].receipt.attestation_signature_hex)' \
+          "$signing_receipt_export_instance" \
+          > "$TMPDIR/signing-gate-receipt-export-missing-attestation.json"
+        if check-jsonschema \
+          --base-uri file://${built.goSource}/schemas/ \
+          --schemafile "$signing_receipt_export_schema" \
+          "$TMPDIR/signing-gate-receipt-export-missing-attestation.json" \
+          > /dev/null 2>&1
+        then
+          echo 'receipt export schema accepted a receipt without its attestation signature' >&2
+          exit 1
+        fi
 
         readonly media_preflight_schema=${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha2.schema.json
         readonly media_preflight_valid="$TMPDIR/rpi5-media-device-preflight-valid.json"
@@ -2004,8 +2209,24 @@ let
       evidence = [ developmentPostureEvidencePath ];
     }
     {
+      id = "development-signer-independent-review";
+      description = "The checked-in independent-review record binds the non-production sacrificial-development signer to the reviewed repository revision, vendor certificate-chain evidence digests, token and slot policy, reviewed public key, customer-key hash, and signer policy. The record explicitly grants neither signing authorization nor production approval. This is a software-only validation of retained evidence; it performs no live token or hardware access and makes no production-readiness claim.";
+    }
+    {
       id = "go-tests";
       description = "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.";
+    }
+    {
+      id = "exact-release-signing-authorization";
+      description = "Software-only tests author and validate a reviewer-attributed, time-, expiry-, and exact-release-intent-bound approval with a domain-separated digest, then deterministically derive exactly the five reviewed role-and-artifact grants without caller-selected signing inputs. Reviewer identity and handoff are procedural and not cryptographically authenticated; signing-host root remains trusted, so this is not production separation-of-duties enforcement. The tests exercise no live token, signing service, or hardware; the authorization is release-specific and does not approve production devices or production policy.";
+    }
+    {
+      id = "authenticated-signing-receipts";
+      description = "Software-only tests export the signing gate's complete durable receipt snapshot and independently verify every artifact RSA signature plus a domain-separated canonical receipt-attestation signature binding the full grant and request, request digest, backend identity, artifact signature and digest, and gate-clock signed_at value. Verification also requires the exact reviewed registry, separately captured receipt digests, reviewed public key, and grant expiry. The signed_at field is authenticated gate metadata, not an external trusted timestamp. These tests use synthetic cryptographic fixtures only, perform no live token or hardware operation, and make no production-signing or production-readiness claim.";
+    }
+    {
+      id = "ubuntu-signing-gate-deployment";
+      description = "Software-only Ubuntu 24.04 deployment tests validate the inert installer, fixed service identity and authority, restrictive systemd, polkit, tmpfiles, state, socket, registry, and root-only tmpfs PIN-source boundaries, plus fail-closed static preflight behavior. They do not install or start a live service, read a PIN, enumerate or use a token, access hardware, or sign an artifact; this deployment remains limited to the non-production sacrificial-development ceremony.";
     }
     {
       id = "authenticated-authority-bridge";
@@ -2570,6 +2791,7 @@ let
           pkgs.gnugrep
           pkgs.jq
           pkgs.openssl
+          pkgs.xxd
         ];
       }
       ''
@@ -3043,9 +3265,274 @@ let
         touch "$out/passed"
       '';
 
+  signingReceiptVerificationContract =
+    assert lib.assertMsg (
+      let
+        contract = productionMediaSigningReceiptVerification.kaibaVerifiedSigningReceipts;
+      in
+      contract.exactReceiptCount == 5
+      && contract.receiptAttestationRequired
+      &&
+        contract.receiptAttestationSchemaVersion
+        == "kaiba.provisioning.signing-gate-receipt-attestation/v1alpha1"
+      && contract.schemaVersion == "kaiba.provisioning.signing-gate-receipt-verification/v1alpha2"
+      && contract.verificationMode == "authenticated_offline"
+      && contract.verifiedSignedBoot == productionMediaVerifiedSignedBoot
+      && contract.verifiedSignedEEPROM == productionMediaVerifiedSignedEEPROM
+      && contract.verifiedOwnedRecovery == productionMediaVerifiedOwnedRecovery
+      && contract.reviewedPublicKeyPEM == productionMediaFixturePublicKey
+      && lib.all (value: value == false) [
+        contract.privateKeyAccess
+        contract.signingAuthorityConfigured
+      ]
+    ) "the verified signing-receipt constructor lost its exact public input lineage";
+    pkgs.runCommand "kaiba-signing-receipt-verification-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.check-jsonschema
+          pkgs.coreutils
+          pkgs.jq
+          pkgs.openssl
+          pkgs.xxd
+        ];
+      }
+      ''
+        set -euo pipefail
+        export LC_ALL=C
+        umask 077
+
+        readonly tool=${built.signingReceiptsTool}/bin/kaiba-provision-signing-receipts
+        readonly approval_tool=${built.signingApprovalTool}/bin/kaiba-provision-signing-approval
+        readonly evidence=${productionMediaSigningReceiptEvidence}
+        readonly registry="$evidence/signing-grants.json"
+        readonly receipt_export="$evidence/signing-receipts.json"
+        readonly public_key=${productionMediaFixturePublicKey}
+        readonly verification=${productionMediaSigningReceiptVerification}
+        readonly release_intent=${productionMediaReleaseIntent}/release-intent.json
+        readonly verification_schema=${built.signingReceiptsTool}/share/kaiba/schemas/signing-gate-receipt-verification-v1alpha2.schema.json
+
+        receipt_digest() {
+          jq -er --arg role "$1" \
+            '[.[] | select(.role == $role) | .receipt_digest]
+             | if length == 1 then .[0] else error("missing unique receipt role") end' \
+            "$evidence/receipt-digests.json"
+        }
+        readonly boot_receipt="$(receipt_digest rpi5.boot_image)"
+        readonly eeprom_bootcode_receipt="$(receipt_digest rpi5.eeprom_bootcode)"
+        readonly eeprom_bootsys_receipt="$(receipt_digest rpi5.eeprom_bootsys)"
+        readonly eeprom_config_receipt="$(receipt_digest rpi5.eeprom_config)"
+        readonly owned_recovery_receipt="$(receipt_digest rpi5.owned_recovery_bootcode)"
+
+        verify_receipts() {
+          "$tool" verify \
+            --export "$1" \
+            --registry "$2" \
+            --public-key "$3" \
+            --expected-receipt-digest "$4" \
+            --expected-receipt-digest "$5" \
+            --expected-receipt-digest "$6" \
+            --expected-receipt-digest "$7" \
+            --expected-receipt-digest "$8"
+        }
+        expect_rejection() {
+          local label="$1"
+          local expected_error="$2"
+          shift 2
+          set +e
+          verify_receipts "$@" \
+            > "$TMPDIR/$label.stdout" \
+            2> "$TMPDIR/$label.stderr"
+          local status="$?"
+          set -e
+          if test "$status" -ne 3; then
+            echo "$label returned $status, want verification failure 3" >&2
+            cat "$TMPDIR/$label.stderr" >&2
+            exit 1
+          fi
+          test ! -s "$TMPDIR/$label.stdout"
+          grep -F "$expected_error" "$TMPDIR/$label.stderr" > /dev/null
+        }
+        refresh_receipt_digest() {
+          local input="$1"
+          local index="$2"
+          local output="$3"
+          local receipt_json
+          local receipt_digest
+          receipt_json="$(jq -c --argjson index "$index" \
+            '.receipts[$index].receipt' "$input")"
+          receipt_digest="sha256:$({
+            printf '%s\0' 'kaiba.provisioning.signing-gate-receipt.v1alpha3'
+            printf '%s' "$receipt_json"
+          } | sha256sum | cut -d ' ' -f 1)"
+          jq --compact-output \
+            --argjson index "$index" \
+            --arg receipt_digest "$receipt_digest" \
+            '.receipts[$index].receipt_digest = $receipt_digest' \
+            "$input" > "$output"
+        }
+
+        "$approval_tool" validate \
+          --release-intent "$release_intent" \
+          --approval "$evidence/approval.json" \
+          --registry "$registry" \
+          > "$TMPDIR/authorization-verification.json"
+        jq -e '.status == "valid" and .grant_count == 5' \
+          "$TMPDIR/authorization-verification.json" > /dev/null
+        check-jsonschema --schemafile "$verification_schema" "$verification"
+        verify_receipts \
+          "$receipt_export" \
+          "$registry" \
+          "$public_key" \
+          "$boot_receipt" \
+          "$eeprom_bootcode_receipt" \
+          "$eeprom_bootsys_receipt" \
+          "$eeprom_config_receipt" \
+          "$owned_recovery_receipt" \
+          > "$TMPDIR/independent-verification.json"
+        cmp "$TMPDIR/independent-verification.json" "$verification"
+
+        expect_rejection \
+          changed-result-digest \
+          'was not independently captured from a signing result' \
+          "$receipt_export" \
+          "$registry" \
+          "$public_key" \
+          'sha256:0000000000000000000000000000000000000000000000000000000000000000' \
+          "$eeprom_bootcode_receipt" \
+          "$eeprom_bootsys_receipt" \
+          "$eeprom_config_receipt" \
+          "$owned_recovery_receipt"
+
+        jq --compact-output \
+          '.grants[0].expires_at = "2026-08-29T12:00:00Z"' \
+          "$registry" > "$TMPDIR/changed-registry.json"
+        expect_rejection \
+          changed-registry \
+          'receipt export registry_digest does not match the reviewed registry' \
+          "$receipt_export" \
+          "$TMPDIR/changed-registry.json" \
+          "$public_key" \
+          "$boot_receipt" \
+          "$eeprom_bootcode_receipt" \
+          "$eeprom_bootsys_receipt" \
+          "$eeprom_config_receipt" \
+          "$owned_recovery_receipt"
+
+        jq --compact-output \
+          '.receipts[0].receipt.signed_at = "2026-08-27T12:02:00Z"' \
+          "$receipt_export" > "$TMPDIR/changed-signed-at-intermediate.json"
+        refresh_receipt_digest \
+          "$TMPDIR/changed-signed-at-intermediate.json" \
+          0 \
+          "$TMPDIR/changed-signed-at.json"
+        readonly changed_signed_at_receipt="$(jq -er \
+          '.receipts[0].receipt_digest' "$TMPDIR/changed-signed-at.json")"
+        expect_rejection \
+          changed-signed-at \
+          'receipt attestation signature does not verify against the reviewed public key and canonical receipt metadata' \
+          "$TMPDIR/changed-signed-at.json" \
+          "$registry" \
+          "$public_key" \
+          "$changed_signed_at_receipt" \
+          "$eeprom_bootcode_receipt" \
+          "$eeprom_bootsys_receipt" \
+          "$eeprom_config_receipt" \
+          "$owned_recovery_receipt"
+
+        jq --compact-output \
+          '.receipts |= map(.receipt.backend_id = "backend:forged")' \
+          "$receipt_export" > "$TMPDIR/changed-backend-0.json"
+        for index in 0 1 2 3 4; do
+          refresh_receipt_digest \
+            "$TMPDIR/changed-backend-$index.json" \
+            "$index" \
+            "$TMPDIR/changed-backend-$((index + 1)).json"
+        done
+        mapfile -t changed_backend_receipts < <(
+          jq -er '.receipts[].receipt_digest' "$TMPDIR/changed-backend-5.json"
+        )
+        test "''${#changed_backend_receipts[@]}" -eq 5
+        expect_rejection \
+          changed-backend-id \
+          'receipt attestation signature does not verify against the reviewed public key and canonical receipt metadata' \
+          "$TMPDIR/changed-backend-5.json" \
+          "$registry" \
+          "$public_key" \
+          "''${changed_backend_receipts[0]}" \
+          "''${changed_backend_receipts[1]}" \
+          "''${changed_backend_receipts[2]}" \
+          "''${changed_backend_receipts[3]}" \
+          "''${changed_backend_receipts[4]}"
+
+        jq --compact-output '
+          .receipts[0].receipt.signature_hex |=
+            (if startswith("0") then "1" + .[1:] else "0" + .[1:] end)
+        ' "$receipt_export" > "$TMPDIR/changed-export-intermediate.json"
+        changed_signature_hex="$(jq -er '.receipts[0].receipt.signature_hex' \
+          "$TMPDIR/changed-export-intermediate.json")"
+        changed_signature_digest="sha256:$(printf '%s' "$changed_signature_hex" \
+          | xxd -r -p | sha256sum | cut -d ' ' -f 1)"
+        jq --compact-output \
+          --arg signature_digest "$changed_signature_digest" \
+          '.receipts[0].receipt.signature_digest = $signature_digest' \
+          "$TMPDIR/changed-export-intermediate.json" \
+          > "$TMPDIR/changed-export-receipt.json"
+        changed_receipt_json="$(jq -c '.receipts[0].receipt' \
+          "$TMPDIR/changed-export-receipt.json")"
+        changed_receipt_digest="sha256:$({
+          printf '%s\0' 'kaiba.provisioning.signing-gate-receipt.v1alpha3'
+          printf '%s' "$changed_receipt_json"
+        } | sha256sum | cut -d ' ' -f 1)"
+        jq --compact-output \
+          --arg receipt_digest "$changed_receipt_digest" \
+          '.receipts[0].receipt_digest = $receipt_digest' \
+          "$TMPDIR/changed-export-receipt.json" \
+          > "$TMPDIR/changed-export.json"
+        expect_rejection \
+          changed-export-signature \
+          'receipt signature does not verify against the reviewed public key and artifact digest' \
+          "$TMPDIR/changed-export.json" \
+          "$registry" \
+          "$public_key" \
+          "$boot_receipt" \
+          "$eeprom_bootcode_receipt" \
+          "$eeprom_bootsys_receipt" \
+          "$eeprom_config_receipt" \
+          "$owned_recovery_receipt"
+
+        openssl genpkey \
+          -algorithm RSA \
+          -pkeyopt rsa_keygen_bits:2048 \
+          -out "$TMPDIR/other-private.pem" \
+          > /dev/null 2>&1
+        openssl pkey \
+          -in "$TMPDIR/other-private.pem" \
+          -pubout \
+          -out "$TMPDIR/other-public.pem"
+        chmod 0400 "$TMPDIR/other-public.pem"
+        expect_rejection \
+          changed-public-key \
+          'receipt export public_key_fingerprint does not match the reviewed public key' \
+          "$receipt_export" \
+          "$registry" \
+          "$TMPDIR/other-public.pem" \
+          "$boot_receipt" \
+          "$eeprom_bootcode_receipt" \
+          "$eeprom_bootsys_receipt" \
+          "$eeprom_config_receipt" \
+          "$owned_recovery_receipt"
+
+        mkdir "$out"
+        touch "$out/passed"
+      '';
+
   signedReleaseFinalizationContract =
     assert lib.assertMsg (lib.isDerivation signedReleaseEvaluationFixture)
       "the signed-release factory rejected a complete verified public input graph";
+    assert lib.assertMsg (
+      signedReleaseReceiptVerificationInputAccepted signedReleaseReceiptVerificationEvaluationFixture
+      && !(signedReleaseReceiptVerificationInputAccepted untypedSigningReceiptVerificationEvaluationFixture)
+    ) "the signed-release factory accepted an untyped signing-receipt verification assertion";
     assert lib.assertMsg
       (
         let
@@ -3054,11 +3541,14 @@ let
           contract = signedReleaseEvaluationFixture.kaibaVerifiedSignedRelease;
         in
         tool.artifactRoleCount == 18
+        && tool.authenticatedSigningReceiptCount == 5
         && tool.deterministicEEPROMReplayRequired
         && tool.deterministicOwnedRecoveryReplayRequired
         && tool.publicationSchemaVersion == "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1"
+        && tool.signingReceiptVerificationRequired
         && replay.verificationMode == "pinned_offline_replay"
         && contract.artifactRoleCount == 18
+        && contract.authenticatedSigningReceiptCount == 5
         && contract.contentAddressedPublication
         && contract.deterministicEEPROMReplayRequired
         && contract.deterministicOwnedRecoveryReplayRequired
@@ -3069,6 +3559,9 @@ let
           == "kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2"
         && contract.verificationMode == "pure_offline_replay"
         && toString contract.verifiedRPIBootBundles == toString signedReleaseRPIBootBundleEvaluationFixture
+        &&
+          toString contract.signingReceiptVerification
+          == toString signedReleaseReceiptVerificationEvaluationFixture
         && lib.all (value: value == false) [
           replay.approvalGateConfigured
           replay.blockDeviceWriteCapable
@@ -4777,9 +5270,11 @@ let
 
         expected_binaries="$(${pkgs.coreutils}/bin/printf '%s\n' \
           kaiba-provision-sign-boot \
+          kaiba-provision-sign-eeprom \
           kaiba-provision-signer \
           kaiba-provision-signing-client \
           kaiba-provision-signing-gate \
+          kaiba-provision-signing-receipts \
           kaiba-provision-yubikey-wrapper)"
         actual_binaries="$(
           find -L ${developmentYubiKeySigning}/bin \
@@ -4805,8 +5300,21 @@ let
           '${developmentYubiKeyCustomerKeyHash}'
         test '${developmentYubiKeySigning.kaibaSigning.signerPolicyDigest}' = \
           '${developmentYubiKeySignerPolicyDigest}'
+        test '${toString developmentYubiKeySigning.kaibaSigning.minimumArtifactSignatureOperationsPerCompletedGrant}' = '1'
+        test '${toString developmentYubiKeySigning.kaibaSigning.minimumReceiptAttestationOperationsPerCompletedGrant}' = '1'
+        test '${toString developmentYubiKeySigning.kaibaSigning.minimumPrivateKeyOperationsPerCompletedGrant}' = '2'
+        test '${developmentYubiKeySigning.kaibaSigning.operationCountSemantics}' = \
+          'minimum_successful_path'
+        test '${developmentYubiKeySigning.kaibaSigning.incompleteGrantRetryPolicy}' = \
+          'stop_and_review'
+        test '${builtins.toJSON developmentYubiKeySigning.kaibaSigning.privateKeyOperationUpperBoundDeclared}' = \
+          'false'
         test -x \
           ${developmentYubiKeySigning.kaibaSigning.signedBoot}/bin/kaiba-provision-sign-boot
+        test -x \
+          ${developmentYubiKeySigning.kaibaSigning.eepromSigningTool}/bin/kaiba-provision-sign-eeprom
+        test -x \
+          ${developmentYubiKeySigning.kaibaSigning.signingReceiptsTool}/bin/kaiba-provision-signing-receipts
         test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.gateSocketPath}' = \
           '/run/kaiba-provision-signing/signing.sock'
         test '${developmentYubiKeySigning.kaibaSigning.signedBootConfiguration.signerID}' = \
@@ -5191,6 +5699,25 @@ let
           ]
         ' ${canonicalJSON}/report-input.json > /dev/null
 
+        for software_only_check in \
+          development-signer-independent-review \
+          exact-release-signing-authorization \
+          authenticated-signing-receipts \
+          ubuntu-signing-gate-deployment
+        do
+          jq -e \
+            --arg check_id "$software_only_check" \
+            '[.checks[] | select(.id == $check_id) | .status] == ["passed"]' \
+            ${canonicalJSON}/platform.json > /dev/null
+          jq -e \
+            --arg check_id "$software_only_check" \
+            '[.automated.checks[]
+              | select(.id == $check_id)
+              | [.system, .status]
+            ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]' \
+            ${canonicalJSON}/report-input.json > /dev/null
+        done
+
         jq -e \
           '[.checks[] | select(.id == "authenticated-authority-bridge") | .status]
             == ["passed"]' \
@@ -5348,6 +5875,7 @@ in
     rpibootBundleContract
     rpibootMetadataStdoutCompatibility
     secureBootArtifactContract
+    signingReceiptVerificationContract
     signedReleaseFinalizationContract
     signedReleaseManifestContract
     signedBootPlanContract

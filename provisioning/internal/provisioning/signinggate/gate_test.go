@@ -3,6 +3,7 @@ package signinggate
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,10 +66,12 @@ func testStore(t *testing.T) *StateStore {
 }
 
 type inspectingBackend struct {
-	store *StateStore
-	grant Grant
-	calls int
-	err   error
+	store    *StateStore
+	grant    Grant
+	calls    int
+	failCall int
+	err      error
+	inputs   [][]byte
 }
 
 type blockingBackend struct {
@@ -79,30 +82,36 @@ type blockingBackend struct {
 
 func (b *blockingBackend) Sign(ctx context.Context, _ signing.Algorithm, _ []byte) ([]byte, error) {
 	b.calls++
-	close(b.entered)
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-b.release:
+	if b.calls == 1 {
+		close(b.entered)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-b.release:
+		}
 	}
 	return make([]byte, signing.RSASignatureBytes), nil
 }
 
-func (b *inspectingBackend) Sign(_ context.Context, algorithm signing.Algorithm, artifact []byte) ([]byte, error) {
+func (b *inspectingBackend) Sign(_ context.Context, algorithm signing.Algorithm, input []byte) ([]byte, error) {
 	b.calls++
-	if algorithm != signing.AlgorithmRSA2048SHA256 || bundle.Sum(artifact) != b.grant.Request.ArtifactDigest {
+	b.inputs = append(b.inputs, append([]byte(nil), input...))
+	isArtifact := bundle.Sum(input) == b.grant.Request.ArtifactDigest
+	isAttestation := bytes.HasPrefix(input, []byte(receiptAttestationDomain))
+	if algorithm != signing.AlgorithmRSA2048SHA256 || isArtifact == isAttestation {
 		return nil, errors.New("backend received unbound signing input")
 	}
 	state, found, err := b.store.Load(b.grant)
 	if err != nil || !found || state.Status != StateIntent || state.Receipt != nil {
 		return nil, fmt.Errorf("durable intent was not present before key use: %#v / %v", state, err)
 	}
-	if b.err != nil {
+	if b.err != nil && (b.failCall == 0 || b.calls == b.failCall) {
 		return nil, b.err
 	}
+	digest := sha256.Sum256(input)
 	signature := make([]byte, signing.RSASignatureBytes)
-	for index := range signature {
-		signature[index] = byte(index)
+	for offset := 0; offset < len(signature); offset += len(digest) {
+		copy(signature[offset:], digest[:])
 	}
 	return signature, nil
 }
@@ -133,7 +142,7 @@ func TestGateRecordsIntentBeforeKeyUseAndPersistsReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if backend.calls != 1 || len(result.SignatureHex) != signing.RSASignatureBytes*2 || result.Replayed {
+	if backend.calls != 2 || len(result.SignatureHex) != signing.RSASignatureBytes*2 || result.Replayed {
 		t.Fatalf("backend/result = %d/%#v", backend.calls, result)
 	}
 	if result.ReleaseIntentDigest != grant.Request.Approval.ReleaseIntentDigest {
@@ -148,6 +157,13 @@ func TestGateRecordsIntentBeforeKeyUseAndPersistsReceipt(t *testing.T) {
 	}
 	if state.Receipt.Grant.Request.Approval != grant.Request.Approval {
 		t.Fatal("receipt did not retain the complete approval binding")
+	}
+	attestation, err := state.Receipt.CanonicalAttestation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(backend.inputs[1], attestation) || !bytes.HasPrefix(attestation, []byte(receiptAttestationDomain)) {
+		t.Fatal("second backend input was not the exact domain-prefixed canonical receipt attestation")
 	}
 }
 
@@ -165,7 +181,7 @@ func TestGateReplaysCompletedSignatureWithoutKeyUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if backend.calls != 1 || !second.Replayed || first.SignatureHex != second.SignatureHex || first.ReceiptDigest != second.ReceiptDigest {
+	if backend.calls != 2 || !second.Replayed || first.SignatureHex != second.SignatureHex || first.ReceiptDigest != second.ReceiptDigest {
 		t.Fatalf("idempotent replay failed: calls=%d first=%#v second=%#v", backend.calls, first, second)
 	}
 }
@@ -223,8 +239,8 @@ func TestStateLockSerializesIndependentGateProcesses(t *testing.T) {
 	if err := <-secondDone; err != nil {
 		t.Fatal(err)
 	}
-	if firstBackend.calls != 1 || secondBackend.Calls != 0 {
-		t.Fatalf("backend calls = %d/%d, want 1/0", firstBackend.calls, secondBackend.Calls)
+	if firstBackend.calls != 2 || secondBackend.Calls != 0 {
+		t.Fatalf("backend calls = %d/%d, want 2/0", firstBackend.calls, secondBackend.Calls)
 	}
 }
 
@@ -278,7 +294,7 @@ func TestGateRetainsIntentAcrossBackendFailureAndRecovers(t *testing.T) {
 	artifact := []byte("approved boot image")
 	grant := testGrant(artifact, "01", fixedNow.Add(time.Hour))
 	store := testStore(t)
-	backend := &inspectingBackend{store: store, grant: grant, err: errors.New("touch timeout")}
+	backend := &inspectingBackend{store: store, grant: grant, failCall: 1, err: errors.New("touch timeout")}
 	gate := testGate(t, testRegistry(t, grant), store, backend)
 	if _, err := gate.Sign(context.Background(), artifact); err == nil || !strings.Contains(err.Error(), "touch timeout") {
 		t.Fatalf("backend failure = %v", err)
@@ -291,8 +307,88 @@ func TestGateRetainsIntentAcrossBackendFailureAndRecovers(t *testing.T) {
 	if _, err := gate.Sign(context.Background(), artifact); err != nil {
 		t.Fatal(err)
 	}
-	if backend.calls != 2 {
-		t.Fatalf("backend calls = %d, want 2", backend.calls)
+	if backend.calls != 3 {
+		t.Fatalf("backend calls = %d, want 3", backend.calls)
+	}
+}
+
+func TestGateDoesNotCompleteUntilReceiptAttestationExistsAndReviewedRetryCompletes(t *testing.T) {
+	artifact := []byte("approved boot image")
+	grant := testGrant(artifact, "attestation-retry", fixedNow.Add(time.Hour))
+	store := testStore(t)
+	backend := &inspectingBackend{
+		store: store, grant: grant, failCall: 2, err: errors.New("attestation touch timeout"),
+	}
+	registry := testRegistry(t, grant)
+	gate := testGate(t, registry, store, backend)
+
+	if _, err := gate.Sign(context.Background(), artifact); err == nil || !strings.Contains(err.Error(), "receipt-attestation") {
+		t.Fatalf("attestation backend failure = %v", err)
+	}
+	state, found, err := store.Load(grant)
+	if err != nil || !found || state.Status != StateIntent || state.Receipt != nil {
+		t.Fatalf("state after attestation failure = %#v/%v/%v", state, found, err)
+	}
+	if backend.calls != 2 || len(backend.inputs) != 2 || !bytes.Equal(backend.inputs[0], artifact) ||
+		!bytes.HasPrefix(backend.inputs[1], []byte(receiptAttestationDomain)) {
+		t.Fatalf("failed-attempt backend inputs = %d/%d", backend.calls, len(backend.inputs))
+	}
+
+	// Production policy requires an operator to stop and review the retained
+	// intent before this retry. The repeated calls below prove that two is a
+	// successful-path minimum, not an upper bound on private-key operations.
+	backend.err = nil
+	completed, err := gate.Sign(context.Background(), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backend.calls != 4 || !bytes.Equal(backend.inputs[0], backend.inputs[2]) ||
+		!bytes.Equal(backend.inputs[1], backend.inputs[3]) {
+		t.Fatal("retry did not deterministically repeat the artifact and derived attestation operations")
+	}
+	state, found, err = store.Load(grant)
+	if err != nil || !found || state.Status != StateComplete || state.Receipt == nil {
+		t.Fatalf("state after retry = %#v/%v/%v", state, found, err)
+	}
+	if state.Receipt.AttestationSignatureHex == "" || state.Receipt.AttestationSignatureDigest == "" {
+		t.Fatal("complete receipt is missing its attestation signature")
+	}
+	replayed, err := gate.Sign(context.Background(), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayed.Replayed || replayed.SignatureHex != completed.SignatureHex ||
+		replayed.ReceiptDigest != completed.ReceiptDigest || backend.calls != 4 {
+		t.Fatalf("completed receipt did not replay without key use: %#v / %#v", completed, replayed)
+	}
+}
+
+func TestGateRejectsLegacyStateWithoutUsingTheKeyAgain(t *testing.T) {
+	artifact := []byte("approved boot image")
+	grant := testGrant(artifact, "legacy-state", fixedNow.Add(time.Hour))
+	requestDigest, err := grant.Request.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := testStore(t)
+	legacy := DurableState{
+		SchemaVersion:  "kaiba.provisioning.signing-gate-state/v1alpha2",
+		Status:         StateIntent,
+		GrantID:        grant.GrantID,
+		RequestDigest:  requestDigest,
+		ArtifactDigest: grant.Request.ArtifactDigest,
+		IntentAt:       canonicalTime(fixedNow),
+	}
+	if err := store.write(legacy); err != nil {
+		t.Fatal(err)
+	}
+	backend := &signing.DeterministicFakeBackend{}
+	_, err = testGate(t, testRegistry(t, grant), store, backend).Sign(context.Background(), artifact)
+	if err == nil || !strings.Contains(err.Error(), "unsupported durable state schema_version") {
+		t.Fatalf("legacy state error = %v", err)
+	}
+	if backend.Calls != 0 {
+		t.Fatalf("legacy state caused %d private-key operations", backend.Calls)
 	}
 }
 

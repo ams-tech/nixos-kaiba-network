@@ -20,27 +20,48 @@ import (
 )
 
 const (
-	StateSchemaV1Alpha2   = "kaiba.provisioning.signing-gate-state/v1alpha2"
-	ReceiptSchemaV1Alpha2 = "kaiba.provisioning.signing-gate-receipt/v1alpha2"
-	StateIntent           = "intent"
-	StateComplete         = "complete"
-	maxStateBytes         = 128 * 1024
+	StateSchemaV1Alpha3              = "kaiba.provisioning.signing-gate-state/v1alpha3"
+	ReceiptSchemaV1Alpha3            = "kaiba.provisioning.signing-gate-receipt/v1alpha3"
+	ReceiptAttestationSchemaV1Alpha1 = "kaiba.provisioning.signing-gate-receipt-attestation/v1alpha1"
+	StateIntent                      = "intent"
+	StateComplete                    = "complete"
+	maxStateBytes                    = 128 * 1024
+	receiptAttestationDomain         = "kaiba.provisioning.signing-gate-receipt-attestation.v1alpha1\x00"
 )
 
 // Receipt permanently binds the returned signature to the complete grant and
 // the fixed backend identity used by the daemon.
 type Receipt struct {
-	SchemaVersion   string        `json:"schema_version"`
-	Grant           Grant         `json:"grant"`
-	RequestDigest   bundle.Digest `json:"request_digest"`
-	BackendID       string        `json:"backend_id"`
-	SignatureHex    string        `json:"signature_hex"`
-	SignatureDigest bundle.Digest `json:"signature_digest"`
-	SignedAt        string        `json:"signed_at"`
+	SchemaVersion              string        `json:"schema_version"`
+	Grant                      Grant         `json:"grant"`
+	RequestDigest              bundle.Digest `json:"request_digest"`
+	BackendID                  string        `json:"backend_id"`
+	SignatureHex               string        `json:"signature_hex"`
+	SignatureDigest            bundle.Digest `json:"signature_digest"`
+	SignedAt                   string        `json:"signed_at"`
+	AttestationSignatureHex    string        `json:"attestation_signature_hex"`
+	AttestationSignatureDigest bundle.Digest `json:"attestation_signature_digest"`
 }
 
 func (r Receipt) Validate() error {
-	if r.SchemaVersion != ReceiptSchemaV1Alpha2 {
+	if err := r.validateAttestedFields(); err != nil {
+		return err
+	}
+	attestationSignature, err := signing.ParseSignatureHex([]byte(r.AttestationSignatureHex))
+	if err != nil {
+		return fmt.Errorf("receipt attestation_signature_hex: %w", err)
+	}
+	if hex.EncodeToString(attestationSignature) != r.AttestationSignatureHex {
+		return errors.New("receipt attestation_signature_hex is not canonical lowercase hexadecimal")
+	}
+	if r.AttestationSignatureDigest != bundle.Sum(attestationSignature) {
+		return errors.New("receipt attestation_signature_digest does not match attestation_signature_hex")
+	}
+	return nil
+}
+
+func (r Receipt) validateAttestedFields() error {
+	if r.SchemaVersion != ReceiptSchemaV1Alpha3 {
 		return fmt.Errorf("unsupported receipt schema_version %q", r.SchemaVersion)
 	}
 	if err := r.Grant.Validate(); err != nil {
@@ -75,6 +96,62 @@ func (r Receipt) Validate() error {
 	return nil
 }
 
+type receiptAttestation struct {
+	SchemaVersion           string        `json:"schema_version"`
+	ReceiptSchemaVersion    string        `json:"receipt_schema_version"`
+	Grant                   Grant         `json:"grant"`
+	RequestDigest           bundle.Digest `json:"request_digest"`
+	BackendID               string        `json:"backend_id"`
+	ArtifactSignatureHex    string        `json:"artifact_signature_hex"`
+	ArtifactSignatureDigest bundle.Digest `json:"artifact_signature_digest"`
+	SignedAt                string        `json:"signed_at"`
+}
+
+// CanonicalAttestation returns the exact domain-prefixed bytes signed by the
+// gate after it has produced the unchanged artifact signature. Every field is
+// derived inside the gate from its fixed registry, configuration, clock, and
+// artifact-signing result; no caller can supply an attestation field.
+func (r Receipt) CanonicalAttestation() ([]byte, error) {
+	if err := r.validateAttestedFields(); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(receiptAttestation{
+		SchemaVersion:           ReceiptAttestationSchemaV1Alpha1,
+		ReceiptSchemaVersion:    r.SchemaVersion,
+		Grant:                   r.Grant,
+		RequestDigest:           r.RequestDigest,
+		BackendID:               r.BackendID,
+		ArtifactSignatureHex:    r.SignatureHex,
+		ArtifactSignatureDigest: r.SignatureDigest,
+		SignedAt:                r.SignedAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	message := make([]byte, 0, len(receiptAttestationDomain)+len(encoded))
+	message = append(message, receiptAttestationDomain...)
+	message = append(message, encoded...)
+	return message, nil
+}
+
+// WithAttestationSignature attaches the second, metadata-authenticating RSA
+// signature without changing the Raspberry Pi artifact signature.
+func (r Receipt) WithAttestationSignature(signature []byte) (Receipt, error) {
+	if _, err := r.CanonicalAttestation(); err != nil {
+		return Receipt{}, err
+	}
+	signatureHex, err := canonicalSignature(signature)
+	if err != nil {
+		return Receipt{}, fmt.Errorf("receipt attestation signature: %w", err)
+	}
+	r.AttestationSignatureHex = signatureHex
+	r.AttestationSignatureDigest = bundle.Sum(signature)
+	if err := r.Validate(); err != nil {
+		return Receipt{}, err
+	}
+	return r, nil
+}
+
 func (r Receipt) Digest() (bundle.Digest, error) {
 	if err := r.Validate(); err != nil {
 		return "", err
@@ -84,7 +161,7 @@ func (r Receipt) Digest() (bundle.Digest, error) {
 		return "", err
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte("kaiba.provisioning.signing-gate-receipt.v1alpha2\x00"))
+	_, _ = hash.Write([]byte("kaiba.provisioning.signing-gate-receipt.v1alpha3\x00"))
 	_, _ = hash.Write(encoded)
 	return bundle.Digest("sha256:" + hex.EncodeToString(hash.Sum(nil))), nil
 }
@@ -100,7 +177,7 @@ type DurableState struct {
 }
 
 func (s DurableState) validateFor(grant Grant) error {
-	if s.SchemaVersion != StateSchemaV1Alpha2 {
+	if s.SchemaVersion != StateSchemaV1Alpha3 {
 		return fmt.Errorf("unsupported durable state schema_version %q", s.SchemaVersion)
 	}
 	if s.GrantID != grant.GrantID {
@@ -232,7 +309,7 @@ func (s *StateStore) RecordIntent(grant Grant, now time.Time) (DurableState, err
 		return DurableState{}, err
 	}
 	state := DurableState{
-		SchemaVersion:  StateSchemaV1Alpha2,
+		SchemaVersion:  StateSchemaV1Alpha3,
 		Status:         StateIntent,
 		GrantID:        grant.GrantID,
 		RequestDigest:  requestDigest,
@@ -265,6 +342,9 @@ func (s *StateStore) RecordComplete(grant Grant, intent DurableState, receipt Re
 }
 
 func (s *StateStore) statePath(grantID string) string {
+	// Keep the v2 filename namespace across the v1alpha3 state migration. An
+	// existing unattested state must be found and rejected, never hidden under a
+	// new filename in a way that would authorize the same grant for fresh key use.
 	digest := sha256.Sum256([]byte("kaiba.provisioning.signing-grant-state.v2\x00" + grantID))
 	return filepath.Join(s.directory, hex.EncodeToString(digest[:])+".json")
 }

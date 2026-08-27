@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/signing-gate-receipt-export-v1alpha2.schema.json",
+  "title": "Kaiba authenticated signing-gate receipt export v1alpha2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "registry_digest",
+    "release_intent_digest",
+    "public_key_fingerprint",
+    "receipts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.signing-gate-receipt-export/v1alpha2"
+    },
+    "registry_digest": { "$ref": "#/$defs/digest" },
+    "release_intent_digest": { "$ref": "#/$defs/digest" },
+    "public_key_fingerprint": { "$ref": "#/$defs/digest" },
+    "receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "uniqueItems": true,
+      "$comment": "The verifier requires exactly one receipt per reviewed registry grant, in strictly increasing registry grant_id order.",
+      "items": { "$ref": "#/$defs/record" }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "utc_seconds": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "grant_id", "expires_at", "request"],
+      "properties": {
+        "schema_version": {
+          "const": "kaiba.provisioning.signing-grant/v1alpha2"
+        },
+        "grant_id": { "$ref": "#/$defs/identifier" },
+        "expires_at": { "$ref": "#/$defs/utc_seconds" },
+        "request": { "$ref": "signing-request-v1alpha2.schema.json" }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "grant",
+        "request_digest",
+        "backend_id",
+        "signature_hex",
+        "signature_digest",
+        "signed_at",
+        "attestation_signature_hex",
+        "attestation_signature_digest"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "kaiba.provisioning.signing-gate-receipt/v1alpha3"
+        },
+        "grant": { "$ref": "#/$defs/grant" },
+        "request_digest": { "$ref": "#/$defs/digest" },
+        "backend_id": { "$ref": "#/$defs/identifier" },
+        "signature_hex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{512}$"
+        },
+        "signature_digest": { "$ref": "#/$defs/digest" },
+        "signed_at": { "$ref": "#/$defs/utc_seconds" },
+        "attestation_signature_hex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{512}$"
+        },
+        "attestation_signature_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_digest", "receipt"],
+      "properties": {
+        "receipt_digest": { "$ref": "#/$defs/digest" },
+        "receipt": { "$ref": "#/$defs/receipt" }
+      }
+    }
+  }
+}

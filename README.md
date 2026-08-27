@@ -304,6 +304,12 @@ and cannot reach `enrollment_ready`. The
 [secure-boot execution plan](docs/raspberry-pi-5-secure-boot-execution-plan.md)
 tracks the remaining release, media-staging, enforcement, physical-lane,
 rehearsal, and ceremony gates for one sacrificial development board.
+The [Ubuntu development signing ceremony](docs/ubuntu-rpi5-development-signing-ceremony.md)
+covers the non-production five-artifact-signature plus five canonical
+receipt-attestation-signature ceremony (a minimum of ten YubiKey private-key
+operations on the failure-free successful path, not an upper bound),
+authenticated receipt verification, and exact 18-role release assembly before
+any target hardware mutation.
 The [non-fusing secure-boot prototype](docs/non-fusing-secure-boot-prototype.md)
 is the runnable software-first path through durable control, audit, plan
 binding, restart validation, signed capsule checks, media fixtures, and

@@ -75,9 +75,11 @@ release-intent.json
 signing-gate socket, signer/cohort IDs, YKCS11 URI, public-key path, and public
 fingerprint at link time. The `sign` command accepts only a plan directory and
 a new output directory; it has no runtime key, URI, provider, module, socket,
-algorithm, or PIN selector. The v1alpha2 grant, signing request, gate response,
-and signing result must all carry the same `release_intent_digest`, artifact
-role, and artifact digest. It emits exactly:
+algorithm, or PIN selector. The v1alpha2 grant, signing request, and signing
+result must all carry the same `release_intent_digest`, artifact role, and
+artifact digest. The v1alpha3 gate wire response returns that lineage digest,
+the artifact signature, and the durable v1alpha3 receipt digest. It emits
+exactly:
 
 ```text
 boot.sig
@@ -103,8 +105,14 @@ The canonical `boot.sig` is the three-line Raspberry Pi format: image SHA-256,
 the image digest. The timestamp and Kaiba policy records are independently
 bound by the reviewed plan and final Nix output; the Raspberry Pi signature
 format itself does not cryptographically authenticate those metadata fields.
-Similarly, `gate_receipt_digest` is correlation metadata unless the associated
-root-managed gate receipt is obtained and checked separately.
+Similarly, `gate_receipt_digest` is correlation metadata until the associated
+root-managed v1alpha3 gate receipt is obtained and checked separately. That
+receipt contains the unchanged artifact signature plus a second signature over
+domain-separated canonical receipt metadata: the full grant and request,
+request digest, backend identity, artifact signature and digest, and
+`signed_at`. The v1alpha2 receipt exporter and verifier check both signatures
+under the reviewed public key. `signed_at` authenticates the gate's trusted
+clock reading; it is not an external timestamp-authority assertion.
 
 The v1alpha2 signed-boot plan and result reject v1alpha1 records instead of
 silently treating them as lineage-aware. The offline finalizer revalidates the
@@ -402,7 +410,10 @@ intent changes during the touch wait, the configured public key changes, the
 plan names another signer policy, the gate returns another release-intent
 lineage, the grant does not bind the boot role and digest, or the returned
 signature fails verification. The operation invokes the private key but
-performs no Pi, NVMe, EEPROM, or OTP mutation.
+performs no Pi, NVMe, EEPROM, or OTP mutation. One approved artifact request
+invokes the private key twice and requires two touches: first for the artifact
+signature, then for the gate-derived receipt-attestation signature. The
+v1alpha3 wire response is returned only after both operations succeed.
 
 Copy the two public output files to the release workspace through the reviewed
 handoff procedure. For a local prototype, place them in `./signed-output` and
@@ -469,6 +480,11 @@ production signed-EEPROM deliverable. The separate
 outputs do not write EEPROM or target media, enter RPIBOOT, change OTP, or
 report a hardware result.
 
+That one new owned-recovery request performs one artifact signature and one
+receipt-attestation signature. It reuses the three already verified fresh
+EEPROM artifact signatures; replay does not create additional signatures or
+touches for those reused artifacts.
+
 ## Safety status
 
 Completing this workflow proves that the selected `boot.img` verifies under
@@ -482,5 +498,12 @@ workflow does not produce or assemble the reviewed live-token EEPROM/recovery
 outputs, prove target-media cold readback, grant per-device execution
 authorization, or demonstrate secure-boot enforcement on hardware. Those
 remain prerequisites before any one-time setting may be changed.
+
+For the complete non-production Ubuntu host procedure—new release approval,
+five artifact requests, five artifact signatures, five canonical receipt
+attestations, a minimum of ten live token operations and touches on the
+failure-free path, authenticated receipt export, independent offline
+verification, and exact 18-role assembly—use the
+[Ubuntu development signing ceremony](ubuntu-rpi5-development-signing-ceremony.md).
 
 [owned recovery and RPIBOOT bundle workflow]: raspberry-pi-5-rpiboot-bundles.md

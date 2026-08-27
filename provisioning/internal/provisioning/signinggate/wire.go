@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	WireResponseSchemaV1Alpha2 = "kaiba.provisioning.signing-gate-response/v1alpha2"
+	WireResponseSchemaV1Alpha3 = "kaiba.provisioning.signing-gate-response/v1alpha3"
 	maxWireResponseBytes       = 16 * 1024
 	wireReadTimeout            = 30 * time.Second
 )
@@ -99,7 +99,7 @@ func handleConnection(ctx context.Context, connection deadlineConnection, gate *
 			fmt.Fprintf(errorLog, "read signing client artifact: %v\n", err)
 		}
 		_ = writeWireResponse(connection, WireResponse{
-			SchemaVersion: WireResponseSchemaV1Alpha2,
+			SchemaVersion: WireResponseSchemaV1Alpha3,
 			Status:        "error",
 			ErrorCode:     "invalid_artifact",
 		})
@@ -109,14 +109,14 @@ func handleConnection(ctx context.Context, connection deadlineConnection, gate *
 	if err != nil {
 		fmt.Fprintf(errorLog, "deny signing request for %s: %v\n", bundle.Sum(artifact), err)
 		_ = writeWireResponse(connection, WireResponse{
-			SchemaVersion: WireResponseSchemaV1Alpha2,
+			SchemaVersion: WireResponseSchemaV1Alpha3,
 			Status:        "error",
 			ErrorCode:     "signing_denied",
 		})
 		return
 	}
 	if err := writeWireResponse(connection, WireResponse{
-		SchemaVersion:       WireResponseSchemaV1Alpha2,
+		SchemaVersion:       WireResponseSchemaV1Alpha3,
 		Status:              "ok",
 		SignatureHex:        result.SignatureHex,
 		ReceiptDigest:       result.ReceiptDigest,
@@ -173,7 +173,7 @@ func parseWireResponse(responseBytes []byte) (Result, error) {
 	if err := strictDecode(responseBytes, &response); err != nil {
 		return Result{}, fmt.Errorf("decode signing gate response: %w", err)
 	}
-	if response.SchemaVersion != WireResponseSchemaV1Alpha2 {
+	if response.SchemaVersion != WireResponseSchemaV1Alpha3 {
 		return Result{}, fmt.Errorf("unsupported signing gate response schema_version %q", response.SchemaVersion)
 	}
 	if response.Status == "error" {

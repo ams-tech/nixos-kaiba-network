@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/signing-gate-receipt-verification-v1alpha2.schema.json",
+  "title": "Kaiba signing-gate receipt verification v1alpha2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "export_digest",
+    "registry_digest",
+    "release_intent_digest",
+    "public_key_fingerprint",
+    "receipt_digests"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.signing-gate-receipt-verification/v1alpha2"
+    },
+    "status": { "const": "valid" },
+    "export_digest": { "$ref": "#/$defs/digest" },
+    "registry_digest": { "$ref": "#/$defs/digest" },
+    "release_intent_digest": { "$ref": "#/$defs/digest" },
+    "public_key_fingerprint": { "$ref": "#/$defs/digest" },
+    "receipt_digests": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/digest" }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

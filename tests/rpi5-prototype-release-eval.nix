@@ -11,6 +11,7 @@ let
   );
   metadata = prototype.metadata;
   signingContract = signingProfile.signing.kaibaSigning;
+  signerReview = signingProfile.independentReview;
   planContract = prototype.signingPlan.kaibaBootSigningPlan;
   releaseIntentContract = prototype.releaseIntent.kaibaRpi5ReleaseIntent;
   eepromInputContract = prototype.eepromSigningInputs.kaibaRpi5EEPROMReleaseSigningInputs;
@@ -100,6 +101,18 @@ assert lib.assertMsg (
   && metadata.signerPolicyDigest == signingContract.signerPolicyDigest
 ) "the prototype release metadata is not bound to the repository signing profile";
 assert lib.assertMsg (
+  signingProfile.metadata.independentReviewComplete
+  && !signingProfile.metadata.productionApproved
+  && signerReview.status == "passed"
+  && signerReview.scope == "development-sacrificial-signer"
+  && signerReview.token.serial == signingProfile.metadata.tokenSerial
+  && signerReview.public_bindings.public_key_fingerprint == metadata.publicKeyFingerprint
+  && signerReview.public_bindings.customer_key_hash == "sha256:${metadata.expectedCustomerKeyHash}"
+  && signerReview.public_bindings.signer_policy_digest == metadata.signerPolicyDigest
+  && !signerReview.signing_authorized
+  && !signerReview.production_approved
+) "the development signer review is absent, mismatched, or overclaims authorization";
+assert lib.assertMsg (
   targetPolicy.schema == "provisioning.kaiba.network/target-policy/v1alpha1"
   && targetPolicy.development_posture_id == developmentPosture.posture_id
   && targetPolicy.source_revision == metadata.sourceRevision
@@ -167,14 +180,22 @@ assert lib.assertMsg (
 assert lib.assertMsg (lib.all (value: value == false)
   mutationCapabilities
 ) "the prototype release path gained signing, hardware, mutation, or one-time-setting capability";
-pkgs.runCommand "kaiba-rpi5-prototype-release-evaluation" { } ''
-  mkdir -p "$out"
-  printf '%s\n' \
-    'clean-source-release-identity: pass' \
-    'repository-signing-profile-binding: pass' \
-    'unsigned-target-binding: pass' \
-    'public-signing-plan-binding: pass' \
-    'public-eeprom-signing-plan-binding: pass' \
-    'no-signing-or-mutation-capability: pass' \
-    > "$out/results.txt"
-''
+pkgs.runCommand "kaiba-rpi5-prototype-release-evaluation"
+  { nativeBuildInputs = [ pkgs.check-jsonschema ]; }
+  ''
+    check-jsonschema --check-metaschema \
+      ${../provisioning/schemas/signer-independent-review-v1alpha1.schema.json}
+    check-jsonschema \
+      --schemafile ${../provisioning/schemas/signer-independent-review-v1alpha1.schema.json} \
+      ${signingProfile.independentReviewPath}
+    mkdir -p "$out"
+    printf '%s\n' \
+      'clean-source-release-identity: pass' \
+      'repository-signing-profile-binding: pass' \
+      'independent-development-signer-review: pass' \
+      'unsigned-target-binding: pass' \
+      'public-signing-plan-binding: pass' \
+      'public-eeprom-signing-plan-binding: pass' \
+      'no-signing-or-mutation-capability: pass' \
+      > "$out/results.txt"
+  ''

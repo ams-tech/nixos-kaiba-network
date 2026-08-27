@@ -1,0 +1,47 @@
+{
+  "schema_version": "kaiba.provisioning.rpi5-platform-adapter/v1alpha1",
+  "adapter_id": "platform-adapter:rpi5-prototype-release:1",
+  "adapter_kind": "release-capability-role-descriptor",
+  "device_class": "raspberry-pi-5-model-b-v1alpha1",
+  "host_system": "x86_64-linux",
+  "release_factory": "lib.mkRpi5PrototypeSignedRelease",
+  "command_interfaces": {
+    "boot": "kaiba-provision-sign-boot",
+    "eeprom": "kaiba-provision-sign-eeprom",
+    "finalizer": "kaiba-provision-finalize-release"
+  },
+  "signing_roles": [
+    "rpi5.boot_image",
+    "rpi5.eeprom_bootcode",
+    "rpi5.eeprom_bootsys",
+    "rpi5.eeprom_config",
+    "rpi5.owned_recovery_bootcode"
+  ],
+  "required_output_roles": [
+    "boot_public_key",
+    "device_profile",
+    "platform_adapter",
+    "root_integrity",
+    "rpi5.boot_image",
+    "rpi5.boot_signature",
+    "rpi5.eeprom_bootsys",
+    "rpi5.eeprom_config",
+    "rpi5.fresh_commit_bundle",
+    "rpi5.fresh_readback_bundle",
+    "rpi5.negative_boot_bundle",
+    "rpi5.owned_readback_bundle",
+    "rpi5.owned_recovery_bootcode",
+    "rpi5.owned_recovery_bundle",
+    "rpi5.root_data_image",
+    "rpi5.root_hash_tree_image",
+    "rpi5.root_integrity_test_bundle",
+    "rpi5.signed_eeprom_image"
+  ],
+  "capabilities": {
+    "private_key_access": false,
+    "hardware_access": false,
+    "block_device_write": false,
+    "eeprom_programming": false,
+    "otp_programming": false
+  }
+}

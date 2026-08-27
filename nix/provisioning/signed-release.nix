@@ -43,6 +43,7 @@ let
       deviceProfile,
       platformAdapter,
       rootIntegrity,
+      signingReceiptVerification,
       name ? "kaiba-rpi5-verified-signed-release",
     }:
     assert lib.assertMsg (lib.all storeBacked [
@@ -56,6 +57,12 @@ let
       platformAdapter
       rootIntegrity
     ]) "every signed-release input must be a fixed Nix-store path";
+    assert lib.assertMsg (storeBacked signingReceiptVerification)
+      "signingReceiptVerification must be a fixed Nix-store path";
+    assert lib.assertMsg (
+      builtins.isAttrs signingReceiptVerification
+      && signingReceiptVerification ? kaibaVerifiedSigningReceipts
+    ) "signingReceiptVerification must be produced by mkRpi5VerifiedSigningReceipts";
     assert lib.assertMsg (
       unsignedArtifacts ? kaibaUnsignedArtifacts
     ) "unsignedArtifacts must be produced by mkRpi5SecureBootArtifacts";
@@ -82,6 +89,7 @@ let
       recoveryProvenance = verifiedOwnedRecovery.kaibaVerifiedOwnedRecovery;
       recoveryPlan = recoveryProvenance.signingPlan.kaibaRpi5OwnedRecoverySigningPlan;
       bundleProvenance = verifiedRPIBootBundles.kaibaVerifiedRPIBootBundles;
+      receiptProvenance = signingReceiptVerification.kaibaVerifiedSigningReceipts;
       releaseIntent = bootPlan.releaseIntent;
     in
     assert lib.assertMsg (
@@ -117,58 +125,142 @@ let
         right = verifiedOwnedRecovery;
       }
     ]) "the RPIBOOT bundle set must bind the selected verified component set";
-    pkgs.runCommand name
+    assert lib.assertMsg (
+      receiptProvenance ? verifiedSignedBoot
+      && receiptProvenance ? verifiedSignedEEPROM
+      && receiptProvenance ? verifiedOwnedRecovery
+      && receiptProvenance ? reviewedPublicKeyPEM
+      && receiptProvenance ? releaseIntent
+      && receiptProvenance ? signingGrantRegistry
+      && receiptProvenance ? signingReceiptExport
+      && (receiptProvenance.exactReceiptCount or null) == 5
+      && (receiptProvenance.receiptAttestationRequired or false)
+      &&
+        (receiptProvenance.receiptAttestationSchemaVersion or "")
+        == "kaiba.provisioning.signing-gate-receipt-attestation/v1alpha1"
+      &&
+        (receiptProvenance.schemaVersion or "")
+        == "kaiba.provisioning.signing-gate-receipt-verification/v1alpha2"
+      && (receiptProvenance.verificationMode or "") == "authenticated_offline"
+      && (receiptProvenance.privateKeyAccess or null) == false
+      && (receiptProvenance.signingAuthorityConfigured or null) == false
+    ) "signingReceiptVerification has incomplete or unsafe verification provenance";
+    assert lib.assertMsg (lib.all (pair: toString pair.left == toString pair.right) [
       {
-        # Keep raw store paths (not only derivation outputs) in the closure.
-        # Interpolating an escaped `toString` below can otherwise discard the
-        # string context of a source-tree file such as the device profile.
-        deviceProfileInput = deviceProfile;
-        nativeBuildInputs = [
-          pkgs.diffutils
-          pkgs.findutils
-        ];
-        passthru.kaibaVerifiedSignedRelease = {
-          inherit
-            deviceProfile
-            eepromRelease
-            platformAdapter
-            releaseIntent
-            rootIntegrity
-            unsignedArtifacts
-            verifiedOwnedRecovery
-            verifiedRPIBootBundles
-            verifiedSignedBoot
-            verifiedSignedEEPROM
-            ;
-          artifactRoleCount = 18;
-          blockDeviceWriteCapable = false;
-          contentAddressedPublication = true;
-          deterministicEEPROMReplayRequired = true;
-          deterministicOwnedRecoveryReplayRequired = true;
-          directHardwareAccess = false;
-          eepromProgrammingCapable = false;
-          fixtureHardwareObserved = false;
-          mutationCapable = false;
-          oneTimeSettingCapable = false;
-          otpCapable = false;
-          privateKeyAccess = false;
-          publicationSchemaVersion = "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1";
-          signedReleaseManifestSchemaVersion = "kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2";
-          signingAuthorityConfigured = false;
-          verificationMode = "pure_offline_replay";
-        };
-        meta = {
-          description = "Verified content-addressed Raspberry Pi 5 signed-release publication";
-          platforms = [
-            "x86_64-linux"
-            "aarch64-linux"
-          ];
-        };
+        left = receiptProvenance.verifiedSignedBoot;
+        right = verifiedSignedBoot;
       }
+      {
+        left = receiptProvenance.verifiedSignedEEPROM;
+        right = verifiedSignedEEPROM;
+      }
+      {
+        left = receiptProvenance.verifiedOwnedRecovery;
+        right = verifiedOwnedRecovery;
+      }
+      {
+        left = receiptProvenance.reviewedPublicKeyPEM;
+        right = bootPlan.reviewedPublicKeyPEM;
+      }
+      {
+        left = receiptProvenance.releaseIntent;
+        right = releaseIntent;
+      }
+    ]) "signingReceiptVerification must authenticate the selected release component lineage";
+    assert lib.assertMsg (lib.all storeBacked [
+      receiptProvenance.signingGrantRegistry
+      receiptProvenance.signingReceiptExport
+    ]) "signingReceiptVerification trust anchors must be fixed Nix-store paths";
+    pkgs.runCommand name
+      (
+        {
+          # Keep raw store paths (not only derivation outputs) in the closure.
+          # Interpolating an escaped `toString` below can otherwise discard the
+          # string context of a source-tree file such as the device profile.
+          deviceProfileInput = deviceProfile;
+          nativeBuildInputs = [
+            pkgs.diffutils
+            pkgs.findutils
+            pkgs.jq
+            pkgs.check-jsonschema
+          ];
+          passthru.kaibaVerifiedSignedRelease = {
+            inherit
+              deviceProfile
+              eepromRelease
+              platformAdapter
+              releaseIntent
+              rootIntegrity
+              signingReceiptVerification
+              unsignedArtifacts
+              verifiedOwnedRecovery
+              verifiedRPIBootBundles
+              verifiedSignedBoot
+              verifiedSignedEEPROM
+              ;
+            artifactRoleCount = 18;
+            authenticatedSigningReceiptCount = 5;
+            blockDeviceWriteCapable = false;
+            contentAddressedPublication = true;
+            deterministicEEPROMReplayRequired = true;
+            deterministicOwnedRecoveryReplayRequired = true;
+            directHardwareAccess = false;
+            eepromProgrammingCapable = false;
+            fixtureHardwareObserved = false;
+            mutationCapable = false;
+            oneTimeSettingCapable = false;
+            otpCapable = false;
+            privateKeyAccess = false;
+            publicationSchemaVersion = "kaiba.provisioning.rpi5-signed-release-publication/v1alpha1";
+            signedReleaseManifestSchemaVersion = "kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2";
+            signingAuthorityConfigured = false;
+            verificationMode = "pure_offline_replay";
+          };
+          meta = {
+            description = "Verified content-addressed Raspberry Pi 5 signed-release publication";
+            platforms = [
+              "x86_64-linux"
+              "aarch64-linux"
+            ];
+          };
+        }
+        // {
+          signingReceiptVerificationInput = signingReceiptVerification;
+        }
+      )
       ''
         set -euo pipefail
         export LC_ALL=C
         umask 022
+
+        test -f "$signingReceiptVerificationInput"
+        test ! -L "$signingReceiptVerificationInput"
+        check-jsonschema \
+          --schemafile ${../../provisioning/schemas/signing-gate-receipt-verification-v1alpha2.schema.json} \
+          "$signingReceiptVerificationInput"
+        jq -e \
+          --arg release_intent_digest "$(jq -r .release_intent_digest \
+            ${lib.escapeShellArg "${toString verifiedSignedBoot}/signing-result.json"})" \
+          --arg public_key_fingerprint "$(jq -r .public_key_fingerprint \
+            ${lib.escapeShellArg "${toString releaseIntent}/release-intent.json"})" \
+          --arg boot_receipt_digest "$(jq -r .gate_receipt_digest \
+            ${lib.escapeShellArg "${toString verifiedSignedBoot}/signing-result.json"})" \
+          --argjson eeprom_receipt_digests "$(jq -c \
+            '[.signatures[].gate_receipt_digest]' \
+            ${lib.escapeShellArg "${toString verifiedSignedEEPROM}/result.json"})" \
+          --arg owned_recovery_receipt_digest "$(jq -r .signature.gate_receipt_digest \
+            ${lib.escapeShellArg "${toString verifiedOwnedRecovery}/result.json"})" \
+          '
+            .release_intent_digest == $release_intent_digest
+            and .public_key_fingerprint == $public_key_fingerprint
+            and (.receipt_digests | length == 5)
+            and ((.receipt_digests | sort) == (
+              ([$boot_receipt_digest]
+                + $eeprom_receipt_digests
+                + [$owned_recovery_receipt_digest])
+              | sort
+            ))
+          ' "$signingReceiptVerificationInput" > /dev/null
 
         ${signedReleaseTool}/bin/kaiba-provision-finalize-release finalize \
           --release-intent ${lib.escapeShellArg "${toString releaseIntent}/release-intent.json"} \

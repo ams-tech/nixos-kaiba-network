@@ -19,10 +19,38 @@
         "evidence": []
       },
       {
+        "id": "development-signer-independent-review",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "The checked-in independent-review record binds the non-production sacrificial-development signer to the reviewed repository revision, vendor certificate-chain evidence digests, token and slot policy, reviewed public key, customer-key hash, and signer policy. The record explicitly grants neither signing authorization nor production approval. This is a software-only validation of retained evidence; it performs no live token or hardware access and makes no production-readiness claim.",
+        "evidence": []
+      },
+      {
         "id": "go-tests",
         "system": "aarch64-linux",
         "status": "not-observed",
         "description": "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.",
+        "evidence": []
+      },
+      {
+        "id": "exact-release-signing-authorization",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Software-only tests author and validate a reviewer-attributed, time-, expiry-, and exact-release-intent-bound approval with a domain-separated digest, then deterministically derive exactly the five reviewed role-and-artifact grants without caller-selected signing inputs. Reviewer identity and handoff are procedural and not cryptographically authenticated; signing-host root remains trusted, so this is not production separation-of-duties enforcement. The tests exercise no live token, signing service, or hardware; the authorization is release-specific and does not approve production devices or production policy.",
+        "evidence": []
+      },
+      {
+        "id": "authenticated-signing-receipts",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Software-only tests export the signing gate's complete durable receipt snapshot and independently verify every artifact RSA signature plus a domain-separated canonical receipt-attestation signature binding the full grant and request, request digest, backend identity, artifact signature and digest, and gate-clock signed_at value. Verification also requires the exact reviewed registry, separately captured receipt digests, reviewed public key, and grant expiry. The signed_at field is authenticated gate metadata, not an external trusted timestamp. These tests use synthetic cryptographic fixtures only, perform no live token or hardware operation, and make no production-signing or production-readiness claim.",
+        "evidence": []
+      },
+      {
+        "id": "ubuntu-signing-gate-deployment",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Software-only Ubuntu 24.04 deployment tests validate the inert installer, fixed service identity and authority, restrictive systemd, polkit, tmpfiles, state, socket, registry, and root-only tmpfs PIN-source boundaries, plus fail-closed static preflight behavior. They do not install or start a live service, read a PIN, enumerate or use a token, access hardware, or sign an artifact; this deployment remains limited to the non-production sacrificial-development ceremony.",
         "evidence": []
       },
       {
@@ -138,10 +166,38 @@
         "evidence": []
       },
       {
+        "id": "development-signer-independent-review",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "The checked-in independent-review record binds the non-production sacrificial-development signer to the reviewed repository revision, vendor certificate-chain evidence digests, token and slot policy, reviewed public key, customer-key hash, and signer policy. The record explicitly grants neither signing authorization nor production approval. This is a software-only validation of retained evidence; it performs no live token or hardware access and makes no production-readiness claim.",
+        "evidence": []
+      },
+      {
         "id": "go-tests",
         "system": "x86_64-linux",
         "status": "passed",
         "description": "Go package tests covering the provisioning profile, adapter, live acquisition, and CLI behavior.",
+        "evidence": []
+      },
+      {
+        "id": "exact-release-signing-authorization",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Software-only tests author and validate a reviewer-attributed, time-, expiry-, and exact-release-intent-bound approval with a domain-separated digest, then deterministically derive exactly the five reviewed role-and-artifact grants without caller-selected signing inputs. Reviewer identity and handoff are procedural and not cryptographically authenticated; signing-host root remains trusted, so this is not production separation-of-duties enforcement. The tests exercise no live token, signing service, or hardware; the authorization is release-specific and does not approve production devices or production policy.",
+        "evidence": []
+      },
+      {
+        "id": "authenticated-signing-receipts",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Software-only tests export the signing gate's complete durable receipt snapshot and independently verify every artifact RSA signature plus a domain-separated canonical receipt-attestation signature binding the full grant and request, request digest, backend identity, artifact signature and digest, and gate-clock signed_at value. Verification also requires the exact reviewed registry, separately captured receipt digests, reviewed public key, and grant expiry. The signed_at field is authenticated gate metadata, not an external trusted timestamp. These tests use synthetic cryptographic fixtures only, perform no live token or hardware operation, and make no production-signing or production-readiness claim.",
+        "evidence": []
+      },
+      {
+        "id": "ubuntu-signing-gate-deployment",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Software-only Ubuntu 24.04 deployment tests validate the inert installer, fixed service identity and authority, restrictive systemd, polkit, tmpfiles, state, socket, registry, and root-only tmpfs PIN-source boundaries, plus fail-closed static preflight behavior. They do not install or start a live service, read a PIN, enumerate or use a token, access hardware, or sign an artifact; this deployment remains limited to the non-production sacrificial-development ceremony.",
         "evidence": []
       },
       {

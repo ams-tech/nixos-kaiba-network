@@ -25,11 +25,8 @@ serial. That identifier grants no token access, but it can be used to correlate
 the physical development token with this repository.
 
 The 2026-08-19 dry-run ceremony verified the Yubico attestation chain and
-matched the attested public key to this PEM. The attestation certificates and
-vendor CA bundles remain in the access-controlled ceremony archive because
-they are not build inputs and contain uniquely identifying hardware metadata.
-This historical attestation is not proof of current token custody or presence.
-The external evidence archive is bound by these SHA-256 file digests:
+matched the attested public key to this PEM. Its external evidence archive is
+bound by these historical SHA-256 file digests:
 
 - leaf slot attestation:
   `c7fb478ed8d19912d7a26a6865307e8b0abac4729a2610db07cbffeec92de856`;
@@ -40,11 +37,22 @@ The external evidence archive is bound by these SHA-256 file digests:
 - downloaded Yubico intermediate bundle:
   `ec0172fe38838e3de174aae4e058bb44920be47cebd8d658a0fba1634b82aee1`.
 
-The initial dry run was a single-operator review. It does not satisfy the
-independent-review requirement for production or authorize one-time Pi
-settings. PIN, PUK, management-key material, systemd credentials, signing
-grants, private-key material, derived policy files, and derived Raspberry Pi
-key binaries must never be added here.
+On 2026-08-27, a second review from a fresh checkout under a separate
+unprivileged account independently rebuilt the exact `v0.1.3` public release,
+verified a fresh slot attestation through the current Yubico chain, decoded
+the token serial, firmware and usage-policy extensions, and byte-compared its
+RSA-2048 SPKI with this PEM. The reusable signer-review result is recorded in
+`independent-review-2026-08-27.json`; its evidence packet remains in the
+external access-controlled archive. A fresh attestation has a different certificate
+serial and therefore a different whole-file digest from the historical leaf.
+
+This completes independent review only for the sacrificial development
+signer. Every public release, including any release after `v0.1.3`, still
+requires a separate exact release approval and grants. This record does not
+approve the signer for production, issue a signing grant, prove current token custody or presence,
+or authorize any Pi, media, EEPROM, or OTP mutation. PIN, PUK, management-key
+material, systemd credentials, signing grants, private-key material, derived
+policy files, and derived Raspberry Pi key binaries must never be added here.
 
 Build the public-only contracts from the repository root:
 

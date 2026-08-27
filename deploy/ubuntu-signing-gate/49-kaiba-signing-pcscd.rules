@@ -1,0 +1,9 @@
+// Allow only the dedicated signing-gate identity to use pcscd from a
+// non-console systemd service. Upstream local-console policy remains separate.
+polkit.addRule(function(action, subject) {
+    if (subject.user === "kaiba-signing" &&
+        (action.id === "org.debian.pcsc-lite.access_pcsc" ||
+         action.id === "org.debian.pcsc-lite.access_card")) {
+        return polkit.Result.YES;
+    }
+});

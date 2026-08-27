@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-platform-adapter-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 release platform adapter",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "adapter_id",
+    "adapter_kind",
+    "device_class",
+    "host_system",
+    "release_factory",
+    "command_interfaces",
+    "signing_roles",
+    "required_output_roles",
+    "capabilities"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-platform-adapter/v1alpha1"
+    },
+    "adapter_id": {
+      "const": "platform-adapter:rpi5-prototype-release:1"
+    },
+    "adapter_kind": {
+      "const": "release-capability-role-descriptor"
+    },
+    "device_class": {
+      "const": "raspberry-pi-5-model-b-v1alpha1"
+    },
+    "host_system": {
+      "const": "x86_64-linux"
+    },
+    "release_factory": {
+      "const": "lib.mkRpi5PrototypeSignedRelease"
+    },
+    "command_interfaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boot", "eeprom", "finalizer"],
+      "properties": {
+        "boot": { "const": "kaiba-provision-sign-boot" },
+        "eeprom": { "const": "kaiba-provision-sign-eeprom" },
+        "finalizer": { "const": "kaiba-provision-finalize-release" }
+      }
+    },
+    "signing_roles": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "rpi5.boot_image" },
+        { "const": "rpi5.eeprom_bootcode" },
+        { "const": "rpi5.eeprom_bootsys" },
+        { "const": "rpi5.eeprom_config" },
+        { "const": "rpi5.owned_recovery_bootcode" }
+      ],
+      "items": false,
+      "minItems": 5,
+      "maxItems": 5
+    },
+    "required_output_roles": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "boot_public_key" },
+        { "const": "device_profile" },
+        { "const": "platform_adapter" },
+        { "const": "root_integrity" },
+        { "const": "rpi5.boot_image" },
+        { "const": "rpi5.boot_signature" },
+        { "const": "rpi5.eeprom_bootsys" },
+        { "const": "rpi5.eeprom_config" },
+        { "const": "rpi5.fresh_commit_bundle" },
+        { "const": "rpi5.fresh_readback_bundle" },
+        { "const": "rpi5.negative_boot_bundle" },
+        { "const": "rpi5.owned_readback_bundle" },
+        { "const": "rpi5.owned_recovery_bootcode" },
+        { "const": "rpi5.owned_recovery_bundle" },
+        { "const": "rpi5.root_data_image" },
+        { "const": "rpi5.root_hash_tree_image" },
+        { "const": "rpi5.root_integrity_test_bundle" },
+        { "const": "rpi5.signed_eeprom_image" }
+      ],
+      "items": false,
+      "minItems": 18,
+      "maxItems": 18
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "private_key_access",
+        "hardware_access",
+        "block_device_write",
+        "eeprom_programming",
+        "otp_programming"
+      ],
+      "properties": {
+        "private_key_access": { "const": false },
+        "hardware_access": { "const": false },
+        "block_device_write": { "const": false },
+        "eeprom_programming": { "const": false },
+        "otp_programming": { "const": false }
+      }
+    }
+  }
+}
