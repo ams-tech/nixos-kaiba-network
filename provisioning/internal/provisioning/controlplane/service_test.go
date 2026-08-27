@@ -645,6 +645,118 @@ func TestApprovalPreflightIsReadOnlyAndAcceptsOnlyExactStateOrReplay(t *testing.
 	}
 }
 
+func TestInitialApprovalReplaySurvivesClaimAndApprovalExpiry(t *testing.T) {
+	store := &MemoryStore{}
+	fixture := newTestFixture(t, store)
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBind(operations)
+	record := fixture.approvalRequest(transaction, operations, "approval-expired-replay")
+	preflight := fixture.approvalPreflight(transaction, record)
+
+	approved, err := fixture.service.RecordApproval(context.Background(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.now = approved.Approval.ExpiresAt.Add(time.Second)
+	if approved.ActiveClaim.ExpiresAt.After(fixture.now) || approved.Approval.ExpiresAt.After(fixture.now) {
+		t.Fatal("test clock did not pass both claim and approval expiry")
+	}
+
+	checked, err := fixture.service.PreflightApproval(context.Background(), preflight)
+	if err != nil {
+		t.Fatalf("preflight exact committed replay after expiry: %v", err)
+	}
+	replayed, err := fixture.service.RecordApproval(context.Background(), record)
+	if err != nil {
+		t.Fatalf("record exact committed replay after expiry: %v", err)
+	}
+	changedPreflight := preflight
+	changedPreflight.PlanDigest = digest("f")
+	if _, err := fixture.service.PreflightApproval(context.Background(), changedPreflight); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed expired preflight replay error = %v, want ErrConflict", err)
+	}
+	changedRecord := record
+	changedRecord.ApprovalID = "approval-changed-replay"
+	if _, err := fixture.service.RecordApproval(context.Background(), changedRecord); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("changed expired record replay error = %v, want ErrIdempotencyConflict", err)
+	}
+	if checked.ResourceVersion != approved.ResourceVersion || replayed.ResourceVersion != approved.ResourceVersion ||
+		checked.Approval == nil || replayed.Approval == nil || checked.Approval.ID != record.ApprovalID ||
+		replayed.Approval.ID != record.ApprovalID {
+		t.Fatalf("expired exact approval replay changed the committed result: preflight=%#v record=%#v", checked, replayed)
+	}
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("expired exact approval replay changed durable bytes")
+	}
+}
+
+func TestExpiredTargetBoundApprovalAttemptsAreReadOnly(t *testing.T) {
+	store := &MemoryStore{}
+	fixture := newTestFixture(t, store)
+	operations := developmentCampaignNames()
+	transaction := fixture.createClaimBind(operations)
+	auditOnlyRecord := fixture.approvalRequest(transaction, operations, "approval-audit-only")
+	auditOnlyPreflight := fixture.approvalPreflight(transaction, auditOnlyRecord)
+	if _, err := fixture.service.PreflightApproval(context.Background(), auditOnlyPreflight); err != nil {
+		t.Fatalf("initial audit-only preflight: %v", err)
+	}
+
+	fixture.now = auditOnlyRecord.ExpiresAt.Add(time.Second)
+	if transaction.ActiveClaim.ExpiresAt.After(fixture.now) {
+		t.Fatal("test clock did not pass claim expiry")
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := fixture.service.PreflightApproval(context.Background(), auditOnlyPreflight); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expired audit-only preflight error = %v, want ErrInvalid", err)
+	}
+	if _, err := fixture.service.RecordApproval(context.Background(), auditOnlyRecord); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expired audit-only control apply error = %v, want ErrInvalid", err)
+	}
+
+	freshRecord := fixture.approvalRequest(transaction, operations, "approval-after-claim-expiry")
+	freshPreflight := fixture.approvalPreflight(transaction, freshRecord)
+	if _, err := fixture.service.PreflightApproval(context.Background(), freshPreflight); !errors.Is(err, ErrLeaseExpired) {
+		t.Fatalf("new preflight under expired claim error = %v, want ErrLeaseExpired", err)
+	}
+	if _, err := fixture.service.RecordApproval(context.Background(), freshRecord); !errors.Is(err, ErrLeaseExpired) {
+		t.Fatalf("new control apply under expired claim error = %v, want ErrLeaseExpired", err)
+	}
+
+	tooLong := freshRecord
+	tooLong.IdempotencyKey = "record-approval-too-long"
+	tooLong.ExpiresAt = fixture.now.Add(maximumApprovalLifetime + time.Nanosecond)
+	if _, err := fixture.service.RecordApproval(context.Background(), tooLong); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("overlong approval error = %v, want ErrInvalid", err)
+	}
+
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("rejected target-bound approval attempts changed durable bytes")
+	}
+	persisted, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ResourceVersion != transaction.ResourceVersion || persisted.Status != StatusTargetBound || persisted.Approval != nil {
+		t.Fatalf("rejected target-bound approval attempts changed transaction: %#v", persisted)
+	}
+}
+
 func TestApprovalPreflightAllowsOnlyBoundedFutureClockSkew(t *testing.T) {
 	fixture := newTestFixture(t, &MemoryStore{})
 	operations := developmentCampaignNames()

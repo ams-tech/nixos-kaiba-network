@@ -1445,9 +1445,9 @@ func TestApprovalReplayCannotChangeAuditedProposalTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantVersion := transaction.ResourceVersion
-	fixture.now = fixture.now.Add(time.Second)
+	*fixture.clock = transaction.ActiveClaim.ExpiresAt.Add(time.Second)
 	changed := proposal
-	changed.EventTime = fixture.now
+	changed.EventTime = proposal.EventTime.Add(time.Second)
 	if _, err := ApplyApproval(context.Background(), changed, fixture.control, fixture.audit, fixture.control); err == nil {
 		t.Fatal("approval replay changed its audited event time")
 	}
@@ -1457,6 +1457,73 @@ func TestApprovalReplayCannotChangeAuditedProposalTime(t *testing.T) {
 	}
 	if persisted.ResourceVersion != wantVersion || len(fixture.audit.service.Records(transaction.ID)) != 1 {
 		t.Fatal("changed approval replay mutated control or appended another audit event")
+	}
+}
+
+func TestExactCommittedApprovalReplaySurvivesClaimAndApprovalExpiry(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := NewApprovalProposal(snapshot, transaction, "approver-1", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = ApplyApproval(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantVersion := transaction.ResourceVersion
+	wantApproval := *transaction.Approval
+	*fixture.clock = transaction.ActiveClaim.ExpiresAt.Add(time.Second)
+	if !fixture.clock.After(transaction.Approval.ExpiresAt) {
+		t.Fatal("test clock did not pass both claim and approval expiry")
+	}
+
+	replayed, err := ApplyApproval(context.Background(), proposal, fixture.control, fixture.audit, fixture.control)
+	if err != nil {
+		t.Fatalf("exact committed approval replay after expiry: %v", err)
+	}
+	if replayed.ResourceVersion != wantVersion || replayed.Approval == nil ||
+		!reflect.DeepEqual(*replayed.Approval, wantApproval) || len(fixture.audit.service.Records(transaction.ID)) != 1 {
+		t.Fatalf("post-expiry approval replay changed durable state: %#v", replayed)
+	}
+}
+
+func TestAuditOnlyApprovalCannotCommitAfterServerExpiry(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	snapshot, transaction, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := NewApprovalProposal(snapshot, transaction, "approver-1", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditRequest, _, err := proposal.requests(validPlaceholderDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.audit.Append(context.Background(), auditRequest); err != nil {
+		t.Fatal(err)
+	}
+	wantVersion := transaction.ResourceVersion
+	*fixture.clock = snapshot.ApprovalExpiresAt
+	if !transaction.ActiveClaim.ExpiresAt.After(*fixture.clock) {
+		t.Fatal("test claim did not remain live at approval expiry")
+	}
+
+	if _, err := ApplyApproval(context.Background(), proposal, fixture.control, fixture.audit, fixture.control); err == nil {
+		t.Fatal("audit-only approval committed after its server-time expiry")
+	}
+	persisted, err := fixture.control.GetTransaction(context.Background(), transaction.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ResourceVersion != wantVersion || persisted.Status != controlplane.StatusTargetBound || persisted.Approval != nil ||
+		len(fixture.audit.service.Records(transaction.ID)) != 1 || len(fixture.audit.receipts) != 1 {
+		t.Fatalf("expired audit-only approval changed state: %#v", persisted)
 	}
 }
 

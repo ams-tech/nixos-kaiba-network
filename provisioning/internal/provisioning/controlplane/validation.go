@@ -147,7 +147,7 @@ func validateBindTargetRequest(request BindTargetRequest) error {
 	return nil
 }
 
-func validateRecordApprovalRequest(request RecordApprovalRequest, now time.Time) error {
+func validateRecordApprovalRequest(request RecordApprovalRequest) error {
 	if err := validateEnvelope(request.SchemaVersion, RecordApprovalRequestSchemaVersion, request.IdempotencyKey); err != nil {
 		return err
 	}
@@ -171,13 +171,13 @@ func validateRecordApprovalRequest(request RecordApprovalRequest, now time.Time)
 	if err := validateDevelopmentOperationNames(request.AllowedOperations); err != nil {
 		return invalid("allowed_operations: " + err.Error())
 	}
-	if !request.ExpiresAt.After(now) || request.ExpiresAt.After(now.Add(maximumApprovalLifetime)) {
-		return invalid("approval expiry must be in the future and no more than 24 hours away")
+	if request.ExpiresAt.IsZero() {
+		return invalid("approval expiry must be non-zero")
 	}
 	return nil
 }
 
-func validateApprovalPreflightRequest(request ApprovalPreflightRequest, now time.Time) error {
+func validateApprovalPreflightRequest(request ApprovalPreflightRequest) error {
 	if request.SchemaVersion != ApprovalPreflightRequestSchemaVersion {
 		return invalid("schema_version is unsupported")
 	}
@@ -202,17 +202,29 @@ func validateApprovalPreflightRequest(request ApprovalPreflightRequest, now time
 	if err := validateDevelopmentOperationNames(request.AllowedOperations); err != nil {
 		return invalid("allowed_operations: " + err.Error())
 	}
-	return validateApprovalTimes(request.ApprovedAt, request.ExpiresAt, now)
+	return validateApprovalTimeShape(request.ApprovedAt, request.ExpiresAt)
 }
 
-func validateApprovalTimes(approvedAt, expiresAt, now time.Time) error {
-	if approvedAt.IsZero() || approvedAt.After(now.Add(maximumApprovalClockSkew)) {
-		return invalid("approved_at must be non-zero and no more than one minute in the future")
+func validateApprovalTimeShape(approvedAt, expiresAt time.Time) error {
+	if approvedAt.IsZero() {
+		return invalid("approved_at must be non-zero")
 	}
-	if !expiresAt.After(now) || !expiresAt.After(approvedAt) ||
-		expiresAt.After(approvedAt.Add(maximumApprovalLifetime)) ||
-		expiresAt.After(now.Add(maximumApprovalLifetime)) {
-		return invalid("approval expiry must be in the future and no more than 24 hours after approval")
+	if !expiresAt.After(approvedAt) || expiresAt.After(approvedAt.Add(maximumApprovalLifetime)) {
+		return invalid("approval expiry must be after approval and no more than 24 hours later")
+	}
+	return nil
+}
+
+func validateCurrentApprovalPreflightTimes(approvedAt, expiresAt, now time.Time) error {
+	if approvedAt.After(now.Add(maximumApprovalClockSkew)) {
+		return invalid("approved_at must be no more than one minute in the future")
+	}
+	return validateCurrentApprovalExpiry(expiresAt, now)
+}
+
+func validateCurrentApprovalExpiry(expiresAt, now time.Time) error {
+	if !expiresAt.After(now) || expiresAt.After(now.Add(maximumApprovalLifetime)) {
+		return invalid("approval expiry must be in the future and no more than 24 hours away")
 	}
 	return nil
 }
