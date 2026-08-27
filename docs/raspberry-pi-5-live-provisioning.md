@@ -340,18 +340,19 @@ plan and attempt from that snapshot plus its durable approval and intent audit
 receipts. A fresh, short-lived reconciliation claim authorizes observation
 only; it cannot be converted into an execute request and the lane guard never
 redispatches the operation. Exact owned state becomes confirmed-applied; the
-exact original fresh prestate becomes terminal confirmed-not-applied. Neither
-outcome authorizes replay of the old request, and current policy refuses a new
-mutation claim after confirmed-not-applied until a separate retry protocol is
-reviewed. The combined authenticated restart test exercises both outcomes
-through reopened control, audit, and dedicated v1alpha1 attempt-journal stores
-and the real physical adapter with only target-facing I/O simulated. The
+exact original fresh prestate becomes confirmed-not-applied. Both are terminal
+stops in the current development workflow: neither authorizes replay of the old
+request, another mutation claim, or campaign finalization. The combined
+authenticated restart test exercises both outcomes
+through reopened control, audit, and current
+`lane-guard-attempt-store/v1alpha3` journals containing
+`lane-guard-attempt/v1alpha2` attempts and durable boot-transition records. It
+uses the real physical adapter with only target-facing I/O simulated. The
 current plan contract is `lane-guard/v1alpha4`; old plans, approvals, intents,
-requests, and attempt records bound to `v1alpha3` digests are not reusable.
-Prior shared `lane-guard/v1alpha3` journal envelopes are not auto-migrated.
-This remains software-only evidence: uncertain live mutation recovery still
-requires the documented sacrificial-hardware qualification before production
-use.
+requests, and attempts bound to older digests are not reusable. This remains
+software-only evidence: uncertain live mutation recovery still requires the
+documented sacrificial-hardware qualification and makes no live enforcement
+claim.
 
 The live station uses the following order for every irreversible operation:
 
@@ -367,6 +368,739 @@ validate exact preconditions
 An unknown result transitions to `reconciliation_required`. It never retries
 the operation. A changed target, stale epoch, missing approval, audit outage,
 or unverifiable owned state results in quarantine.
+
+### Nix one-shot and authenticated manual boot selection
+
+The `provisioning-lane-guard` NixOS module fixes the station, lane, USB sysfs,
+UART, GPIO, journal, draft, bridge-socket, operator-socket, attempt-directory,
+and execute-or-reconcile mode in one root `Type=oneshot` unit. Mutation remains
+off unless `enableMutations = true`, and the unit has no automatic start target.
+The module installs only its fixed, no-argument
+`kaiba-provision-lane-acknowledge` wrapper, creates
+`kaiba-provision-operator`, and adds only the configured `operators` to that
+group. The constrained underlying `operatorPackage` is not a separate
+selector-bearing entry point in `PATH`. Deploy `kaiba-provision-lane-workflow`
+separately for the station and approver authority sessions.
+
+Install that workflow package declaratively on both authority-session hosts
+from one shared, committed deployment flake and `flake.lock`. For example, the
+same deployment repository can add this input and shared module to its existing
+station and approver configurations:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    kaibaProvisioning.url = "github:ams-tech/nixos-kaiba-network";
+  };
+
+  outputs =
+    { nixpkgs, kaibaProvisioning, ... }:
+    let
+      installLaneWorkflow =
+        { pkgs, ... }:
+        {
+          environment.systemPackages = [
+            kaibaProvisioning.packages.${pkgs.stdenv.hostPlatform.system}.kaiba-provision-lane-workflow
+            pkgs.coreutils
+            pkgs.gawk
+            pkgs.git
+            pkgs.gnugrep
+            pkgs.jq
+            pkgs.openssh
+          ];
+        };
+    in
+    {
+      nixosConfigurations.kaiba-provisioning-station = nixpkgs.lib.nixosSystem {
+        system = "aarch64-linux";
+        modules = [
+          kaibaProvisioning.nixosModules.provisioning-lane-guard
+          installLaneWorkflow
+          ./station.nix
+        ];
+      };
+
+      nixosConfigurations.kaiba-provisioning-approver = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          installLaneWorkflow
+          ./approver.nix
+        ];
+      };
+    };
+}
+```
+
+Resolve and review the lock once, commit it, and deploy both hosts from that
+same commit. On the corresponding hosts, the concrete deployment commands are:
+
+```bash
+nix flake lock
+
+PINNED_KAIBA_REV="$(
+  nix flake metadata --json \
+    | jq -er '.locks.nodes.kaibaProvisioning.locked.rev | select(test("^[0-9a-f]{40}$"))'
+)"
+printf 'kaiba provisioning revision: %s\n' "$PINNED_KAIBA_REV"
+
+# On the station, from this exact committed deployment checkout:
+sudo nixos-rebuild switch --flake .#kaiba-provisioning-station
+
+# On the approver, from the identical commit and flake.lock:
+sudo nixos-rebuild switch --flake .#kaiba-provisioning-approver
+```
+
+On both hosts, require
+`/run/current-system/sw/bin/kaiba-provision-lane-workflow`. On the station,
+also require `/run/wrappers/bin/kaiba-provision-lane-acknowledge` and verify
+that `kaiba-provision-lane-operator` is not separately in `PATH`. The lane-guard
+module still contributes only the fixed acknowledgement wrapper to the
+operator command surface; `environment.systemPackages` above is the separate,
+explicit installation of the non-hardware workflow client used by the
+transcript below.
+
+Before each target-facing phase, the guard proves relay release and USB
+absence, persists the transition and prompt, and observes the minimum cold
+interval. For RPIBOOT it asks the operator to hold BOOTSEL before power, proves
+exactly one BCM2712 at the fixed sysfs path, persists that observation, then
+issues a separate release prompt. For normal boot it asks the operator to leave
+BOOTSEL untouched and requires bounded UART evidence while continuously
+rejecting RPIBOOT enumeration. Completion persists mode evidence and a final
+safe-off observation. Interruption is recovered as safe-off or permanently
+quarantined when safe-off cannot be proved. These are implemented software
+properties with simulated test coverage, not live qualification.
+
+The prompt socket authenticates the connecting process's **primary** GID.
+Supplementary membership alone is insufficient, so invoke the module wrapper
+once for each displayed prompt; it performs the fixed primary-group transition
+and supplies the fixed socket internally:
+
+```console
+kaiba-provision-lane-acknowledge
+```
+
+Read the complete displayed station, lane, transaction, operation, sequence,
+phase, mode, instructions, prompt ID, digest, and expiry; perform only those
+instructions; then type the exact generated confirmation phrase. Run the same
+command again when a later prompt becomes active. The wrapper accepts no
+arguments, and the client has no target, operation, boot-mode, GPIO, UART, USB,
+payload, or mutation selector.
+
+### Exact reviewed authority and one-shot sequence
+
+This transcript documents the implemented interface; it does **not** authorize
+a live mutation. Use it only after the remaining pre-SB-08 gates below pass.
+The released hardware-qualification image is deliberately non-administrative:
+it has no `sudo` and is not this mutation-capable deployment. In the commands
+below, `sudo` denotes an approved administrative/root session on a separately
+reviewed live-lane NixOS deployment; the transcript will not work on the
+existing qualification image.
+All JSON input and output paths must be clean and absolute. Every output path,
+including the installed draft, must be new. The certificate, private-key, and
+CA paths must be absolute, outside `/nix/store`, and accessible only to the
+appropriate named session. The variables below contain paths, not secret
+contents. Run the first block in the station session:
+
+```bash
+set -euo pipefail
+umask 077
+RUN_DIR=/absolute/private/review-directory/transaction-id
+DRAFT_INPUT="$RUN_DIR/draft-input.json"
+DRAFT="$RUN_DIR/draft.json"
+DRAFT_DEST=/var/lib/kaiba-provision-lane-guard/draft.json
+APPROVER_SSH=provision-reviewer@approver.example
+APPROVER_RUN_DIR=/absolute/private/approver-review-directory/transaction-id
+APPROVER_APPROVAL_PROPOSAL="$APPROVER_RUN_DIR/approval.json"
+
+test ! -e "$RUN_DIR"
+install -d -m 0700 -- "$RUN_DIR"
+
+CONTROL_URL=https://control.example:8443
+AUDIT_URL=https://audit.example:8443
+CONTROL_CA=/absolute/path/control-server-ca.pem
+AUDIT_CA=/absolute/path/audit-server-ca.pem
+STATION_CERT=/absolute/path/station-client-cert.pem
+STATION_KEY=/absolute/path/station-client-key.pem
+APPROVER_ID=development-approver
+
+station_control=(
+  --control-url "$CONTROL_URL"
+  --tls-cert "$STATION_CERT"
+  --tls-key "$STATION_KEY"
+  --control-server-ca "$CONTROL_CA"
+)
+station_authorities=(
+  "${station_control[@]}"
+  --audit-url "$AUDIT_URL"
+  --audit-server-ca "$AUDIT_CA"
+)
+```
+
+Run this separate block only in the approver session. The approver private key
+never moves to the station:
+
+```bash
+set -euo pipefail
+umask 077
+APPROVER_RUN_DIR=/absolute/private/approver-review-directory/transaction-id
+APPROVER_APPROVAL_PROPOSAL="$APPROVER_RUN_DIR/approval.json"
+
+test ! -e "$APPROVER_RUN_DIR"
+install -d -m 0700 -- "$APPROVER_RUN_DIR"
+
+CONTROL_URL=https://control.example:8443
+AUDIT_URL=https://audit.example:8443
+CONTROL_CA=/absolute/path/control-server-ca.pem
+AUDIT_CA=/absolute/path/audit-server-ca.pem
+APPROVER_CERT=/absolute/path/approver-client-cert.pem
+APPROVER_KEY=/absolute/path/approver-client-key.pem
+
+approver_authorities=(
+  --control-url "$CONTROL_URL"
+  --audit-url "$AUDIT_URL"
+  --tls-cert "$APPROVER_CERT"
+  --tls-key "$APPROVER_KEY"
+  --control-server-ca "$CONTROL_CA"
+  --audit-server-ca "$AUDIT_CA"
+)
+```
+
+The reviewed `DraftInput` supplies transaction metadata, the six-digest
+release binding, target observation, all-zero fresh state, approval expiry,
+and exactly seven authorization IDs and duration budgets. It cannot supply an
+operation list or boot modes. Before creating it, obtain and review these
+values:
+
+- `station_id` and `lane_id` from the deployed, fixed lane configuration;
+- the unique transaction, inventory asset, and intended logical IDs from the
+  ceremony package;
+- `profile_id`, `policy_digest`, `target_fingerprint`, `observation_digest`,
+  and the fresh EEPROM digest from the current accepted qualification record
+  and its checked-in profile and policy—not from the historical example
+  record;
+- the six release digests from the independently verified signed-release
+  manifest and the deployed lane-guard release-binding output;
+- a canonical UTC approval deadline no more than 24 hours away and long enough
+  for the reviewed ceremony; and
+- seven unique authorization IDs plus reviewed worst-case durations from 1 to
+  3000 seconds, in the fixed operation order printed below.
+
+The current fresh target must report the all-zero customer-key hash and be
+directly observed powered off. This template produces the complete strict
+`operator-draft-input/v1alpha1` object without exposing operation or boot-mode
+fields. Set every placeholder variable from the reviewed sources above; do not
+copy the example digests from tests or an older evidence record:
+
+```bash
+STATION_ID=development-station
+LANE_ID=lane-1
+TRANSACTION_ID=transaction-id
+ASSET_ID=sacrificial-asset-id
+INTENDED_LOGICAL_ID=kaiba-development-unit-id
+PROFILE_ID=raspberry-pi-5-model-b-v1alpha1
+POLICY_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+
+SIGNED_RELEASE_MANIFEST_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+LANE_GUARD_PACKAGE_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+COMPILED_ARTIFACT_SET_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+EXPECTED_CUSTOMER_KEY_HASH=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+EXPECTED_EEPROM_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+EXPECTED_BOOT_IMAGE_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+
+TARGET_FINGERPRINT=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+OBSERVATION_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+FRESH_EEPROM_HASH=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+APPROVAL_EXPIRES_AT=REPLACE_WITH_CANONICAL_UTC_WITHIN_24_HOURS
+
+AUTHORIZATION_ID_1=transaction-id-program
+AUTHORIZATION_ID_2=transaction-id-cold-power-cycle
+AUTHORIZATION_ID_3=transaction-id-owned-readback
+AUTHORIZATION_ID_4=transaction-id-owned-recovery
+AUTHORIZATION_ID_5=transaction-id-post-recovery-readback
+AUTHORIZATION_ID_6=transaction-id-negative-boot
+AUTHORIZATION_ID_7=transaction-id-root-integrity
+
+# Replace these examples with the seven reviewed, qualified bounds.
+MAXIMUM_DURATION_SECONDS='[60,90,60,120,60,120,120]'
+
+test ! -e "$DRAFT_INPUT"
+set -o noclobber
+jq -n \
+  --arg station_id "$STATION_ID" \
+  --arg lane_id "$LANE_ID" \
+  --arg transaction_id "$TRANSACTION_ID" \
+  --arg asset_id "$ASSET_ID" \
+  --arg intended_logical_id "$INTENDED_LOGICAL_ID" \
+  --arg profile_id "$PROFILE_ID" \
+  --arg policy_digest "$POLICY_DIGEST" \
+  --arg signed_release_manifest_digest "$SIGNED_RELEASE_MANIFEST_DIGEST" \
+  --arg lane_guard_package_digest "$LANE_GUARD_PACKAGE_DIGEST" \
+  --arg compiled_artifact_set_digest "$COMPILED_ARTIFACT_SET_DIGEST" \
+  --arg expected_customer_key_hash "$EXPECTED_CUSTOMER_KEY_HASH" \
+  --arg expected_eeprom_digest "$EXPECTED_EEPROM_DIGEST" \
+  --arg expected_boot_image_digest "$EXPECTED_BOOT_IMAGE_DIGEST" \
+  --arg target_fingerprint "$TARGET_FINGERPRINT" \
+  --arg observation_digest "$OBSERVATION_DIGEST" \
+  --arg fresh_eeprom_hash "$FRESH_EEPROM_HASH" \
+  --arg approval_expires_at "$APPROVAL_EXPIRES_AT" \
+  --arg authorization_id_1 "$AUTHORIZATION_ID_1" \
+  --arg authorization_id_2 "$AUTHORIZATION_ID_2" \
+  --arg authorization_id_3 "$AUTHORIZATION_ID_3" \
+  --arg authorization_id_4 "$AUTHORIZATION_ID_4" \
+  --arg authorization_id_5 "$AUTHORIZATION_ID_5" \
+  --arg authorization_id_6 "$AUTHORIZATION_ID_6" \
+  --arg authorization_id_7 "$AUTHORIZATION_ID_7" \
+  --argjson maximum_duration_seconds "$MAXIMUM_DURATION_SECONDS" \
+  '{
+    schema_version: "provisioning.kaiba.network/operator-draft-input/v1alpha1",
+    station_id: $station_id,
+    lane_id: $lane_id,
+    transaction_id: $transaction_id,
+    asset_id: $asset_id,
+    intended_logical_id: $intended_logical_id,
+    profile_id: $profile_id,
+    policy_digest: $policy_digest,
+    release: {
+      signed_release_manifest_digest: $signed_release_manifest_digest,
+      lane_guard_package_digest: $lane_guard_package_digest,
+      compiled_artifact_set_digest: $compiled_artifact_set_digest,
+      expected_customer_key_hash: $expected_customer_key_hash,
+      expected_eeprom_digest: $expected_eeprom_digest,
+      expected_boot_image_digest: $expected_boot_image_digest
+    },
+    target_fingerprint: $target_fingerprint,
+    observation_digest: $observation_digest,
+    initial_state: {
+      customer_key_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      eeprom_hash: $fresh_eeprom_hash,
+      security_state: "fresh",
+      power_state: "powered_off"
+    },
+    approval_expires_at: $approval_expires_at,
+    authorization_ids: [
+      $authorization_id_1,
+      $authorization_id_2,
+      $authorization_id_3,
+      $authorization_id_4,
+      $authorization_id_5,
+      $authorization_id_6,
+      $authorization_id_7
+    ],
+    maximum_duration_seconds: $maximum_duration_seconds
+  }' > "$DRAFT_INPUT"
+set +o noclobber
+
+jq -e . "$DRAFT_INPUT" > /dev/null
+sha256sum -- "$DRAFT_INPUT"
+```
+
+The `sha256:` placeholder strings are intentionally invalid until replaced;
+`prepare-draft` rejects them. Review the complete JSON and its digest before
+continuing. In the station session, create/resume the fixed
+transaction, acquire its mutation claim, bind the reviewed target, compile the
+fixed campaign, review the resulting draft, and install it at the exact path
+configured in the NixOS module:
+
+```bash
+kaiba-provision-lane-workflow prepare-draft \
+  --input "$DRAFT_INPUT" \
+  --draft-out "$DRAFT" \
+  "${station_control[@]}"
+
+sudo kaiba-provision-lane-workflow install-draft \
+  --draft "$DRAFT" \
+  --destination "$DRAFT_DEST"
+```
+
+Every `propose-*` command first renews only the exact live claim appropriate to
+that state and then constructs an immutable proposal from the returned
+resource version. The proposal binds `expected_resource_version`, `claim_id`,
+and `fence_epoch`. Its command summary reports the current `resource_version`,
+`claim_id`, `claim_mode`, `fence_epoch`, and `claim_expires_at`; when a current
+approval is present, it also reports `approval_expires_at`; the approval
+proposal reports the proposed fixed expiry. Renewal and apply summaries expose
+the same current authority context when present. Before its first application,
+any intervening renewal or other resource-version change invalidates the
+proposal. Once review begins, do **not** run a renewal command between that
+review and `apply-*`; apply only the exact reviewed file. If a known renewal
+occurred, preserve the stale file as review evidence and create and review a
+new proposal. The sole higher-resource-version exception is idempotent replay
+after that exact proposal may already have committed and its response was lost.
+
+Claim renewal never renews the approval. Its expiry is fixed by the reviewed
+draft, and there is no approval-renewal command. An expired claim is a hard
+stop for renewal and proposal construction; none of these commands revives it
+or silently acquires a replacement mutation claim. Before appending a new
+audit record, each not-yet-committed apply uses a control-plane server-time
+preflight for the exact current claim. Intent and finalization preflights also
+require the current approval and plan digest. Approval application has its own
+approver-authenticated, server-time preflight before audit append. Evidence
+and reconciliation preflights require the current claim but cannot grant
+forward authority. Approval-bound renewal requests carry the exact approval
+and plan digest; the initial target-bound renewal carries the reviewed draft
+deadline. The control server checks those values and its own clock inside the
+same compare-and-set operation before changing the lease or resource version.
+A rejection therefore leaves the complete durable transaction unchanged.
+Evidence publication after an on-time intent and read-only reconciliation use
+their intentionally separate approval-free renewal states.
+
+The station session prepares the immutable approval proposal. That command
+automatically renews the clean target-bound claim immediately before freezing
+the proposal. Make no intervening renewal. Transfer this secret-free review
+artifact over the authenticated administrative channel with a kernel-atomic
+no-replace create, then compare its SHA-256 digest through a separate trusted
+channel. An interrupted transfer leaves its partial destination in place; keep
+that path as failure evidence and use a new approver review directory rather
+than overwriting or resuming it.
+
+Run on the station:
+
+```bash
+APPROVAL_PROPOSAL="$RUN_DIR/approval.json"
+
+kaiba-provision-lane-workflow propose-approval \
+  --draft "$DRAFT" \
+  --approver-id "$APPROVER_ID" \
+  --proposal-out "$APPROVAL_PROPOSAL" \
+  "${station_control[@]}"
+
+APPROVAL_PROPOSAL_SHA256="$(sha256sum -- "$APPROVAL_PROPOSAL" | awk '{print $1}')"
+printf 'approval proposal sha256: %s\n' "$APPROVAL_PROPOSAL_SHA256"
+
+[[ "$APPROVER_APPROVAL_PROPOSAL" =~ ^/[A-Za-z0-9._/-]+$ ]]
+ssh "$APPROVER_SSH" \
+  "umask 077; dd status=none of='$APPROVER_APPROVAL_PROPOSAL' conv=excl,fsync" \
+  < "$APPROVAL_PROPOSAL"
+```
+
+Communicate `APPROVAL_PROPOSAL_SHA256` independently of that transfer. In the
+approver session, set it to the independently received value, verify the exact
+bytes, review the complete proposal, and apply that approver-local file with
+the certificate whose SPIFFE ID matches `APPROVER_ID`:
+
+```bash
+APPROVAL_PROPOSAL_SHA256=REPLACE_WITH_INDEPENDENTLY_RECEIVED_HEX
+
+test "$(sha256sum -- "$APPROVER_APPROVAL_PROPOSAL" | awk '{print $1}')" = \
+  "$APPROVAL_PROPOSAL_SHA256"
+
+kaiba-provision-lane-workflow apply-approval \
+  --proposal "$APPROVER_APPROVAL_PROPOSAL" \
+  "${approver_authorities[@]}"
+```
+
+If work will pause before the first intent proposal, renew the exact ready
+campaign **before** pausing, while its claim and fixed approval are still
+current. Do not run this after an intent proposal has been created:
+
+```bash
+kaiba-provision-lane-workflow renew-ready-campaign \
+  --draft "$DRAFT" \
+  "${station_control[@]}"
+```
+
+For a longer pause, renew again before each reported `claim_expires_at`, but
+only while no proposal is under review. One renewal does not authorize an
+indefinite pause. If the displayed expiry passes, stop.
+
+The fixed claim lease is one hour. Each reviewed operation duration must be
+between 1 and 3000 seconds, and the NixOS lease safety margin must be between 1
+and 300 seconds. At the maximum duration and margin, a just-renewed claim
+leaves only five minutes for unit activation and pre-execution observation.
+Do not let a pause consume that window.
+
+Return to the station session. Perform the following block once per operation.
+`SEQ` names review files only; it is not passed to any authority or hardware
+interface. `propose-next-intent` derives the sole next operation. Start with
+`SEQ=1`, then use 2 through 7 only after the preceding verified evidence is
+accepted. The expected order is `program_customer_key_and_eeprom`,
+`cold_power_cycle`, `owned_readback`, `test_owned_recovery`,
+`post_recovery_readback`, `test_negative_boot`, and `test_root_integrity`.
+
+```bash
+SEQ=1
+INTENT_PROPOSAL="$RUN_DIR/intent-$SEQ.json"
+EVIDENCE_PROPOSAL="$RUN_DIR/evidence-$SEQ.json"
+
+kaiba-provision-lane-workflow propose-next-intent \
+  --draft "$DRAFT" \
+  --proposal-out "$INTENT_PROPOSAL" \
+  "${station_control[@]}"
+
+kaiba-provision-lane-workflow apply-intent \
+  --proposal "$INTENT_PROPOSAL" \
+  "${station_authorities[@]}"
+
+kaiba-provision-lane-workflow renew-pending-intent \
+  --draft "$DRAFT" \
+  "${station_control[@]}"
+
+sudo systemctl start --no-block kaiba-provisioning-lane-guard.service
+```
+
+`propose-next-intent` renews the exact ready campaign before deriving the sole
+next operation. Review and apply that proposal without renewing in between.
+After `apply-intent`, `renew-pending-intent` can renew only that already
+recorded operation, requires its fixed approval still to be current, and
+cannot select or authorize another operation. Run it immediately before
+`systemctl start`, as shown. It is not the evidence renewal; the only narrow
+post-execution use is the durable publication-retry case below.
+
+While that one-shot is active, acknowledge each server-selected prompt with
+the fixed wrapper above. A failure or interruption does not by itself authorize
+a restart; after the unit terminates, inspect its output and follow the retry
+and recovery matrix below:
+
+```bash
+sudo systemctl status --no-pager kaiba-provisioning-lane-guard.service
+sudo journalctl --unit kaiba-provisioning-lane-guard.service \
+  --boot --output cat --no-pager
+```
+
+The guard's terminal JSON summary contains `path`, `status`, `key`, and
+`already_published`. Copy the exact absolute `path` value into `ATTEMPT`; never
+guess the digest-derived filename or substitute a caller-owned copy. The
+module publishes it beneath
+`/var/lib/kaiba-provision-lane-guard/attempts/` as a root-owned, mode-0444,
+no-replace receipt. A verified attempt is reviewed and recorded as follows;
+`propose-evidence` runs as root because it accepts only that trusted receipt
+boundary:
+
+```bash
+ATTEMPT=/var/lib/kaiba-provision-lane-guard/attempts/lane-attempt-DIGEST.json
+
+sudo kaiba-provision-lane-workflow propose-evidence \
+  --draft "$DRAFT" \
+  --attempt "$ATTEMPT" \
+  --proposal-out "$EVIDENCE_PROPOSAL" \
+  "${station_control[@]}"
+
+kaiba-provision-lane-workflow apply-evidence \
+  --proposal "$EVIDENCE_PROPOSAL" \
+  "${station_authorities[@]}"
+```
+
+`propose-evidence` performs an evidence-only renewal of the exact same live
+mutation claim immediately before constructing the proposal. It validates the
+immutable approval snapshot that authorized the pending intent but does not
+require that approval still be current. Consequently, a terminal result from
+an operation that began while authorized remains recordable after approval
+expiry, provided its original claim is still live. This exception records an
+outcome only: it cannot authorize execution, a retry, or the next operation.
+Do not renew after reviewing the evidence proposal and before applying it. If
+the claim expires before proposal construction or application, do not acquire
+a new claim for the old receipt; stop and escalate the durable state for
+review.
+
+Require `status=verified` in the guard summary and a successfully closed
+operation in the applied evidence summary before incrementing `SEQ`. After
+each such successful `apply-evidence`, immediately preserve that exact ready
+prefix while its approval and claim remain live:
+
+```bash
+kaiba-provision-lane-workflow renew-ready-campaign \
+  --draft "$DRAFT" \
+  "${station_control[@]}"
+```
+
+This creates no proposal; the next `propose-next-intent` or finalization
+command will renew once more immediately before freezing its own proposal.
+Never renew while holding a proposal under review. If evidence was recorded
+after approval expiry, it is still durable, but this ready renewal must fail
+and the campaign cannot advance.
+
+The seventh successful evidence application makes the fixed software campaign
+eligible for finalization; it is not itself the terminal transition. After the
+ready renewal above, create, review, and apply the fixed terminal proposal
+without an intervening renewal:
+
+```bash
+SECURITY_APPLIED_PROPOSAL="$RUN_DIR/security-applied.json"
+
+kaiba-provision-lane-workflow propose-security-applied \
+  --draft "$DRAFT" \
+  --proposal-out "$SECURITY_APPLIED_PROPOSAL" \
+  "${station_control[@]}"
+
+kaiba-provision-lane-workflow apply-security-applied \
+  --proposal "$SECURITY_APPLIED_PROPOSAL" \
+  "${station_authorities[@]}"
+
+kaiba-provision-lane-workflow release-terminal-claim \
+  --draft "$DRAFT" \
+  "${station_control[@]}"
+```
+
+`propose-security-applied` automatically renews the exact seven-operation
+successful campaign before freezing the proposal. Require the applied summary
+to report `transaction_status=security_applied`,
+`rollback_status=rollback_unimplemented`, and
+`release_classification=development_asset`. It must not report or imply
+`enrollment_ready`. Run `release-terminal-claim` promptly, before the reported
+claim expiry. It derives the exact current terminal claim from the reviewed
+draft and control state; there is no claim, fence, status, or mode selector.
+Require `status=terminal_claim_released`, the unchanged terminal transaction
+status, and no active `claim_id` in its summary. An exact lost-response retry
+is proved through the original server idempotency record. The command refuses
+to release a later claim after any earlier terminal release. If the claim has
+already expired, preserve that fact and stop: expiry removes effective lane
+authority, but it is not rewritten as a durable `released` history record.
+
+### Retry and recovery matrix
+
+The journal and immutable receipt boundary determine the only permitted next
+action. A local receipt replay is reachable only while the authenticated bridge
+still accepts the same claim and fence with sufficient remaining lease. Its
+no-I/O guarantee begins after the fixed unit reaches and verifies the durable
+journal state; it is not an authority bypass.
+
+| Observed condition | Only permitted action |
+|---|---|
+| The exact immutable receipt already exists for the current mode and authenticated request | Before any control-state advance, an exact rerun of the same fixed one-shot verifies the journal and receipt and republishes the summary only. It performs no hardware I/O and displays no operator prompt; require `already_published=true`. |
+| An execute-mode durable publishable result exists, or a reconcile-mode durable `verified`, `confirmed_not_applied`, or `quarantined` result exists, but its receipt publication or terminal-summary output failed | Before any control-state advance, rerun the same fixed one-shot under the same current authority. It may publish the missing immutable receipt and summary, but it must not touch hardware or prompt the operator. |
+| Reconcile mode has durable `AttemptUncertain` but no reconciliation-mode receipt | While the same reconciliation claim remains live, an exact rerun may perform another fixed read-only reconciliation observation. It may prompt and read the target, but it never calls hardware mutation. Do not describe this as publication-only replay. |
+| The journal contains durable `AttemptStarted` but no durable terminal record or receipt | Never create evidence. Preserve all state, deploy the lane guard in reconcile mode first, then run `prepare-reconciliation` immediately before starting the fixed unit, as described below. |
+| Execution was rejected before `AttemptStarted`, so there is no attempt | Investigate the failed precondition, control state, claim, and deployment. Do not blindly restart and do not manufacture a reconciliation attempt for hardware that was never dispatched. |
+| An `apply-*` audit/control request may have committed but its response was lost | Retry only the exact immutable proposal file. Its fixed idempotency keys recover the committed result; do not renew, regenerate, or rebase it first. |
+
+For an execute-mode publication retry only, if the same claim is live but no
+longer covers the full operation budget, first positively establish that the
+journal already contains the exact durable terminal attempt. While the fixed
+approval is still current, `renew-pending-intent` may then refresh that same
+claim immediately before rerunning the fixed unit. The journal prevents a
+second hardware dispatch. Never use this exception for `AttemptStarted`, an
+unknown journal state, an expired claim or approval, a changed fence, or after
+control advanced. If the same authority cannot be made current, preserve the
+journal and any receipt and stop; do not claim that publication replay
+succeeded. A reconciliation-mode publication replay likewise requires the
+same still-live reconciliation claim; do not acquire a new claim for its old
+journal result.
+
+On a lost apply response, retry the exact proposal promptly. If the control CAS
+already committed, exact replay returns that durable result without creating a
+new transition. If only the idempotent audit append committed, the outstanding
+control transition still requires a current server-time claim and, for intent
+or finalization, a current approval. Expiry then stops the transition and the
+durable audit trace remains for review.
+
+If a proposal is known to be stale because a renewal or other resource-version
+change occurred, the lost-response rule does not reauthorize it: stop, read the
+durable state, and follow a newly reviewed proposal ceremony only if that state
+still permits one.
+
+### Reconciliation-only alternative
+
+For an `uncertain` execute receipt, run the same `propose-evidence` and
+`apply-evidence` commands while the original mutation claim is still live so
+control durably enters `reconciliation_required`. If that claim expired, the
+evidence-only renewal must fail: preserve the execute receipt, do not acquire a
+new mutation claim for it, and proceed directly to the reviewed reconcile-mode
+deployment and fresh reconciliation observation below. The uncertain execute
+receipt is evidence that observation is required; it is not the terminal
+reconciliation receipt passed to `propose-reconciliation`. A quarantined
+execute receipt is recorded with the evidence commands while its claim is live
+and then stops; it is not a reconciliation shortcut. After its quarantined
+control result is durable, run `release-terminal-claim --draft "$DRAFT"` with
+`"${station_control[@]}"` promptly to relinquish that still-live mutation
+claim.
+
+For either an uncertain terminal receipt or durable `AttemptStarted` without a
+terminal receipt, first commit and review a station-deployment change that
+fixes:
+
+```nix
+services.kaiba-provisioning-lane-guard.mode = "reconcile";
+```
+
+From that exact committed deployment checkout, build and activate the station
+configuration and verify the resulting fixed unit argument:
+
+```bash
+DEPLOYMENT_REV=REPLACE_WITH_REVIEWED_40_HEX_COMMIT
+
+test "$(git rev-parse HEAD)" = "$DEPLOYMENT_REV"
+test -z "$(git status --porcelain)"
+sudo nixos-rebuild switch --flake .#kaiba-provisioning-station
+systemctl show --property=ExecStart --value \
+  kaiba-provisioning-lane-guard.service \
+  | grep -F -- '--mode reconcile'
+```
+
+Do not invoke the guard manually with altered selectors. Only after reconcile
+mode is deployed and verified, prepare the fixed read-only claim immediately
+before starting the one-shot:
+
+```bash
+kaiba-provision-lane-workflow prepare-reconciliation \
+  --draft "$DRAFT" \
+  "${station_control[@]}"
+
+sudo systemctl start --no-block kaiba-provisioning-lane-guard.service
+```
+
+`prepare-reconciliation` may transfer the still-live mutation claim or acquire
+a fresh, observation-only reconciliation claim and fence after the old claim
+expired. That explicit recovery transition does not revive mutation authority.
+It clears forward approval and cannot dispatch hardware mutation. Acknowledge
+only the server-selected RPIBOOT observation prompts.
+
+Again copy `path` from the guard's terminal JSON summary, this time into
+`RECONCILIATION_ATTEMPT`, and apply the attempt-derived resolution:
+
+```bash
+RECONCILIATION_ATTEMPT=/var/lib/kaiba-provision-lane-guard/attempts/lane-attempt-DIGEST.json
+RECONCILIATION_PROPOSAL="$RUN_DIR/reconciliation-$SEQ.json"
+
+sudo kaiba-provision-lane-workflow propose-reconciliation \
+  --draft "$DRAFT" \
+  --attempt "$RECONCILIATION_ATTEMPT" \
+  --proposal-out "$RECONCILIATION_PROPOSAL" \
+  "${station_control[@]}"
+
+kaiba-provision-lane-workflow apply-reconciliation \
+  --proposal "$RECONCILIATION_PROPOSAL" \
+  "${station_authorities[@]}"
+```
+
+`propose-reconciliation` automatically renews only the same still-live
+reconciliation claim that produced the trusted attempt, immediately before
+freezing the proposal. It cannot acquire or transfer a claim. If that claim
+expired, do not obtain a new claim and reuse the old receipt; the receipt is
+bound to the old claim and fence. Do not renew between proposal review and
+apply.
+
+The CLI derives `confirmed_applied`, `confirmed_not_applied`, or unknown from
+the trusted attempt; the operator cannot choose it. Reconciliation never
+redispatches hardware mutation, and this workflow exposes no retry command.
+Both confirmed outcomes are terminal stops under this development workflow:
+neither authorizes another mutation or finalization. Unknown quarantines the
+unit and also stops. For any successfully recorded confirmed or quarantined
+outcome, promptly release the still-live reconciliation claim with the same
+selector-free command:
+
+```bash
+kaiba-provision-lane-workflow release-terminal-claim \
+  --draft "$DRAFT" \
+  "${station_control[@]}"
+```
+
+The same expiry and exact-replay rules described after `security_applied`
+apply. A delayed retry never selects a later reconciliation claim.
+
+### Journal replacement and migration
+
+The current guard strictly accepts only its current
+`lane-guard-attempt-store/v1alpha3` envelope. It does not migrate an older
+journal, even when individual records look compatible. Before replacing a
+deployment, stop the lane and preserve the old journal, lock file, attempt
+receipts, control record, and audit records. Any older **nonempty** journal is
+resolved outside the new guard by direct board-state inspection and an
+explicit reconciliation or quarantine decision; never copy, rewrite, or
+replay its records into the new schema. Only a journal positively established
+as empty, created before live use, and containing no attempt or boot transition
+may be deleted under a reviewed replacement procedure so the current guard can
+create a fresh journal.
 
 ## Physical lane
 
@@ -441,8 +1175,10 @@ and failure before, during, and after the OTP command.
 
 No drill may repeat a one-way operation based only on a timeout or missing
 response. Any partially owned or uncertain board is permanently excluded from
-the fresh-device path and remains `owned_quarantined` until a separately
-authorized recovery or retirement procedure exists.
+the fresh-device path and follows only the reconciliation procedure above.
+Both confirmed outcomes stop this campaign; an unknown result remains
+quarantined until a separately authorized recovery or retirement procedure
+exists.
 
 ## Deferred production gates
 
@@ -459,3 +1195,37 @@ production claim:
 - final JTAG, `BOOT_UART`, boot-order, self-update, recovery, and EEPROM
   write-protection qualification; and
 - multi-lane scaling.
+
+## Remaining live-only gates before SB-08
+
+The software transaction and manual-prompt deliverables are complete, but they
+do not authorize a sacrificial ownership mutation. Exactly these live gates
+remain:
+
+1. Complete the development-token ceremony and assemble the exact signed
+   release from authenticated live-token results, including PIN, touch,
+   wrong-token, timeout, receipt-lineage, and independent offline-verification
+   evidence. This is a development release, not a production release.
+2. Use the typed sacrificial hardware configuration to stage the approved
+   layout on the actual fixed `/dev/nvme0n1`, remove power and reattach it, and
+   complete independent cold readback of every manifest-bound byte and
+   dm-verity result. Record content evidence only: do not verify or retain NVMe
+   model, serial, WWID, `/dev/disk/by-id`, or any other boot-media identity.
+3. Qualify the actual UART adapter's voltage, ground, settings, isolation, and
+   stable `/dev/serial/by-id` identity, then prove bounded capture on the fixed
+   lane. This pre-SB-08 work does not claim signed-system-image enforcement;
+   that live enforcement observation remains a later owned-device goal.
+4. Qualify the normally-off relay and all power paths: prove no USB, UART,
+   display, GPIO, or NVMe back-power; prove observed USB disappearance and the
+   cold interval; and run fail-off drills for relay-control loss, process death,
+   kernel/station restart, complete station power loss, and emergency stop.
+5. Run the physical wrong-mode, absent/additional/moved/replaced-target,
+   BOOTSEL timing, USB continuity, UART failure, restart/recovery, and
+   source-isolation campaign with inert, explicitly non-OTP-capable payloads.
+   Every ambiguous or unsafe result must cleanly abort or quarantine. The fixed
+   actuator remains deferred and is not a gate for this manual campaign.
+
+The development `BOOT_ORDER=0xf216`, unlocked VideoCore JTAG, `BOOT_UART=1`,
+self-update, recovery, and EEPROM write-protection postures remain explicitly
+non-production. No value, including `0xf6`, is asserted as a production-ready
+replacement; production values require a separate decision and qualification.

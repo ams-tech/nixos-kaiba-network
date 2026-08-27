@@ -143,9 +143,10 @@ The development boot order and unlocked VideoCore JTAG posture are **not
 production-ready**. Their production values are undecided and require a new
 review and qualification before any production device is provisioned. The
 existing `BOOT_UART=1` configuration is likewise an unreviewed development
-setting and production blocker, not an approved production value. EEPROM
-write protection, recovery, and the remaining production policies also require
-their separate production decisions and post-finalization tests.
+setting and production blocker, not an approved production value. In
+particular, `0xf6` is not asserted to be the eventual production `BOOT_ORDER`.
+EEPROM write protection, recovery, and the remaining production policies also
+require their separate production decisions and post-finalization tests.
 
 Because both fallback sources are enabled, the post-commit owned-state
 acceptance campaign in SB-09 must isolate SD and network/TFTP in turn and test
@@ -192,9 +193,9 @@ These rules apply to every work item and rehearsal:
 | SB-02 | Development signing root | Not started | The development YubiKey and signing service pass the live key, PIN, touch, token-binding, and failure tests. |
 | SB-03 | Complete signed release | In progress | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
 | SB-04 | Target-media staging | In progress | The exact NVMe layout is written and cold-read back with matching digests. |
-| SB-05 | Enforced transaction plan | In progress | The control plane and lane guard require the complete ordered campaign and verify all plan, approval, and artifact bindings. |
-| SB-06 | Qualified physical lane | Not started | USB, UART, power, and boot-selection behavior pass the combined physical acceptance tests. |
-| SB-07 | Rehearsal and failure campaign | In progress | Fake-lane and non-OTP physical rehearsals pass every required pre-commit failure-mechanics drill. |
+| SB-05 | Enforced transaction plan | Complete (software gate) | The fixed operator workflow, control, audit, bridge, compiler, guard, trusted receipts, and Nix service boundary require the complete ordered campaign and verify every plan, approval, intent, attempt, and artifact binding. This status is not live-hardware qualification. |
+| SB-06 | Qualified physical lane | In progress; software complete, live qualification pending | The authenticated manual mode-transition implementation exists, but USB, UART, power, and boot-selection behavior must still pass the combined physical acceptance tests. |
+| SB-07 | Rehearsal and failure campaign | In progress; live drills pending | Automated fake/simulated failure coverage exists, but the non-OTP physical failure-mechanics campaign has not passed. |
 | SB-08 | Sacrificial ownership ceremony | Blocked by SB-01 through SB-07 | One approved one-shot commit completes or the target is quarantined; no retry path exists. |
 | SB-09 | Owned-state acceptance | Blocked by SB-08 | All positive, recovery, negative, root-integrity, and evidence-reconciliation gates pass and the board stops at `security_applied`. |
 | SB-10 | Production readiness | Explicitly deferred | Every production gate in the final section is implemented and separately accepted. |
@@ -601,9 +602,9 @@ enforcement remain later hardware gates.
 
 ## Workstream 5: enforce the complete transaction
 
-The existing services validate many individual bindings, but the final system
-must also prove that those bindings were derived rather than copied as opaque
-strings and that no shortened campaign can produce `security_applied`.
+The completed software chain validates the individual bindings, proves that
+they were derived rather than copied as opaque strings, and prevents a
+shortened campaign from producing `security_applied`.
 
 ### Deliverables
 
@@ -663,18 +664,26 @@ reconciliation cannot erase it, and persisted approvals fail closed if their
 lifetime exceeds 24 hours.
 
 The execute-once journal now uses the dedicated
-`lane-guard-attempt-store/v1alpha1` envelope and
-`lane-guard-attempt/v1alpha1` records. Every attempt persists the approval ID,
-current intent receipt, current intent sequence, and a terminal distinction
-between verified-applied, confirmed-not-applied, and quarantined outcomes. The
-`v1alpha4` mode field changes every operation and plan digest. A `v1alpha3`
-draft, approval, intent, execute request, or dedicated `v1alpha1` attempt bound
-to an older digest is therefore not reusable. Prior shared `lane-guard/v1alpha3`
-journal envelopes and older records are likewise never auto-migrated into
-executable authority. An empty development journal may be discarded and
-recreated. A nonempty older journal must be drained from service and handled as
-a manual reconciliation or quarantine case after direct board-state
-inspection; it must not be replayed through the new guard.
+`lane-guard-attempt-store/v1alpha3` envelope,
+`lane-guard-attempt/v1alpha2` records, and current durable boot-transition
+records. Every attempt persists the approval ID, current intent receipt,
+current intent sequence, phase-specific transition evidence, and a terminal
+distinction between verified-applied, confirmed-not-applied, and quarantined
+outcomes. Each terminal attempt is also published at a new digest-derived path
+as a root-owned, mode-0444 trusted receipt; caller-owned copies cannot enter
+the evidence workflow. The `v1alpha4` mode field changes every operation and
+plan digest, so older drafts, approvals, intents, requests, and attempts are
+not reusable.
+
+There is deliberately no in-place journal migration. The current decoder
+rejects an older envelope. Before replacement, stop the lane and preserve its
+journal, lock file, receipts, control state, and audit state. A nonempty older
+journal must be resolved externally after direct board-state inspection as a
+manual reconciliation or quarantine case; its records must never be copied,
+rewritten, or replayed through the new guard. Only a pre-live journal
+positively established as empty, with no attempt or boot-transition records,
+may be deleted under a reviewed replacement procedure and recreated in the
+current schema.
 
 - [x] Carry and enforce one declared plan binding covering the signed-release
   manifest digest, lane-guard package digest, compiled artifact-set digest,
@@ -714,7 +723,46 @@ inspection; it must not be replayed through the new guard.
   mutation primitive.
 - [x] Verify the control identity, active claim, fence epoch, approval,
   remaining lease, durable audit receipt, target fingerprint, operation order,
-  and idempotency key immediately before every guarded operation.
+  and idempotency key immediately before every guarded operation. After the
+  delayed physical pre-observation, re-read authenticated authority and require
+  server-confirmed minimum claim and approval windows before the guard records
+  `AttemptStarted` or dispatches hardware.
+- [x] Permit only exact same-claim renewal in one compiler-derived workflow
+  state before proposal construction. Bind each immutable proposal to the
+  resulting resource version, reject any intervening renewal or state change,
+  and never rebase reviewed material. The control server checks an exact
+  current approval or reviewed target-bound deadline inside the renewal CAS
+  before changing the lease or resource version; evidence publication and
+  read-only reconciliation remain deliberately approval-free.
+- [x] Before every new audited transition, use the control server's clock to
+  preflight the proposal's exact resource version, current claim, and fence.
+  Intent and `security_applied` also preflight the exact current approval.
+  Approval application uses its separate approver-only typed preflight.
+- [x] Keep terminal evidence recordable after an on-time intent crosses
+  approval expiry, but only while the exact mutation claim remains current.
+  Neither this evidence-only path nor any other renewal revives an expired
+  claim. Exact control-committed proposal replay remains idempotent and emits
+  no new transition, including an exact initial approval replay after its
+  original claim and approval expire; audit-only or otherwise uncommitted
+  approval attempts still stop at server-time expiry.
+- [x] Provide the fixed `kaiba-provision-lane-workflow` transcript for draft,
+  separate approval proposal/application, derived per-operation intent,
+  execute-once dispatch, trusted attempt evidence, and observation-only
+  reconciliation. No workflow command accepts an operation or physical
+  selector.
+- [x] Promptly release the exact current terminal claim after
+  `security_applied`, quarantine, conclusive reconciliation, or proven clean
+  abort. The workflow exposes no claim or fence selector, proves a lost
+  response through the original server idempotency record, and refuses to
+  retarget a later claim.
+- [x] Publish every terminal lane attempt as a new root-owned immutable receipt
+  and require the evidence and reconciliation proposal commands to ingest only
+  that trusted path.
+- [x] Package the root guard as a manually started NixOS one-shot and expose
+  only the module-generated, no-argument
+  `kaiba-provision-lane-acknowledge` wrapper to operators. The wrapper fixes
+  the socket and enters the peer-authenticated primary group; it grants no
+  selection or mutation authority.
 - [x] Add a combined software integration test that exercises durable control,
   audit, the authenticated bridge, plan compilation, lane guard, the production
   physical-adapter implementation, restart, and observation-only
@@ -730,14 +778,37 @@ socket in a mode-0750 bridge-owned directory emits only the paired current
 `Plan` and exactly one `ExecuteRequest` or `ReconcileRequest`; its client and
 the lane guard revalidate the selected pair. Requests cannot carry executable
 paths, bundle or device selectors, GPIO/UART values, or an operation selector.
-The one-shot guard must obtain fresh authority again after every successful
-operation.
+The one-shot guard obtains that same exact binding again after delayed target
+pre-observation and immediately before dispatch. The control server requires
+enough remaining claim time for the complete bounded operation plus margin and
+enough remaining approval time for the dispatch margin. A rejected recheck
+creates no `AttemptStarted` record and calls no mutation hardware. Durable
+terminal publication replay returns before this callback and performs no target
+I/O. The one-shot guard must also obtain fresh authority again after every
+successful operation.
 
 Approval provenance is independent of that station identity. Under mutual TLS,
 `record_approval` and `plan_approval` require exactly one canonical
 `spiffe://kaiba.network/approver/<approver-id>` certificate identity matching
 the recorded approver. Station/lane credentials are rejected at those approval
 endpoints, and approver credentials are rejected at station endpoints.
+
+The fixed workflow ceremony renews only before constructing an approval,
+intent, evidence, finalization, or reconciliation proposal. The displayed
+resource version, claim/fence, claim expiry, and current approval expiry are
+review material. No renewal is allowed between proposal review and apply; a
+changed resource version invalidates the file. The renewal CAS itself uses the
+control server's clock to reject an expired exact approval or target-bound
+review window before changing either lease or resource version. Immediately
+before a new audit append, the control server—not station wall time—confirms
+the exact current claim and, where mutation or finalization authority is
+needed, the exact current approval. An exact initial approval that already
+committed remains replayable through its original control and audit
+idempotency records after expiry; an audit-only or uncommitted approval does
+not. Expiry or a new fence after proposal creation is otherwise a hard stop
+rather than an instruction to regenerate or rebase the proposal. Once a
+terminal state is durable, the selector-free workflow closes the still-live
+claim and refuses to release any later claim on delayed replay.
 
 The `plancompiler` derives
 the exact operation classes, state chain, operation digests, and plan digest;
@@ -775,6 +846,11 @@ rig must still prove USB, power, RPIBOOT, UART, target continuity, and cold-boot
 behavior before a sacrificial mutation, and the result makes no production
 security-enforcement claim.
 
+These completed deliverables close SB-05 as a **software** gate. They do not
+close SB-06 or SB-07, authorize SB-08, qualify physical wiring or timing, or
+prove that a live target enforced the expected customer key. The exact
+reviewed command sequence is maintained in the [live provisioning runbook].
+
 ### Manual boundary limitation
 
 The mutation-capable lane guard no longer accepts root-installed executable
@@ -801,20 +877,28 @@ terminal classification.
 - one fixed GPIO chip and line for that relay; and
 - a deterministic, directly observed way to select RPIBOOT versus normal boot.
 
-The `v1alpha4` lane contract now carries a digest-bound `required_boot_mode`,
-but the physical selection mechanism and observed-mode handshake are not yet
-implemented. The selected sacrificial-development design is an explicit,
-durable, audited operator handshake. A fixed BOOTSEL/power-button actuator
-remains in scope as a later station enhancement, but is not a prerequisite for
-the first sacrificial-board campaign once the manual handshake is implemented
-and qualified. The physical adapter powers the target, expects RPIBOOT for
-direct observation, removes power, and later needs a normal signed cold boot.
-On Pi 5, RPIBOOT entry requires the power-button/BOOTSEL action. The guard must
-first prove the target is unpowered, persist the requested mode and wait state,
-give exact press, hold, release, or no-action instructions, and enforce a safe
-timeout. The operator must never guess when to act during an internal guard
-call. Direct USB and UART observation must confirm the selected mode before the
-operation can advance.
+The `v1alpha4` lane contract carries a digest-bound `required_boot_mode`, and
+the sacrificial-development implementation now uses an explicit, durable,
+authenticated manual operator handshake. The guard proves relay release and
+USB absence, persists the requested transition and exact prompt, waits the
+minimum cold interval, and accepts acknowledgement only over its private Unix
+socket from the configured primary operator group. For RPIBOOT it persists the
+hold acknowledgement before power, directly observes exactly one BCM2712 at
+the fixed sysfs path, persists that observation, and then issues a distinct
+BOOTSEL-release prompt. For normal boot it persists the no-action
+acknowledgement and rejects any RPIBOOT enumeration while capturing bounded
+UART evidence. Every phase ends in persisted safe-off evidence or durable
+quarantine when safe-off cannot be proved; restart never resumes an old prompt.
+
+The NixOS module installs only the fixed no-argument
+`kaiba-provision-lane-acknowledge` wrapper. It enters the authenticated primary
+group and supplies the module-owned socket; the operator cannot select an
+operation, mode, target, physical path, or payload. A fixed
+BOOTSEL/power-button actuator remains in scope as a later station enhancement,
+but is not required before the first sacrificial-board campaign once this
+manual mechanism passes the same live acceptance tests. All current GPIO, USB,
+UART, power, timeout, cancellation, restart, and safe-off results are simulated
+or fake-backed software evidence, not physical qualification.
 
 ### Deliverables
 
@@ -822,14 +906,20 @@ operation can advance.
   request, operation digest, plan digest, and authenticated bridge response.
   `cold_power_cycle` requires `normal`; the other six operations require
   `rpiboot`. Keep this transient transition out of powered-off `DirectState`.
-- [ ] Implement and qualify the explicit, durable, audited BOOTSEL/power-button
-  operator handshake with a safe timeout and direct mode observation. Keep a
-  fixed actuator as deferred station automation subject to the same acceptance
-  tests.
-- [ ] Persist the requested transition and directly observed mode evidence with
+- [x] Implement the explicit, durable, authenticated manual
+  BOOTSEL/power-button handshake with bounded prompts and direct software mode
+  observation. Keep a fixed actuator as deferred station automation subject to
+  the same acceptance tests.
+- [x] Persist the requested transition and directly observed mode evidence with
   each pre-observation, operation result, post-observation, and reconciliation.
-- [ ] Prove that a normal-boot operation cannot accidentally enter RPIBOOT and
-  that an owned readback or recovery operation cannot accidentally normal-boot.
+- [x] Publish trusted immutable attempt receipts that bind the completed
+  transition evidence, and retain incomplete/recovered/quarantined transition
+  records in the same durable journal.
+- [ ] Qualify the manual handshake, prompt timing, fixed USB path, and direct
+  mode observations on the actual lane.
+- [ ] Prove on the physical rig that a normal-boot operation cannot accidentally
+  enter RPIBOOT and that an owned readback or recovery operation cannot
+  accidentally normal-boot.
 - [ ] Confirm correct UART voltage, grounding, settings, isolation, and stable
   device identity.
 - [ ] Confirm that relay release removes every target power source, including
@@ -856,6 +946,14 @@ negative-source decisions. The pre-SB-08 physical campaign exercises power,
 boot-mode selection, source isolation, topology, UART, restart, and fail-closed
 evidence mechanics only. It must not claim that an unfused board enforced the
 customer key.
+
+The automated software portion now covers the fixed operator workflow,
+authenticated prompts, audit-before-control writes, immutable attempt
+ingestion, transition-journal restart recovery, observation-only
+reconciliation, wrong-mode and ambiguity rejection, and fake GPIO, USB, UART,
+power, timeout, cancellation, and safe-off failures. SB-07 remains incomplete
+until the same applicable failure mechanics pass on the qualified physical rig
+with inert, explicitly non-OTP-capable payloads.
 
 Actual customer-key enforcement negatives require an owned board. They run
 only after the SB-08 commit, as part of SB-09 steps 14 through 16, and are not
@@ -889,18 +987,19 @@ signed cold boot.
 
 ### Acceptance rules
 
-- [ ] A failure before the irreversible intent produces a proven clean abort or
-  a conservative quarantine decision.
-- [ ] Once the execute-once journal contains `AttemptStarted`, the same
+- [x] Software failure injection before the irreversible intent produces a
+  proven clean abort or conservative quarantine decision. The corresponding
+  physical drills remain part of the SB-07 exit criteria.
+- [x] Once the execute-once journal contains `AttemptStarted`, the same
   operation's `Hardware.Execute` is never invoked again. Reconciliation is
   observation-only. Even evidence that the expected mutation is absent does not
   authorize redispatch under the current protocol; a future retry design would
   require a separately reviewed pre-dispatch journal state and protocol.
-- [ ] A changed target or conclusive unexpected owned state produces
+- [x] A changed target or conclusive unexpected owned state produces
   `owned_quarantined`.
-- [ ] Restart cannot erase the execute-once journal, restore stale authority, or
+- [x] Restart cannot erase the execute-once journal, restore stale authority, or
   skip a required operation.
-- [ ] A shortened plan cannot reach `security_applied`.
+- [x] A shortened plan cannot reach `security_applied`.
 - [ ] Every pre-commit physical source-selection drill proves that only the
   intended source and evidence path were active and that no OTP-capable payload
   was available; ambiguity produces a clean abort or quarantine.

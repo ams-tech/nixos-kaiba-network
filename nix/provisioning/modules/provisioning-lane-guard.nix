@@ -175,9 +175,10 @@ in
       description = ''
         Existing local users allowed to acknowledge the lane service's active
         physical prompt. The server authenticates the connecting process's
-        primary group, so operators invoke the client through an approved
-        primary-group transition such as sg(1); supplementary membership alone
-        does not authorize an acknowledgement.
+        primary group. The module installs the native, fixed, no-argument
+        kaiba-provision-lane-acknowledge setgid security wrapper for these
+        users; invoke that wrapper directly for each prompt. Supplementary
+        membership alone does not authorize an acknowledgement.
       '';
     };
 
