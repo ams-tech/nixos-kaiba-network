@@ -181,9 +181,9 @@ in
     };
 
     leaseSafetyMarginSeconds = mkOption {
-      type = types.ints.unsigned;
+      type = types.ints.between 1 300;
       default = 30;
-      description = "Lease lifetime reserved beyond the current operation's maximum duration.";
+      description = "Lease lifetime, from 1 through 300 seconds, reserved beyond the current operation's maximum duration.";
     };
   };
 

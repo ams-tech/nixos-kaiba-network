@@ -22,6 +22,10 @@ func (fakeControlReader) GetTransaction(context.Context, string) (controlplane.T
 	return controlplane.Transaction{}, nil
 }
 
+func (fakeControlReader) PreflightCurrentClaim(context.Context, controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error) {
+	return controlplane.Transaction{}, nil
+}
+
 type fakeAuditReader struct{}
 
 func (fakeAuditReader) GetRecordsByReceiptIDs(context.Context, string, []string) ([]auditlog.Record, error) {

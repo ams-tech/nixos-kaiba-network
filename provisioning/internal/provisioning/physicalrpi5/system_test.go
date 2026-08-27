@@ -3,10 +3,45 @@ package physicalrpi5
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"syscall"
 	"testing"
 )
+
+func TestOSFileSystemPinDetectsSamePathReplacement(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	path := filepath.Join(root, "1-1")
+	if err := os.Mkdir(first, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(second, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(first, path); err != nil {
+		t.Fatal(err)
+	}
+	pin, err := (OSFileSystem{}).PinUSBInstance(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Close()
+	if err := pin.Verify(); err != nil {
+		t.Fatalf("initial pin verification: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(second, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := pin.Verify(); err == nil {
+		t.Fatal("same-path replacement matched the held sysfs instance")
+	}
+}
 
 type fakeUARTDevice struct {
 	events   []string

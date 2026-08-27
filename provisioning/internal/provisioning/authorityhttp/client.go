@@ -3,10 +3,12 @@
 package authorityhttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -255,6 +257,42 @@ func (reader *ControlReader) GetTransaction(ctx context.Context, transactionID s
 	return transaction, nil
 }
 
+// PreflightCurrentClaim asks the control server to check the exact current
+// claim, and optionally its execution approval, against the server clock. The
+// command is read-only even though it uses the control service's typed command
+// endpoint.
+func (reader *ControlReader) PreflightCurrentClaim(ctx context.Context, request controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error) {
+	if reader == nil || reader.client == nil || request.SchemaVersion != controlplane.CurrentClaimPreflightRequestSchemaVersion ||
+		!transactionIDPattern.MatchString(request.TransactionID) {
+		return controlplane.Transaction{}, errors.New("current-claim preflight request is invalid")
+	}
+	typedRequest, err := json.Marshal(request)
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("encode current-claim preflight request: %w", err)
+	}
+	command, err := json.Marshal(controlplane.Command{
+		SchemaVersion: controlplane.CommandSchemaVersion,
+		Operation:     "preflight_current_claim",
+		Request:       typedRequest,
+	})
+	if err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("encode current-claim preflight command: %w", err)
+	}
+	endpoint := reader.baseURL
+	endpoint.Path = "/api/v1/commands"
+	var transaction controlplane.Transaction
+	if err := postJSON(ctx, reader.client, endpoint.String(), command, func(data []byte) error {
+		return controlplane.DecodeStrict(data, &transaction)
+	}); err != nil {
+		return controlplane.Transaction{}, fmt.Errorf("preflight current control claim: %w", err)
+	}
+	if transaction.SchemaVersion != controlplane.TransactionSchemaVersion || transaction.ID != request.TransactionID ||
+		transaction.ResourceVersion != request.ExpectedResourceVersion {
+		return controlplane.Transaction{}, errors.New("preflight current control claim: response identity is invalid")
+	}
+	return transaction, nil
+}
+
 // GetRecords returns the strict audit record set for one transaction.
 func (reader *AuditReader) GetRecords(ctx context.Context, transactionID string) ([]auditlog.Record, error) {
 	return reader.getRecords(ctx, transactionID, nil)
@@ -326,11 +364,26 @@ func canonicalDigest(value string) bool {
 }
 
 func getJSON(ctx context.Context, client *http.Client, endpoint string, decode func([]byte) error) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return requestJSON(ctx, client, http.MethodGet, endpoint, nil, decode)
+}
+
+func postJSON(ctx context.Context, client *http.Client, endpoint string, body []byte, decode func([]byte) error) error {
+	return requestJSON(ctx, client, http.MethodPost, endpoint, body, decode)
+}
+
+func requestJSON(ctx context.Context, client *http.Client, method, endpoint string, body []byte, decode func([]byte) error) error {
+	var requestBody io.Reader
+	if body != nil {
+		requestBody = bytes.NewReader(body)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, requestBody)
 	if err != nil {
 		return fmt.Errorf("construct request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("perform request: %w", err)

@@ -21,7 +21,7 @@ const (
 	maxWireResponseBytes     = 1 << 20
 	wireReadTimeout          = 15 * time.Second
 	wireResponseWriteTimeout = 30 * time.Second
-	authorityReadsPerBinding = 3 // control, audit, then control again to freeze authority
+	authorityReadsPerBinding = 4 // control, audit, control freeze, then server-time claim preflight
 	wireRoundTripTimeout     = authorityReadsPerBinding*AuthorityReadTimeout + 15*time.Second
 
 	responseStatusOK    = "ok"

@@ -194,6 +194,99 @@ func TestMutualTLSHandlerRequiresIndependentApproverForRecordApproval(t *testing
 	}
 }
 
+func TestMutualTLSHandlerRestrictsCurrentClaimPreflightToClaimant(t *testing.T) {
+	tests := []struct {
+		name         string
+		identityURIs []string
+		wantStatus   int
+	}{
+		{
+			name:         "matching station lane",
+			identityURIs: []string{"spiffe://kaiba.network/station/station-1/lane/lane-1"},
+			wantStatus:   http.StatusOK,
+		},
+		{
+			name:         "different station",
+			identityURIs: []string{"spiffe://kaiba.network/station/station-2/lane/lane-1"},
+			wantStatus:   http.StatusForbidden,
+		},
+		{
+			name:         "different lane",
+			identityURIs: []string{"spiffe://kaiba.network/station/station-1/lane/lane-2"},
+			wantStatus:   http.StatusForbidden,
+		},
+		{
+			name:         "approver identity",
+			identityURIs: []string{"spiffe://kaiba.network/approver/approver-1"},
+			wantStatus:   http.StatusUnauthorized,
+		},
+		{name: "missing identity", wantStatus: http.StatusUnauthorized},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			transaction := fixture.createClaimBind(developmentCampaignNames())
+			request := controlCommandRequest(t, "preflight_current_claim", CurrentClaimPreflightRequest{
+				SchemaVersion:   CurrentClaimPreflightRequestSchemaVersion,
+				MutationContext: contextFor(transaction),
+			})
+			request.TLS = controlVerifiedTLSState(t, "ignored", test.identityURIs...)
+			response := httptest.NewRecorder()
+
+			Handler(fixture.service, mtls.MutualTLSIdentityPolicy()).ServeHTTP(response, request)
+
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+			stored, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.ResourceVersion != transaction.ResourceVersion || !stored.UpdatedAt.Equal(transaction.UpdatedAt) {
+				t.Fatalf("current-claim HTTP preflight mutated transaction: %#v", stored)
+			}
+		})
+	}
+}
+
+func TestMutualTLSHandlerRestrictsApprovalPreflightToNamedApprover(t *testing.T) {
+	tests := []struct {
+		name         string
+		identityURIs []string
+		wantStatus   int
+	}{
+		{name: "matching approver", identityURIs: []string{"spiffe://kaiba.network/approver/approver-1"}, wantStatus: http.StatusOK},
+		{name: "station claimant denied", identityURIs: []string{"spiffe://kaiba.network/station/station-1/lane/lane-1"}, wantStatus: http.StatusUnauthorized},
+		{name: "different approver denied", identityURIs: []string{"spiffe://kaiba.network/approver/approver-2"}, wantStatus: http.StatusForbidden},
+		{name: "missing identity denied", wantStatus: http.StatusUnauthorized},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTestFixture(t, &MemoryStore{})
+			operations := developmentCampaignNames()
+			transaction := fixture.createClaimBind(operations)
+			record := fixture.approvalRequest(transaction, operations, "approval-1")
+			preflight := fixture.approvalPreflight(transaction, record)
+			request := controlCommandRequest(t, "preflight_approval", preflight)
+			request.TLS = controlVerifiedTLSState(t, "ignored", test.identityURIs...)
+			response := httptest.NewRecorder()
+
+			Handler(fixture.service, mtls.MutualTLSIdentityPolicy()).ServeHTTP(response, request)
+
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+			stored, err := fixture.service.GetTransaction(context.Background(), transaction.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.ResourceVersion != transaction.ResourceVersion || stored.Approval != nil {
+				t.Fatalf("preflight mutated transaction: %#v", stored)
+			}
+		})
+	}
+}
+
 func TestMutualTLSHandlerBindsClaimScopedRequestsAndTransferHandoff(t *testing.T) {
 	fixture := newTestFixture(t, &MemoryStore{})
 	transaction := fixture.create()

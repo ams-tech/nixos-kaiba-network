@@ -14,19 +14,21 @@ const (
 	StoreSchemaVersion       = "provisioning.kaiba.network/control-store/v1alpha4"
 	CommandSchemaVersion     = "provisioning.kaiba.network/control-command/v1alpha1"
 
-	CreateTransactionRequestSchemaVersion    = "provisioning.kaiba.network/create-transaction-request/v1alpha3"
-	AcquireClaimRequestSchemaVersion         = "provisioning.kaiba.network/acquire-claim-request/v1alpha1"
-	RenewClaimRequestSchemaVersion           = "provisioning.kaiba.network/renew-claim-request/v1alpha1"
-	TransferClaimRequestSchemaVersion        = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
-	ReleaseClaimRequestSchemaVersion         = "provisioning.kaiba.network/release-claim-request/v1alpha1"
-	BindTargetRequestSchemaVersion           = "provisioning.kaiba.network/bind-target-request/v1alpha1"
-	RecordApprovalRequestSchemaVersion       = "provisioning.kaiba.network/record-approval-request/v1alpha2"
-	RecordIntentRequestSchemaVersion         = "provisioning.kaiba.network/record-intent-request/v1alpha1"
-	RecordEvidenceRequestSchemaVersion       = "provisioning.kaiba.network/record-evidence-request/v1alpha1"
-	RecordReconciliationRequestSchemaVersion = "provisioning.kaiba.network/record-reconciliation-request/v1alpha1"
-	QuarantineRequestSchemaVersion           = "provisioning.kaiba.network/quarantine-request/v1alpha1"
-	AbortRequestSchemaVersion                = "provisioning.kaiba.network/abort-request/v1alpha1"
-	SecurityAppliedRequestSchemaVersion      = "provisioning.kaiba.network/security-applied-request/v1alpha1"
+	CreateTransactionRequestSchemaVersion     = "provisioning.kaiba.network/create-transaction-request/v1alpha3"
+	AcquireClaimRequestSchemaVersion          = "provisioning.kaiba.network/acquire-claim-request/v1alpha1"
+	RenewClaimRequestSchemaVersion            = "provisioning.kaiba.network/renew-claim-request/v1alpha2"
+	CurrentClaimPreflightRequestSchemaVersion = "provisioning.kaiba.network/current-claim-preflight-request/v1alpha2"
+	TransferClaimRequestSchemaVersion         = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
+	ReleaseClaimRequestSchemaVersion          = "provisioning.kaiba.network/release-claim-request/v1alpha1"
+	BindTargetRequestSchemaVersion            = "provisioning.kaiba.network/bind-target-request/v1alpha1"
+	ApprovalPreflightRequestSchemaVersion     = "provisioning.kaiba.network/approval-preflight-request/v1alpha1"
+	RecordApprovalRequestSchemaVersion        = "provisioning.kaiba.network/record-approval-request/v1alpha2"
+	RecordIntentRequestSchemaVersion          = "provisioning.kaiba.network/record-intent-request/v1alpha1"
+	RecordEvidenceRequestSchemaVersion        = "provisioning.kaiba.network/record-evidence-request/v1alpha1"
+	RecordReconciliationRequestSchemaVersion  = "provisioning.kaiba.network/record-reconciliation-request/v1alpha1"
+	QuarantineRequestSchemaVersion            = "provisioning.kaiba.network/quarantine-request/v1alpha1"
+	AbortRequestSchemaVersion                 = "provisioning.kaiba.network/abort-request/v1alpha1"
+	SecurityAppliedRequestSchemaVersion       = "provisioning.kaiba.network/security-applied-request/v1alpha1"
 )
 
 // UnownedCustomerKeyHash is the only prestate accepted by the development
@@ -223,13 +225,16 @@ type AcquireClaimRequest struct {
 }
 
 type RenewClaimRequest struct {
-	SchemaVersion           string `json:"schema_version"`
-	IdempotencyKey          string `json:"idempotency_key"`
-	TransactionID           string `json:"transaction_id"`
-	ExpectedResourceVersion uint64 `json:"expected_resource_version"`
-	ClaimID                 string `json:"claim_id"`
-	FenceEpoch              uint64 `json:"fence_epoch"`
-	LeaseDurationSeconds    uint32 `json:"lease_duration_seconds"`
+	SchemaVersion                     string     `json:"schema_version"`
+	IdempotencyKey                    string     `json:"idempotency_key"`
+	TransactionID                     string     `json:"transaction_id"`
+	ExpectedResourceVersion           uint64     `json:"expected_resource_version"`
+	ClaimID                           string     `json:"claim_id"`
+	FenceEpoch                        uint64     `json:"fence_epoch"`
+	LeaseDurationSeconds              uint32     `json:"lease_duration_seconds"`
+	ApprovalID                        string     `json:"approval_id,omitempty"`
+	PlanDigest                        string     `json:"plan_digest,omitempty"`
+	TargetBoundAuthorizationExpiresAt *time.Time `json:"target_bound_authorization_expires_at,omitempty"`
 }
 
 type TransferClaimRequest struct {
@@ -262,6 +267,20 @@ type MutationContext struct {
 	FenceEpoch              uint64 `json:"fence_epoch"`
 }
 
+// CurrentClaimPreflightRequest is a receipt-free, read-only request to verify
+// that an exact mutation context still names the server's current unexpired
+// claim and, when supplied, its exact current approval. Optional minimum
+// remaining windows are measured from the server's clock. It deliberately
+// carries no operation selector or mutation input.
+type CurrentClaimPreflightRequest struct {
+	SchemaVersion string `json:"schema_version"`
+	MutationContext
+	ApprovalID                      string `json:"approval_id,omitempty"`
+	PlanDigest                      string `json:"plan_digest,omitempty"`
+	MinimumClaimRemainingSeconds    uint32 `json:"minimum_claim_remaining_seconds,omitempty"`
+	MinimumApprovalRemainingSeconds uint32 `json:"minimum_approval_remaining_seconds,omitempty"`
+}
+
 type BindTargetRequest struct {
 	SchemaVersion  string `json:"schema_version"`
 	IdempotencyKey string `json:"idempotency_key"`
@@ -284,6 +303,27 @@ type RecordApprovalRequest struct {
 	AllowedOperations []string               `json:"allowed_operations"`
 	AuditReceiptID    string                 `json:"audit_receipt_id"`
 	ExpiresAt         time.Time              `json:"expires_at"`
+}
+
+// ApprovalPreflightRequest is the complete, receipt-free approval proposal an
+// independent approver asks the control plane to validate before appending an
+// audit event. It grants no mutation authority and contains no station secret.
+type ApprovalPreflightRequest struct {
+	SchemaVersion string `json:"schema_version"`
+	MutationContext
+	ApprovalID        string                 `json:"approval_id"`
+	ApproverID        string                 `json:"approver_id"`
+	TransactionDigest string                 `json:"transaction_digest"`
+	PlanDigest        string                 `json:"plan_digest"`
+	StationID         string                 `json:"station_id"`
+	LaneID            string                 `json:"lane_id"`
+	TargetFingerprint string                 `json:"target_fingerprint"`
+	Release           releasebinding.Binding `json:"release"`
+	AllowedOperations []string               `json:"allowed_operations"`
+	// ApprovedAt is the proposal's approval-event time. The control plane's
+	// durable Approval.ApprovedAt remains the server-side apply time.
+	ApprovedAt time.Time `json:"approved_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 type RecordIntentRequest struct {

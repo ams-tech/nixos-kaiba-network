@@ -40,6 +40,7 @@ var (
 	ErrReconciliationAuthority = errors.New("reconciliation authority is invalid")
 	ErrReconciliationRequired  = errors.New("operation outcome requires direct reconciliation")
 	ErrQuarantined             = errors.New("operation or target is quarantined")
+	ErrBootTransitionOutcome   = errors.New("hardware boot-transition outcome is invalid or not durable")
 )
 
 // Operation is a closed allowlist. The hardware adapter maps these values to
@@ -183,10 +184,11 @@ type DirectState struct {
 }
 
 type Observation struct {
-	EligibleTargets   int         `json:"eligible_targets"`
-	RPIBootSysfsPath  string      `json:"rpiboot_sysfs_path"`
-	TargetFingerprint string      `json:"target_fingerprint"`
-	State             DirectState `json:"state"`
+	EligibleTargets   int                   `json:"eligible_targets"`
+	RPIBootSysfsPath  string                `json:"rpiboot_sysfs_path"`
+	TargetFingerprint string                `json:"target_fingerprint"`
+	State             DirectState           `json:"state"`
+	BootTransition    BootTransitionOutcome `json:"boot_transition"`
 }
 
 type OperationSpec struct {
@@ -386,7 +388,8 @@ type ReconcileRequest struct {
 }
 
 type OperationResult struct {
-	OutputDigest  string `json:"output_digest"`
-	BindingDigest string `json:"binding_digest"`
-	Detail        string `json:"detail"`
+	OutputDigest   string                `json:"output_digest"`
+	BindingDigest  string                `json:"binding_digest"`
+	Detail         string                `json:"detail"`
+	BootTransition BootTransitionOutcome `json:"boot_transition"`
 }

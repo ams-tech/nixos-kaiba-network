@@ -214,6 +214,17 @@ func (draft Draft) InitialPrestateDigest() string {
 	return prestateDigest(draft.plan.Operations[0].ExpectedPrestate)
 }
 
+// PrestateDigest returns the canonical control-plane prestate binding for one
+// policy-owned operation. Keeping this derivation beside BuildDraft prevents
+// an operator client from reimplementing the digest domain or accepting a
+// caller-supplied prestate digest.
+func (draft Draft) PrestateDigest(sequence uint32) (string, error) {
+	if sequence == 0 || int(sequence) > len(draft.plan.Operations) {
+		return "", fmt.Errorf("%w: operation sequence is outside the draft", ErrInvalidDraft)
+	}
+	return prestateDigest(draft.plan.Operations[sequence-1].ExpectedPrestate), nil
+}
+
 func prestateDigest(state laneguard.DirectState) string {
 	material, err := json.Marshal(state)
 	if err != nil {

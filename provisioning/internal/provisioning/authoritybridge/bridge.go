@@ -25,8 +25,8 @@ const (
 	ResponseSchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha3"
 
 	// AuthorityReadTimeout is the maximum duration expected from each
-	// authenticated control or audit read. Network adapters must enforce this
-	// budget so the bridge's whole-operation deadline remains sound.
+	// authenticated control or audit request. Network adapters must enforce
+	// this budget so the bridge's whole-operation deadline remains sound.
 	AuthorityReadTimeout = 15 * time.Second
 )
 
@@ -74,6 +74,7 @@ type BoundRequest struct {
 // the bridge never accepts authority records from its Unix-socket caller.
 type ControlReader interface {
 	GetTransaction(context.Context, string) (controlplane.Transaction, error)
+	PreflightCurrentClaim(context.Context, controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error)
 }
 
 type AuditReader interface {
@@ -87,9 +88,10 @@ type Binder struct {
 	LeaseSafetyMargin time.Duration
 }
 
-// Bind fetches control state twice around the audit read. This closes the
-// obvious mixed-snapshot window: any claim, fence, approval, intent, or
-// resource-version change during authority collection fails closed.
+// Bind fetches control state twice around the audit read, then asks the control
+// server to verify the exact claim (and execution approval) against its own
+// clock. Any claim, fence, approval, intent, or resource-version change during
+// authority collection fails closed.
 func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundRequest, error) {
 	if err := validateBridgeRequest(request); err != nil {
 		return BoundRequest{}, err
@@ -134,6 +136,21 @@ func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundRequ
 		return BoundRequest{}, fmt.Errorf("%w: snapshot second control read: %w", ErrAuthoritySource, err)
 	}
 	if !bytes.Equal(firstSnapshot, secondSnapshot) {
+		return BoundRequest{}, ErrAuthorityChanged
+	}
+	preflightRequest, err := currentClaimPreflightRequest(request, second, binder.LeaseSafetyMargin)
+	if err != nil {
+		return BoundRequest{}, err
+	}
+	preflighted, err := binder.Control.PreflightCurrentClaim(ctx, preflightRequest)
+	if err != nil {
+		return BoundRequest{}, fmt.Errorf("%w: current-claim preflight: %w", ErrAuthoritySource, err)
+	}
+	preflightSnapshot, err := json.Marshal(preflighted)
+	if err != nil {
+		return BoundRequest{}, fmt.Errorf("%w: snapshot current-claim preflight: %w", ErrAuthoritySource, err)
+	}
+	if !bytes.Equal(secondSnapshot, preflightSnapshot) {
 		return BoundRequest{}, ErrAuthorityChanged
 	}
 	approvalRecord, approvalReceipt, err := selectUniqueRecord(records, receiptIDs[0])
@@ -183,6 +200,81 @@ func (binder Binder) Bind(ctx context.Context, request BridgeRequest) (BoundRequ
 		return BoundRequest{}, fmt.Errorf("%w: generated binding: %w", ErrAuthorityRejected, err)
 	}
 	return result, nil
+}
+
+func currentClaimPreflightRequest(request BridgeRequest, transaction controlplane.Transaction, leaseSafetyMargin time.Duration) (controlplane.CurrentClaimPreflightRequest, error) {
+	if transaction.ActiveClaim == nil {
+		return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: transaction has no active claim", ErrAuthorityRejected)
+	}
+	if leaseSafetyMargin < 0 {
+		return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: lease safety margin is negative", ErrAuthorityRejected)
+	}
+	preflight := controlplane.CurrentClaimPreflightRequest{
+		SchemaVersion: controlplane.CurrentClaimPreflightRequestSchemaVersion,
+		MutationContext: controlplane.MutationContext{
+			TransactionID:           transaction.ID,
+			ExpectedResourceVersion: transaction.ResourceVersion,
+			ClaimID:                 transaction.ActiveClaim.ID,
+			FenceEpoch:              transaction.FenceEpoch,
+		},
+	}
+	switch request.Mode {
+	case ModeExecute:
+		if transaction.Approval == nil {
+			return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: transaction has no current approval", ErrAuthorityRejected)
+		}
+		operationIndex := len(transaction.Operations) - 1
+		if operationIndex < 0 || operationIndex >= len(request.DraftSnapshot.Operations) {
+			return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: transaction has no exact pending operation", ErrAuthorityRejected)
+		}
+		record := transaction.Operations[operationIndex]
+		operation := request.DraftSnapshot.Operations[operationIndex]
+		if record.Operation != string(operation.Operation) || record.PlanDigest != request.DraftSnapshot.PlanDigest {
+			return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: transaction pending operation differs from the draft", ErrAuthorityRejected)
+		}
+		minimumClaim, err := ceilDurationSeconds(operation.MaximumDuration, leaseSafetyMargin)
+		if err != nil || minimumClaim == 0 {
+			return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: execution authority window: %v", ErrAuthorityRejected, err)
+		}
+		minimumApproval, err := ceilDurationSeconds(leaseSafetyMargin)
+		if err != nil {
+			return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: approval authority window: %v", ErrAuthorityRejected, err)
+		}
+		if minimumApproval == 0 {
+			minimumApproval = 1
+		}
+		preflight.ApprovalID = transaction.Approval.ID
+		preflight.PlanDigest = request.DraftSnapshot.PlanDigest
+		preflight.MinimumClaimRemainingSeconds = minimumClaim
+		preflight.MinimumApprovalRemainingSeconds = minimumApproval
+	case ModeReconcile:
+		minimumClaim, err := ceilDurationSeconds(laneguard.ReconciliationObservationBudget, leaseSafetyMargin)
+		if err != nil || minimumClaim == 0 {
+			return controlplane.CurrentClaimPreflightRequest{}, fmt.Errorf("%w: reconciliation authority window: %v", ErrAuthorityRejected, err)
+		}
+		preflight.MinimumClaimRemainingSeconds = minimumClaim
+	default:
+		return controlplane.CurrentClaimPreflightRequest{}, ErrInvalidRequest
+	}
+	return preflight, nil
+}
+
+func ceilDurationSeconds(values ...time.Duration) (uint32, error) {
+	var total time.Duration
+	for _, value := range values {
+		if value < 0 || value > time.Duration(1<<63-1)-total {
+			return 0, errors.New("duration is negative or overflows")
+		}
+		total += value
+	}
+	seconds := uint64(total / time.Second)
+	if total%time.Second != 0 {
+		seconds++
+	}
+	if seconds > uint64(^uint32(0)) {
+		return 0, errors.New("duration exceeds the wire representation")
+	}
+	return uint32(seconds), nil
 }
 
 func validateBridgeRequest(request BridgeRequest) error {

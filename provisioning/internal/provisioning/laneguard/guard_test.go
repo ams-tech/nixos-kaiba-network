@@ -20,6 +20,7 @@ type fakeClock struct{ now time.Time }
 func (clock fakeClock) Now() time.Time { return clock.now }
 
 type countingStore struct {
+	Journal
 	gets int
 	puts int
 }
@@ -35,13 +36,13 @@ func (store *countingStore) Put(Attempt) error {
 }
 
 type hookStore struct {
-	AttemptStore
+	Journal
 	afterFirstGet func()
 	once          sync.Once
 }
 
 func (store *hookStore) Get(key string) (Attempt, bool, error) {
-	attempt, found, err := store.AttemptStore.Get(key)
+	attempt, found, err := store.Journal.Get(key)
 	store.once.Do(store.afterFirstGet)
 	return attempt, found, err
 }
@@ -50,45 +51,196 @@ type mutableClock struct{ now time.Time }
 
 func (clock *mutableClock) Now() time.Time { return clock.now }
 
-type fakeHardware struct {
-	mu            sync.Mutex
-	observation   Observation
-	observeErr    error
-	executeErr    error
-	executeCount  int
-	observeCount  int
-	after         map[Operation]DirectState
-	beforeObserve func()
-	beforeExecute func(Operation)
-	replaceTarget bool
+type recordingDispatchAuthority struct {
+	executeCalls        int
+	reconciliationCalls int
+	execute             func(context.Context, Plan, ExecuteRequest) error
+	reconciliation      func(context.Context, Plan, ReconcileRequest) error
 }
 
-func (hardware *fakeHardware) Observe(context.Context, Config) (Observation, error) {
+func (authority *recordingDispatchAuthority) RecheckExecute(ctx context.Context, plan Plan, request ExecuteRequest) error {
+	authority.executeCalls++
+	if authority.execute != nil {
+		return authority.execute(ctx, plan, request)
+	}
+	return nil
+}
+
+func (authority *recordingDispatchAuthority) RecheckReconciliation(ctx context.Context, plan Plan, request ReconcileRequest) error {
+	authority.reconciliationCalls++
+	if authority.reconciliation != nil {
+		return authority.reconciliation(ctx, plan, request)
+	}
+	return nil
+}
+
+type fakeHardware struct {
+	mu              sync.Mutex
+	journal         Journal
+	observation     Observation
+	observeErr      error
+	executeErr      error
+	executeCount    int
+	observeCount    int
+	transitionCount int
+	actions         []HardwareAction
+	after           map[Operation]DirectState
+	beforeObserve   func()
+	beforeExecute   func(Operation)
+	waitObserve     bool
+	waitExecute     bool
+	mutateOutcome   func(HardwareAction, *BootTransitionOutcome)
+	replaceTarget   bool
+}
+
+func (hardware *fakeHardware) Observe(ctx context.Context, config Config, action HardwareAction) (Observation, error) {
 	hardware.mu.Lock()
-	defer hardware.mu.Unlock()
 	hardware.observeCount++
+	hardware.transitionCount++
+	ordinal := hardware.transitionCount
+	hardware.actions = append(hardware.actions, action)
 	if hardware.beforeObserve != nil {
 		hardware.beforeObserve()
 	}
-	return hardware.observation, hardware.observeErr
+	observation := hardware.observation
+	hardwareErr := hardware.observeErr
+	mutate := hardware.mutateOutcome
+	wait := hardware.waitObserve
+	hardware.mu.Unlock()
+	if wait {
+		<-ctx.Done()
+		return Observation{}, ctx.Err()
+	}
+	outcome, transitionErr := recordFakeBootTransition(hardware.journal, config, action, ordinal, hardwareErr != nil)
+	if mutate != nil {
+		mutate(action, &outcome)
+	}
+	observation.BootTransition = outcome
+	return observation, errors.Join(hardwareErr, transitionErr)
 }
 
-func (hardware *fakeHardware) Execute(_ context.Context, _ Config, operation Operation) (OperationResult, error) {
+func (hardware *fakeHardware) Execute(ctx context.Context, config Config, action HardwareAction) (OperationResult, error) {
 	hardware.mu.Lock()
 	hardware.executeCount++
+	hardware.transitionCount++
+	ordinal := hardware.transitionCount
+	hardware.actions = append(hardware.actions, action)
 	callback := hardware.beforeExecute
-	if state, ok := hardware.after[operation]; ok {
+	if state, ok := hardware.after[action.Operation]; ok {
 		hardware.observation.State = state
 	}
 	if hardware.replaceTarget {
 		hardware.observation.TargetFingerprint = "replacement-target"
 	}
 	err := hardware.executeErr
+	mutate := hardware.mutateOutcome
+	wait := hardware.waitExecute
 	hardware.mu.Unlock()
 	if callback != nil {
-		callback(operation)
+		callback(action.Operation)
 	}
-	return OperationResult{OutputDigest: digest("f"), Detail: "fake result"}, err
+	if wait {
+		<-ctx.Done()
+		return OperationResult{}, ctx.Err()
+	}
+	outcome, transitionErr := recordFakeBootTransition(hardware.journal, config, action, ordinal, err != nil)
+	if mutate != nil {
+		mutate(action, &outcome)
+	}
+	return OperationResult{OutputDigest: digest("f"), Detail: "fake result", BootTransition: outcome}, errors.Join(err, transitionErr)
+}
+
+func recordFakeBootTransition(journal Journal, config Config, action HardwareAction, ordinal int, failed bool) (BootTransitionOutcome, error) {
+	if journal == nil {
+		return BootTransitionOutcome{}, errors.New("fake hardware has no shared journal")
+	}
+	started := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC).Add(time.Duration(ordinal) * time.Minute)
+	request := BeginBootTransitionRequest{
+		Action: action, StartedAt: started, RecordedAt: started.Add(2 * time.Second),
+		PowerOffObservedAt: started.Add(time.Second), USBAbsentObservedAt: started.Add(2 * time.Second),
+		ColdIntervalEndsAt: started.Add(4 * time.Second), PromptID: "hold_prompt",
+		PromptDigest: digest("a"), PromptExpiresAt: started.Add(2 * time.Minute),
+	}
+	transition, err := journal.BeginBootTransition(request)
+	if err != nil {
+		return BootTransitionOutcome{}, err
+	}
+	if failed {
+		transition.Status = BootTransitionAbortedSafeOff
+		transition.Failure = BootTransitionFailureHardware
+		transition.SafeOffObservedAt = started.Add(3 * time.Second)
+		transition.UpdatedAt = transition.SafeOffObservedAt
+		if err := journal.PutBootTransition(transition); err != nil {
+			return BootTransitionOutcome{}, err
+		}
+		return transition.Outcome()
+	}
+	transition.Status = BootTransitionAwaitingOperator
+	transition.UpdatedAt = transition.ColdIntervalEndsAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return BootTransitionOutcome{}, err
+	}
+	transition.Status = BootTransitionOperatorAcknowledged
+	transition.Operator = OperatorPeer{UID: 1000, GID: 1000, PID: int32(2000 + ordinal)}
+	transition.OperatorAcknowledgedAt = transition.ColdIntervalEndsAt.Add(time.Second)
+	transition.UpdatedAt = transition.OperatorAcknowledgedAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return BootTransitionOutcome{}, err
+	}
+	transition.Status = BootTransitionPowerApplied
+	transition.PowerAppliedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
+	transition.UpdatedAt = transition.PowerAppliedAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return BootTransitionOutcome{}, err
+	}
+	transition.Status = BootTransitionModeObserved
+	transition.ModeObservedAt = transition.PowerAppliedAt.Add(time.Second)
+	transition.ObservedMode = action.RequestedBootMode
+	transition.RPIBootSysfsPath = config.RPIBootSysfsPath
+	transition.RPIBootObservationMethod = RPIBootObservationSysfsPoll
+	transition.RPIBootPollInterval = 50 * time.Millisecond
+	if action.RequestedBootMode == BootModeRPIBoot {
+		transition.RPIBootEligibleTargets = 1
+		transition.ReleasePromptID = "release_prompt"
+		transition.ReleasePromptDigest = digest("b")
+		transition.ReleasePromptExpiresAt = transition.ModeObservedAt.Add(time.Minute)
+	} else {
+		transition.UARTPath = config.UARTPath
+		transition.UARTOutputDigest = digest("c")
+		transition.RPIBootNotObservedThrough = transition.ModeObservedAt
+	}
+	transition.UpdatedAt = transition.ModeObservedAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return BootTransitionOutcome{}, err
+	}
+	if action.RequestedBootMode == BootModeRPIBoot {
+		transition.Status = BootTransitionOperatorReleased
+		transition.ReleaseOperator = transition.Operator
+		transition.OperatorReleasedAt = transition.ModeObservedAt.Add(time.Second)
+		transition.UpdatedAt = transition.OperatorReleasedAt
+		if err := journal.PutBootTransition(transition); err != nil {
+			return BootTransitionOutcome{}, err
+		}
+	}
+	transition.Status = BootTransitionCompleted
+	transition.SafeOffObservedAt = transition.ModeObservedAt.Add(2 * time.Second)
+	if !transition.OperatorReleasedAt.IsZero() {
+		transition.SafeOffObservedAt = transition.OperatorReleasedAt.Add(time.Second)
+	}
+	transition.CompletedAt = transition.SafeOffObservedAt
+	transition.UpdatedAt = transition.CompletedAt
+	evidence, err := transition.Evidence()
+	if err != nil {
+		return BootTransitionOutcome{}, err
+	}
+	transition.EvidenceDigest, err = evidence.Digest()
+	if err != nil {
+		return BootTransitionOutcome{}, err
+	}
+	if err := journal.PutBootTransition(transition); err != nil {
+		return BootTransitionOutcome{}, err
+	}
+	return transition.Outcome()
 }
 
 func TestGuardExecutesApprovedOperationsOnceAndInOrder(t *testing.T) {
@@ -103,6 +255,24 @@ func TestGuardExecutesApprovedOperationsOnceAndInOrder(t *testing.T) {
 	}
 	if !strings.HasPrefix(attempt.Result.BindingDigest, "sha256:") || len(attempt.Result.BindingDigest) != 71 {
 		t.Fatalf("transaction-bound result = %#v", attempt.Result)
+	}
+	if attempt.PreObservationTransition == (BootTransitionOutcome{}) ||
+		attempt.ExecutionTransition == (BootTransitionOutcome{}) ||
+		attempt.PostObservationTransition == (BootTransitionOutcome{}) ||
+		attempt.Result.BootTransition != attempt.ExecutionTransition {
+		t.Fatalf("attempt did not persist all execution-path transitions: %#v", attempt)
+	}
+	for index, phase := range []HardwarePhase{HardwarePhasePreObservation, HardwarePhaseExecute, HardwarePhasePostObservation} {
+		expected, actionErr := makeHardwareAction(plan, plan.Operations[0], phase, nil)
+		if actionErr != nil || len(hardware.actions) <= index || hardware.actions[index] != expected {
+			t.Fatalf("hardware action %d = %#v, want %#v (derive error %v)", index, hardware.actions, expected, actionErr)
+		}
+	}
+	changedEvidence := attempt.Result
+	changedEvidence.BindingDigest = ""
+	changedEvidence.BootTransition.Reference.EvidenceDigest = digest("0")
+	if rebound := bindOperationResult(plan, plan.Operations[0], changedEvidence); rebound.BindingDigest == attempt.Result.BindingDigest {
+		t.Fatal("operation binding digest did not bind execution transition evidence")
 	}
 	if hardware.executeCount != 1 {
 		t.Fatalf("hardware executions = %d, want 1", hardware.executeCount)
@@ -153,13 +323,152 @@ func TestGuardRecordsIntentBeforeCallingHardware(t *testing.T) {
 	}
 }
 
+func TestDispatchAuthorityDenialAfterPreObservationLeavesNoStartedAttempt(t *testing.T) {
+	config := testConfig()
+	plan := testPlan()
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	hardware := &fakeHardware{
+		journal: store,
+		observation: Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+		},
+		after: map[Operation]DirectState{plan.Operations[0].Operation: plan.Operations[0].ExpectedPoststate},
+	}
+	denied := errors.New("server dispatch authority expired")
+	authority := &recordingDispatchAuthority{}
+	authority.execute = func(_ context.Context, gotPlan Plan, gotRequest ExecuteRequest) error {
+		if !samePlan(gotPlan, plan) || gotRequest != requestFor(plan, 1, now.Add(10*time.Minute)) {
+			t.Fatalf("dispatch authority input = %#v / %#v", gotPlan, gotRequest)
+		}
+		if hardware.observeCount != 1 || hardware.executeCount != 0 {
+			t.Fatalf("dispatch recheck order = observations:%d executions:%d", hardware.observeCount, hardware.executeCount)
+		}
+		if attempt, found, err := store.Get(attemptKey(plan, 1)); err != nil || found || attempt != (Attempt{}) {
+			t.Fatalf("attempt existed before dispatch authority: %#v, %t, %v", attempt, found, err)
+		}
+		return denied
+	}
+	guard, err := NewWithClockAndDispatchAuthority(config, hardware, store, fakeClock{now}, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, denied) {
+		t.Fatalf("dispatch denial error = %v", err)
+	}
+	if authority.executeCalls != 1 || authority.reconciliationCalls != 0 || hardware.executeCount != 0 {
+		t.Fatalf("denied dispatch calls = authority:%d/%d hardware:%d", authority.executeCalls, authority.reconciliationCalls, hardware.executeCount)
+	}
+	if attempt, found, err := store.Get(attemptKey(plan, 1)); err != nil || found || attempt != (Attempt{}) {
+		t.Fatalf("denied dispatch persisted AttemptStarted: %#v, %t, %v", attempt, found, err)
+	}
+}
+
+func TestReconciliationDispatchAuthorityDenialPreventsTargetObservation(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	hardware.executeErr = errors.New("execution response lost")
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	uncertain, err := guard.Execute(context.Background(), request)
+	if !errors.Is(err, ErrReconciliationRequired) || uncertain.Status != AttemptUncertain {
+		t.Fatalf("uncertain execution = %#v, %v", uncertain, err)
+	}
+
+	restartedHardware := &fakeHardware{
+		journal: store,
+		observation: Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath,
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
+		},
+	}
+	denied := errors.New("server reconciliation authority expired")
+	authority := &recordingDispatchAuthority{}
+	authority.reconciliation = func(_ context.Context, gotPlan Plan, gotRequest ReconcileRequest) error {
+		if !samePlan(gotPlan, plan) || gotRequest != reconcileRequest(plan, request, now.Add(10*time.Minute)) {
+			t.Fatalf("reconciliation dispatch authority input = %#v / %#v", gotPlan, gotRequest)
+		}
+		if restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+			t.Fatalf("reconciliation reached hardware before authority: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
+		}
+		persisted, found, getErr := store.Get(attemptKey(plan, 1))
+		if getErr != nil || !found || persisted != uncertain {
+			t.Fatalf("journal changed before reconciliation authority: %#v, %t, %v", persisted, found, getErr)
+		}
+		return denied
+	}
+	restarted, err := NewWithClockAndDispatchAuthority(testConfig(), restartedHardware, store, fakeClock{now}, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute))); !errors.Is(err, denied) {
+		t.Fatalf("reconciliation dispatch denial error = %v", err)
+	}
+	if authority.reconciliationCalls != 1 || authority.executeCalls != 0 || restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+		t.Fatalf("denied reconciliation calls = authority:%d/%d hardware:%d/%d", authority.executeCalls, authority.reconciliationCalls, restartedHardware.observeCount, restartedHardware.executeCount)
+	}
+	persisted, found, err := store.Get(attemptKey(plan, 1))
+	if err != nil || !found || persisted != uncertain {
+		t.Fatalf("reconciliation denial changed the attempt: %#v, %t, %v", persisted, found, err)
+	}
+}
+
+func TestDurableTerminalReplaySkipsDispatchAuthority(t *testing.T) {
+	guard, _, store, plan, now := newTestGuard(t)
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	verified, err := guard.Execute(context.Background(), request)
+	if err != nil || verified.Status != AttemptVerified {
+		t.Fatalf("initial execution = %#v, %v", verified, err)
+	}
+	restartedHardware := &fakeHardware{journal: store}
+	authority := &recordingDispatchAuthority{
+		execute: func(context.Context, Plan, ExecuteRequest) error {
+			t.Fatal("terminal execute replay reached dispatch authority")
+			return nil
+		},
+		reconciliation: func(context.Context, Plan, ReconcileRequest) error {
+			t.Fatal("terminal reconciliation replay reached dispatch authority")
+			return nil
+		},
+	}
+	restarted, err := NewWithClockAndDispatchAuthority(testConfig(), restartedHardware, store, fakeClock{now}, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if replayed, err := restarted.Execute(context.Background(), request); err != nil || replayed != verified {
+		t.Fatalf("terminal execute replay = %#v, %v", replayed, err)
+	}
+	if replayed, err := restarted.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute))); err != nil || replayed != verified {
+		t.Fatalf("terminal reconciliation replay = %#v, %v", replayed, err)
+	}
+	if authority.executeCalls != 0 || authority.reconciliationCalls != 0 || restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+		t.Fatalf("terminal replay calls = authority:%d/%d hardware:%d/%d", authority.executeCalls, authority.reconciliationCalls, restartedHardware.observeCount, restartedHardware.executeCount)
+	}
+}
+
 func TestGuardNeverRepeatsUncertainIrreversibleOperation(t *testing.T) {
-	guard, hardware, _, plan, now := newTestGuard(t)
+	guard, hardware, store, plan, now := newTestGuard(t)
 	hardware.executeErr = errors.New("USB response lost")
 	request := requestFor(plan, 1, now.Add(10*time.Minute))
 	attempt, err := guard.Execute(context.Background(), request)
 	if !errors.Is(err, ErrReconciliationRequired) || attempt.Status != AttemptUncertain {
 		t.Fatalf("uncertain execute = %#v, %v", attempt, err)
+	}
+	if attempt.ExecutionTransition.Reference.Status != BootTransitionAbortedSafeOff ||
+		attempt.ExecutionTransition.Reference.Failure != BootTransitionFailureHardware {
+		t.Fatalf("hardware error transition was not preserved: %#v", attempt.ExecutionTransition)
+	}
+	if transition, found, getErr := store.GetBootTransition(attempt.ExecutionTransition.Reference.TransitionKey); getErr != nil || !found {
+		t.Fatalf("hardware error transition is not durable: %#v, %t, %v", transition, found, getErr)
 	}
 	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
 		t.Fatalf("second execute error = %v", err)
@@ -177,6 +486,115 @@ func TestGuardNeverRepeatsUncertainIrreversibleOperation(t *testing.T) {
 	}
 	if hardware.executeCount != 1 {
 		t.Fatalf("reconciliation executed hardware; count = %d", hardware.executeCount)
+	}
+}
+
+func TestGuardPersistsFailedReconciliationTransition(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	hardware.executeErr = errors.New("execution response lost")
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("create uncertain attempt: %v", err)
+	}
+	hardware.executeErr = nil
+	hardware.observeErr = errors.New("reconciliation observation failed")
+	attempt, err := guard.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
+	if !errors.Is(err, ErrReconciliationRequired) || attempt.Status != AttemptUncertain {
+		t.Fatalf("failed reconciliation = %#v, %v", attempt, err)
+	}
+	if attempt.ReconciliationTransition.Reference.Status != BootTransitionAbortedSafeOff ||
+		attempt.ReconciliationTransition.Reference.Failure != BootTransitionFailureHardware {
+		t.Fatalf("failed reconciliation transition was not preserved: %#v", attempt.ReconciliationTransition)
+	}
+	persisted, found, getErr := store.Get(attempt.Key)
+	if getErr != nil || !found || persisted.ReconciliationTransition != attempt.ReconciliationTransition {
+		t.Fatalf("persisted reconciliation failure = %#v, %t, %v", persisted, found, getErr)
+	}
+}
+
+func TestGuardRejectsTamperedBootTransitionOutcomes(t *testing.T) {
+	tests := []struct {
+		name   string
+		phase  HardwarePhase
+		mutate func(*BootTransitionOutcome)
+	}{
+		{"phase", HardwarePhasePreObservation, func(outcome *BootTransitionOutcome) {
+			outcome.Action.Phase = HardwarePhaseExecute
+		}},
+		{"mode", HardwarePhaseExecute, func(outcome *BootTransitionOutcome) {
+			outcome.Action.RequestedBootMode = BootModeNormal
+		}},
+		{"action", HardwarePhasePostObservation, func(outcome *BootTransitionOutcome) {
+			outcome.Action.AuthorizationID = "other-authorization"
+		}},
+		{"evidence", HardwarePhaseReconciliation, func(outcome *BootTransitionOutcome) {
+			outcome.Evidence.ReleasePromptDigest = digest("9")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			guard, hardware, store, plan, now := newTestGuard(t)
+			hardware.mutateOutcome = func(action HardwareAction, outcome *BootTransitionOutcome) {
+				if action.Phase == test.phase {
+					test.mutate(outcome)
+				}
+			}
+			request := requestFor(plan, 1, now.Add(10*time.Minute))
+			var attempt Attempt
+			var err error
+			if test.phase == HardwarePhaseReconciliation {
+				hardware.executeErr = errors.New("execution response lost")
+				if _, executeErr := guard.Execute(context.Background(), request); !errors.Is(executeErr, ErrReconciliationRequired) {
+					t.Fatalf("create uncertain attempt: %v", executeErr)
+				}
+				hardware.executeErr = nil
+				attempt, err = guard.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
+			} else {
+				attempt, err = guard.Execute(context.Background(), request)
+			}
+			if !errors.Is(err, ErrBootTransitionOutcome) {
+				t.Fatalf("tampered %s outcome error = %v", test.phase, err)
+			}
+			persisted, found, getErr := store.Get(attemptKey(plan, 1))
+			if getErr != nil {
+				t.Fatal(getErr)
+			}
+			if test.phase == HardwarePhasePreObservation {
+				if found || attempt != (Attempt{}) {
+					t.Fatalf("tampered pre-observation created an attempt: %#v, found=%t", attempt, found)
+				}
+				return
+			}
+			if !found || persisted.Status != AttemptUncertain {
+				t.Fatalf("tampered outcome did not fail closed: %#v, found=%t", persisted, found)
+			}
+			switch test.phase {
+			case HardwarePhaseExecute:
+				if persisted.ExecutionTransition != (BootTransitionOutcome{}) {
+					t.Fatal("fabricated execution outcome was persisted")
+				}
+			case HardwarePhasePostObservation:
+				if persisted.PostObservationTransition != (BootTransitionOutcome{}) {
+					t.Fatal("fabricated post-observation outcome was persisted")
+				}
+			case HardwarePhaseReconciliation:
+				if persisted.ReconciliationTransition != (BootTransitionOutcome{}) {
+					t.Fatal("fabricated reconciliation outcome was persisted")
+				}
+			}
+		})
+	}
+}
+
+func TestGuardRejectsOutcomeMissingFromItsJournal(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	hardware.journal = NewMemoryStore()
+	attempt, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute)))
+	if !errors.Is(err, ErrBootTransitionOutcome) || attempt != (Attempt{}) {
+		t.Fatalf("non-durable outcome = %#v, %v", attempt, err)
+	}
+	if _, found, getErr := store.Get(attemptKey(plan, 1)); getErr != nil || found {
+		t.Fatalf("non-durable pre-observation created attempt: found=%t err=%v", found, getErr)
 	}
 }
 
@@ -260,6 +678,7 @@ func TestRestartLoadsUncertainAttemptForObservationOnly(t *testing.T) {
 		EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath,
 		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
 	}}
+	restartedHardware.journal = store
 	restarted, err := NewWithClock(testConfig(), restartedHardware, store, fakeClock{now})
 	if err != nil {
 		t.Fatal(err)
@@ -356,6 +775,7 @@ func TestRestartReconcilesOriginalPlanAfterClaimTransfersLanes(t *testing.T) {
 		EligibleTargets: 1, RPIBootSysfsPath: currentConfig.RPIBootSysfsPath,
 		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
 	}}
+	restartedHardware.journal = store
 	restarted, err := NewWithClock(currentConfig, restartedHardware, store, fakeClock{now})
 	if err != nil {
 		t.Fatal(err)
@@ -372,6 +792,15 @@ func TestRestartReconcilesOriginalPlanAfterClaimTransfersLanes(t *testing.T) {
 	attempt, err := restarted.ReconcilePlan(context.Background(), plan, reconcile)
 	if err != nil || attempt.Status != AttemptVerified {
 		t.Fatalf("transferred reconciliation = %#v, %v", attempt, err)
+	}
+	expectedAction, actionErr := makeHardwareAction(plan, plan.Operations[0], HardwarePhaseReconciliation, &reconcile.Claim)
+	if actionErr != nil || attempt.ReconciliationTransition.Reference.Status != BootTransitionCompleted ||
+		attempt.ReconciliationTransition.Action != expectedAction ||
+		attempt.ReconciliationTransition.Evidence.Action != expectedAction {
+		t.Fatalf("reconciliation transition evidence = %#v, expected action %#v, derive error %v", attempt.ReconciliationTransition, expectedAction, actionErr)
+	}
+	if durable, found, getErr := store.GetBootTransition(attempt.ReconciliationTransition.Reference.TransitionKey); getErr != nil || !found {
+		t.Fatalf("reconciliation transition is not durable: %#v, %t, %v", durable, found, getErr)
 	}
 	if restartedHardware.observeCount != 1 {
 		t.Fatalf("reconciliation observed target %d times, want exactly once", restartedHardware.observeCount)
@@ -391,12 +820,13 @@ func TestRestartReconciliationRechecksClaimAfterJournalRecovery(t *testing.T) {
 
 	clock := &mutableClock{now: now}
 	expiresAt := now.Add(ReconciliationObservationBudget + testConfig().LeaseSafetyMargin)
-	restartedStore := &hookStore{AttemptStore: store}
+	restartedStore := &hookStore{Journal: store}
 	restartedStore.afterFirstGet = func() { clock.now = clock.now.Add(time.Nanosecond) }
 	restartedHardware := &fakeHardware{observation: Observation{
 		EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath,
 		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
 	}}
+	restartedHardware.journal = restartedStore
 	restarted, err := NewWithClock(testConfig(), restartedHardware, restartedStore, clock)
 	if err != nil {
 		t.Fatal(err)
@@ -418,7 +848,9 @@ func TestReconciliationPlanWithMissingJournalPermanentlyDisarmsExecute(t *testin
 		EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
 		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
 	}}
-	guard, err := NewWithClock(config, hardware, NewMemoryStore(), fakeClock{now})
+	store := NewMemoryStore()
+	hardware.journal = store
+	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,6 +908,7 @@ func TestReconcileKeepsIndistinguishableOperationUncertain(t *testing.T) {
 		},
 	}
 	store := NewMemoryStore()
+	hardware.journal = store
 	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
 	if err != nil {
 		t.Fatal(err)
@@ -511,6 +944,7 @@ func TestRestartFailsClosedForUnknownOrQuarantinedState(t *testing.T) {
 		unknown := plan.Operations[0].ExpectedPoststate
 		unknown.SecurityState = "unknown"
 		restartedHardware := &fakeHardware{observation: Observation{EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint, State: unknown}}
+		restartedHardware.journal = store
 		restarted, err := NewWithClock(testConfig(), restartedHardware, store, fakeClock{now})
 		if err != nil {
 			t.Fatal(err)
@@ -540,6 +974,7 @@ func TestRestartFailsClosedForUnknownOrQuarantinedState(t *testing.T) {
 			t.Fatal(err)
 		}
 		restartedHardware := &fakeHardware{observation: Observation{EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint, State: bad}}
+		restartedHardware.journal = store
 		restarted, err := NewWithClock(testConfig(), restartedHardware, store, fakeClock{now})
 		if err != nil {
 			t.Fatal(err)
@@ -700,6 +1135,7 @@ func TestGuardRechecksAuthorityAfterDirectPrestateObservation(t *testing.T) {
 			}
 			hardware.beforeObserve = func() { clock.now = test.after }
 			store := NewMemoryStore()
+			hardware.journal = store
 			guard, err := NewWithClock(config, hardware, store, clock)
 			if err != nil {
 				t.Fatal(err)
@@ -721,6 +1157,63 @@ func TestGuardRechecksAuthorityAfterDirectPrestateObservation(t *testing.T) {
 	}
 }
 
+func TestGuardEnforcesReviewedOperationDeadline(t *testing.T) {
+	newDeadlineGuard := func(t *testing.T, waitObserve, waitExecute bool) (*Guard, *fakeHardware, *MemoryStore, Plan, time.Time) {
+		t.Helper()
+		config := testConfig()
+		plan := testPlanBody()
+		plan.Operations[0].MaximumDuration = 20 * time.Millisecond
+		plan = deriveTestPlan(plan)
+		now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+		store := NewMemoryStore()
+		hardware := &fakeHardware{
+			journal: store, waitObserve: waitObserve, waitExecute: waitExecute,
+			observation: Observation{
+				EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+				TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+			},
+		}
+		guard, err := NewWithClock(config, hardware, store, fakeClock{now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := guard.LoadPlan(context.Background(), plan); err != nil {
+			t.Fatal(err)
+		}
+		return guard, hardware, store, plan, now
+	}
+
+	t.Run("pre-observation", func(t *testing.T) {
+		guard, hardware, store, plan, now := newDeadlineGuard(t, true, false)
+		attempt, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(time.Minute)))
+		if !errors.Is(err, ErrOperationDeadline) || attempt != (Attempt{}) {
+			t.Fatalf("deadline result = %#v, %v", attempt, err)
+		}
+		if hardware.executeCount != 0 {
+			t.Fatalf("deadline-crossing pre-observation reached execution %d times", hardware.executeCount)
+		}
+		if _, found, getErr := store.Get(attemptKey(plan, 1)); getErr != nil || found {
+			t.Fatalf("pre-execution deadline created an attempt: found=%t err=%v", found, getErr)
+		}
+	})
+
+	t.Run("execution", func(t *testing.T) {
+		guard, hardware, store, plan, now := newDeadlineGuard(t, false, true)
+		attempt, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(time.Minute)))
+		if !errors.Is(err, ErrOperationDeadline) || !errors.Is(err, ErrReconciliationRequired) ||
+			attempt.Status != AttemptUncertain {
+			t.Fatalf("deadline result = %#v, %v", attempt, err)
+		}
+		if hardware.executeCount != 1 {
+			t.Fatalf("execution count = %d", hardware.executeCount)
+		}
+		durable, found, getErr := store.Get(attemptKey(plan, 1))
+		if getErr != nil || !found || durable.Status != AttemptUncertain {
+			t.Fatalf("durable deadline result = %#v, found=%t err=%v", durable, found, getErr)
+		}
+	})
+}
+
 func TestGuardRejectsExpiredClaimWhenDurationArithmeticWouldOverflow(t *testing.T) {
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	for name, expiry := range map[string]time.Time{
@@ -738,7 +1231,8 @@ func TestGuardRejectsExpiredClaimWhenDurationArithmeticWouldOverflow(t *testing.
 					TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
 				},
 			}
-			journal := &countingStore{}
+			journal := &countingStore{Journal: NewMemoryStore()}
+			hardware.journal = journal
 			guard, err := NewWithClock(config, hardware, journal, fakeClock{now})
 			if err != nil {
 				t.Fatal(err)
@@ -777,7 +1271,9 @@ func TestLoadPlanPerformsNoTargetIO(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			hardware := &fakeHardware{observation: test.obs, observeErr: errors.New("target I/O must not be attempted")}
-			guard, err := New(config, hardware, NewMemoryStore())
+			store := NewMemoryStore()
+			hardware.journal = store
+			guard, err := New(config, hardware, store)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -891,13 +1387,22 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	action := testHardwareAction(HardwarePhasePreObservation, OperationProgramCustomerKeyAndEEPROM)
+	action.TransactionID = "transaction"
+	action.PlanDigest = digest("a")
+	action.TargetFingerprint = "target"
+	action.OperationDigest = digest("b")
+	preObservation, err := recordFakeBootTransition(store, testConfig(), action, 200, false)
+	if err != nil {
+		t.Fatalf("persist pre-observation transition: %v", err)
+	}
 	attempt := Attempt{
-		SchemaVersion: AttemptSchemaVersion, Key: "transaction/plan/1/1",
+		SchemaVersion: AttemptSchemaVersion, Key: "transaction/" + digest("a") + "/1/1",
 		TransactionID: "transaction", PlanDigest: digest("a"), TargetFingerprint: "target",
 		FenceEpoch: 1, ApprovalID: "approval", IntentReceipt: "intent", IntentSequence: 1,
 		Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM,
 		OperationDigest: digest("b"), Status: AttemptStarted, StartedAt: now, UpdatedAt: now,
-		ObservedState: DirectState{SecurityState: "fresh"}, Detail: "started",
+		ObservedState: DirectState{SecurityState: "fresh"}, PreObservationTransition: preObservation, Detail: "started",
 	}
 	if err := store.Put(attempt); err != nil {
 		t.Fatalf("put started: %v", err)
@@ -908,10 +1413,14 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 	if err := store.Put(attempt); err != nil {
 		t.Fatalf("put verified: %v", err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close first journal owner: %v", err)
+	}
 	reopened, err := NewFileStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer reopened.Close()
 	actual, ok, err := reopened.Get(attempt.Key)
 	if err != nil || !ok || actual != attempt {
 		t.Fatalf("reopened = %#v, %t, %v", actual, ok, err)
@@ -924,16 +1433,35 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 }
 
 func TestFileStoreRejectsPreAttemptStoreSchema(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "attempts.json")
-	if err := os.WriteFile(path, []byte(`{"schema_version":"provisioning.kaiba.network/lane-guard/v1alpha3","attempts":{}}`), 0o600); err != nil {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "attempts.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":"provisioning.kaiba.network/lane-guard-attempt-store/v1alpha2","attempts":{},"boot_transitions":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := NewFileStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer store.Close()
 	if _, _, err := store.Get("missing"); err == nil || !strings.Contains(err.Error(), "unsupported schema") {
 		t.Fatalf("old journal error = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	oldAttemptPath := filepath.Join(directory, "old-attempt.json")
+	oldAttempt := `{"schema_version":"` + AttemptStoreSchemaVersion + `","attempts":{"legacy":{"schema_version":"provisioning.kaiba.network/lane-guard-attempt/v1alpha1","key":"legacy"}},"boot_transitions":{}}`
+	if err := os.WriteFile(oldAttemptPath, []byte(oldAttempt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldAttemptStore, err := NewFileStore(oldAttemptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldAttemptStore.Close()
+	if _, _, err := oldAttemptStore.Get("legacy"); err == nil || !strings.Contains(err.Error(), "unsupported attempt schema") {
+		t.Fatalf("old attempt error = %v", err)
 	}
 }
 
@@ -950,6 +1478,7 @@ func newTestGuard(t *testing.T) (*Guard, *fakeHardware, *MemoryStore, Plan, time
 		},
 	}
 	store := NewMemoryStore()
+	hardware.journal = store
 	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
 	if err != nil {
 		t.Fatal(err)
@@ -960,10 +1489,13 @@ func newTestGuard(t *testing.T) (*Guard, *fakeHardware, *MemoryStore, Plan, time
 	return guard, hardware, store, plan, now
 }
 
-func loadTestIntent(t *testing.T, config Config, hardware Hardware, store AttemptStore, plan Plan, sequence uint32, now time.Time) (*Guard, Plan) {
+func loadTestIntent(t *testing.T, config Config, hardware Hardware, store Journal, plan Plan, sequence uint32, now time.Time) (*Guard, Plan) {
 	t.Helper()
 	plan.IntentSequence = sequence
 	plan.IntentReceipt = fmt.Sprintf("receipt-%d", sequence)
+	if fake, ok := hardware.(*fakeHardware); ok {
+		fake.journal = store
+	}
 	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
 	if err != nil {
 		t.Fatal(err)

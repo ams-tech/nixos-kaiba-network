@@ -332,6 +332,8 @@
             kaiba-provision-control
             kaiba-provision-integrated-rehearsal
             kaiba-provision-lane-guard
+            kaiba-provision-lane-operator
+            kaiba-provision-lane-workflow
             kaiba-provision-media-contract
             kaiba-provision
             kaiba-provision-rehearsal

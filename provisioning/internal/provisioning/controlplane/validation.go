@@ -66,7 +66,40 @@ func validateRenewClaimRequest(request RenewClaimRequest) error {
 	}); err != nil {
 		return err
 	}
+	if (request.ApprovalID == "") != (request.PlanDigest == "") {
+		return invalid("approval_id and plan_digest must either both be absent or both be present")
+	}
+	if request.ApprovalID != "" && (!validIdentifier(request.ApprovalID) || !validDigest(request.PlanDigest)) {
+		return invalid("approval_id or plan_digest is invalid")
+	}
+	if request.TargetBoundAuthorizationExpiresAt != nil {
+		if request.TargetBoundAuthorizationExpiresAt.IsZero() {
+			return invalid("target_bound_authorization_expires_at must be non-zero")
+		}
+		if request.ApprovalID != "" {
+			return invalid("target-bound authorization and approval binding are mutually exclusive")
+		}
+	}
 	return validateLease(request.LeaseDurationSeconds)
+}
+
+func validateCurrentClaimPreflightRequest(request CurrentClaimPreflightRequest) error {
+	if request.SchemaVersion != CurrentClaimPreflightRequestSchemaVersion {
+		return invalid("schema_version is unsupported")
+	}
+	if err := validateMutationContext(request.MutationContext); err != nil {
+		return err
+	}
+	if (request.ApprovalID == "") != (request.PlanDigest == "") {
+		return invalid("approval_id and plan_digest must either both be absent or both be present")
+	}
+	if request.ApprovalID != "" && (!validIdentifier(request.ApprovalID) || !validDigest(request.PlanDigest)) {
+		return invalid("approval_id or plan_digest is invalid")
+	}
+	if request.MinimumApprovalRemainingSeconds != 0 && request.ApprovalID == "" {
+		return invalid("minimum_approval_remaining_seconds requires approval_id and plan_digest")
+	}
+	return nil
 }
 
 func validateTransferClaimRequest(request TransferClaimRequest) error {
@@ -114,7 +147,7 @@ func validateBindTargetRequest(request BindTargetRequest) error {
 	return nil
 }
 
-func validateRecordApprovalRequest(request RecordApprovalRequest, now time.Time) error {
+func validateRecordApprovalRequest(request RecordApprovalRequest) error {
 	if err := validateEnvelope(request.SchemaVersion, RecordApprovalRequestSchemaVersion, request.IdempotencyKey); err != nil {
 		return err
 	}
@@ -138,7 +171,59 @@ func validateRecordApprovalRequest(request RecordApprovalRequest, now time.Time)
 	if err := validateDevelopmentOperationNames(request.AllowedOperations); err != nil {
 		return invalid("allowed_operations: " + err.Error())
 	}
-	if !request.ExpiresAt.After(now) || request.ExpiresAt.After(now.Add(maximumApprovalLifetime)) {
+	if request.ExpiresAt.IsZero() {
+		return invalid("approval expiry must be non-zero")
+	}
+	return nil
+}
+
+func validateApprovalPreflightRequest(request ApprovalPreflightRequest) error {
+	if request.SchemaVersion != ApprovalPreflightRequestSchemaVersion {
+		return invalid("schema_version is unsupported")
+	}
+	if err := validateMutationContext(request.MutationContext); err != nil {
+		return err
+	}
+	if !validIdentifier(request.ApprovalID) || !validIdentifier(request.ApproverID) ||
+		!validIdentifier(request.StationID) || !validIdentifier(request.LaneID) {
+		return invalid("approval, approver, station, or lane identity is invalid")
+	}
+	for _, digest := range []string{request.TransactionDigest, request.PlanDigest, request.TargetFingerprint} {
+		if !validDigest(digest) {
+			return invalid("approval preflight digest is invalid")
+		}
+	}
+	if err := request.Release.Validate(); err != nil {
+		return invalid("release binding is invalid: " + err.Error())
+	}
+	if err := validateStringSet("allowed_operations", request.AllowedOperations, 1, 32); err != nil {
+		return err
+	}
+	if err := validateDevelopmentOperationNames(request.AllowedOperations); err != nil {
+		return invalid("allowed_operations: " + err.Error())
+	}
+	return validateApprovalTimeShape(request.ApprovedAt, request.ExpiresAt)
+}
+
+func validateApprovalTimeShape(approvedAt, expiresAt time.Time) error {
+	if approvedAt.IsZero() {
+		return invalid("approved_at must be non-zero")
+	}
+	if !expiresAt.After(approvedAt) || expiresAt.After(approvedAt.Add(maximumApprovalLifetime)) {
+		return invalid("approval expiry must be after approval and no more than 24 hours later")
+	}
+	return nil
+}
+
+func validateCurrentApprovalPreflightTimes(approvedAt, expiresAt, now time.Time) error {
+	if approvedAt.After(now.Add(maximumApprovalClockSkew)) {
+		return invalid("approved_at must be no more than one minute in the future")
+	}
+	return validateCurrentApprovalExpiry(expiresAt, now)
+}
+
+func validateCurrentApprovalExpiry(expiresAt, now time.Time) error {
+	if !expiresAt.After(now) || expiresAt.After(now.Add(maximumApprovalLifetime)) {
 		return invalid("approval expiry must be in the future and no more than 24 hours away")
 	}
 	return nil

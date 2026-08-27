@@ -100,6 +100,61 @@ func TestReadersUseMTLSStrictRoutesAndSeparateRoots(t *testing.T) {
 	}
 }
 
+func TestControlReaderUsesTypedCurrentClaimPreflightCommand(t *testing.T) {
+	certificatePath, keyPath := writeClientCredential(t)
+	wantRequest := controlplane.CurrentClaimPreflightRequest{
+		SchemaVersion: controlplane.CurrentClaimPreflightRequestSchemaVersion,
+		MutationContext: controlplane.MutationContext{
+			TransactionID: "transaction-1", ExpectedResourceVersion: 7,
+			ClaimID: "claim-1", FenceEpoch: 3,
+		},
+		ApprovalID: "approval-1", PlanDigest: "sha256:" + strings.Repeat("a", 64),
+	}
+	wantTransaction := controlplane.Transaction{
+		SchemaVersion:   controlplane.TransactionSchemaVersion,
+		ID:              wantRequest.TransactionID,
+		ResourceVersion: wantRequest.ExpectedResourceVersion,
+	}
+	server, serverCA := startMTLSServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		assertClientCertificate(t, request)
+		if request.Method != http.MethodPost || request.URL.EscapedPath() != "/api/v1/commands" || request.URL.RawQuery != "" {
+			t.Errorf("preflight request = %s %s", request.Method, request.URL.String())
+		}
+		if request.Header.Get("Accept") != "application/json" || request.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("preflight headers = %#v", request.Header)
+		}
+		var command controlplane.Command
+		if err := json.NewDecoder(request.Body).Decode(&command); err != nil {
+			t.Errorf("decode preflight command: %v", err)
+		}
+		if command.SchemaVersion != controlplane.CommandSchemaVersion || command.Operation != "preflight_current_claim" {
+			t.Errorf("preflight command = %#v", command)
+		}
+		var typedRequest controlplane.CurrentClaimPreflightRequest
+		if err := controlplane.DecodeStrict(command.Request, &typedRequest); err != nil {
+			t.Errorf("decode typed preflight request: %v", err)
+		}
+		if typedRequest != wantRequest {
+			t.Errorf("typed preflight request = %#v, want %#v", typedRequest, wantRequest)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(wantTransaction)
+	})
+	reader, err := NewControlReader(server.URL, mtls.ClientFiles{
+		Certificate: certificatePath, PrivateKey: keyPath, ServerCA: serverCA,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := reader.PreflightCurrentClaim(context.Background(), wantRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.ID != wantTransaction.ID || transaction.ResourceVersion != wantTransaction.ResourceVersion {
+		t.Fatalf("preflight transaction = %#v", transaction)
+	}
+}
+
 func TestAuditReaderUsesExactReceiptSelection(t *testing.T) {
 	certificatePath, keyPath := writeClientCredential(t)
 	receiptID := "sha256:" + strings.Repeat("a", 64)
@@ -299,6 +354,12 @@ func TestAuditReaderRejectsMalformedEnvelopeAndCrossTransactionRecords(t *testin
 func TestReadersRejectInvalidTransactionIDWithoutNetworkAccess(t *testing.T) {
 	if _, err := (&ControlReader{}).GetTransaction(context.Background(), "transaction/escape"); err == nil {
 		t.Fatal("invalid control transaction ID was accepted")
+	}
+	if _, err := (&ControlReader{}).PreflightCurrentClaim(context.Background(), controlplane.CurrentClaimPreflightRequest{
+		SchemaVersion:   controlplane.CurrentClaimPreflightRequestSchemaVersion,
+		MutationContext: controlplane.MutationContext{TransactionID: "transaction/escape"},
+	}); err == nil {
+		t.Fatal("invalid current-claim preflight transaction ID was accepted")
 	}
 	if _, err := (&AuditReader{}).GetRecords(context.Background(), "transaction/escape"); err == nil {
 		t.Fatal("invalid audit transaction ID was accepted")

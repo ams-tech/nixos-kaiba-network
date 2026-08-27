@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,14 +12,18 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/authoritybridge"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/evidencefile"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/operatorprompt"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/physicalrpi5"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebindingmanifest"
@@ -43,13 +48,111 @@ var (
 
 var effectiveUID = os.Geteuid
 
-type hardwareFactory func(physicalrpi5.Config) (laneguard.Hardware, error)
+type hardwareFactory func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error)
 
-var buildHardware hardwareFactory = func(config physicalrpi5.Config) (laneguard.Hardware, error) {
-	return physicalrpi5.New(config, physicalrpi5.Dependencies{})
+var buildHardware hardwareFactory = func(config physicalrpi5.Config, dependencies physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+	return physicalrpi5.New(config, dependencies)
 }
 
+type operatorPromptServer interface {
+	physicalrpi5.Prompter
+	io.Closer
+}
+
+type laneJournal interface {
+	laneguard.Journal
+	io.Closer
+}
+
+var (
+	lookupOperatorGroup  = user.LookupGroup
+	listenOperatorPrompt = func(config operatorprompt.Config) (operatorPromptServer, error) {
+		return operatorprompt.Listen(config)
+	}
+	openLaneJournal = func(path string) (laneJournal, error) {
+		return laneguard.NewFileStore(path)
+	}
+	validateAttemptDestination           = evidencefile.ValidateTrustedNewPath
+	readAttemptEvidence                  = evidencefile.ReadTrustedExisting
+	writeAttemptEvidence                 = evidencefile.WriteCanonicalNewTrusted
+	commandOutput              io.Writer = os.Stdout
+)
+
 var requestAuthority = authoritybridge.Request
+
+type bridgeDispatchAuthority struct {
+	socketPath string
+	request    authoritybridge.BridgeRequest
+	config     laneguard.Config
+	mode       authoritybridge.Mode
+}
+
+func (authority bridgeDispatchAuthority) RecheckExecute(ctx context.Context, plan laneguard.Plan, request laneguard.ExecuteRequest) error {
+	if authority.mode != authoritybridge.ModeExecute || authority.request.Mode != authoritybridge.ModeExecute {
+		return errors.New("execution dispatch used a non-execution authority mode")
+	}
+	binding, err := requestAuthority(ctx, authority.socketPath, authority.request)
+	if err != nil {
+		return fmt.Errorf("refresh authenticated execution authority: %w", err)
+	}
+	if binding.ExecuteRequest == nil || binding.ReconcileRequest != nil {
+		return errors.New("refreshed authority returned the wrong request variant for execution")
+	}
+	if err := laneguard.ValidatePlanRequest(authority.config, binding.Plan, *binding.ExecuteRequest); err != nil {
+		return fmt.Errorf("validate refreshed execution authority: %w", err)
+	}
+	return compareDispatchBinding(
+		struct {
+			Plan    laneguard.Plan           `json:"plan"`
+			Request laneguard.ExecuteRequest `json:"execute_request"`
+		}{Plan: plan, Request: request},
+		struct {
+			Plan    laneguard.Plan           `json:"plan"`
+			Request laneguard.ExecuteRequest `json:"execute_request"`
+		}{Plan: binding.Plan, Request: *binding.ExecuteRequest},
+	)
+}
+
+func (authority bridgeDispatchAuthority) RecheckReconciliation(ctx context.Context, plan laneguard.Plan, request laneguard.ReconcileRequest) error {
+	if authority.mode != authoritybridge.ModeReconcile || authority.request.Mode != authoritybridge.ModeReconcile {
+		return errors.New("reconciliation dispatch used a non-reconciliation authority mode")
+	}
+	binding, err := requestAuthority(ctx, authority.socketPath, authority.request)
+	if err != nil {
+		return fmt.Errorf("refresh authenticated reconciliation authority: %w", err)
+	}
+	if binding.ExecuteRequest != nil || binding.ReconcileRequest == nil {
+		return errors.New("refreshed authority returned the wrong request variant for reconciliation")
+	}
+	if err := laneguard.ValidateReconcileRequest(authority.config, binding.Plan, *binding.ReconcileRequest); err != nil {
+		return fmt.Errorf("validate refreshed reconciliation authority: %w", err)
+	}
+	return compareDispatchBinding(
+		struct {
+			Plan    laneguard.Plan             `json:"plan"`
+			Request laneguard.ReconcileRequest `json:"reconcile_request"`
+		}{Plan: plan, Request: request},
+		struct {
+			Plan    laneguard.Plan             `json:"plan"`
+			Request laneguard.ReconcileRequest `json:"reconcile_request"`
+		}{Plan: binding.Plan, Request: *binding.ReconcileRequest},
+	)
+}
+
+func compareDispatchBinding(expected, refreshed any) error {
+	expectedBytes, err := json.Marshal(expected)
+	if err != nil {
+		return fmt.Errorf("encode expected dispatch authority: %w", err)
+	}
+	refreshedBytes, err := json.Marshal(refreshed)
+	if err != nil {
+		return fmt.Errorf("encode refreshed dispatch authority: %w", err)
+	}
+	if !bytes.Equal(expectedBytes, refreshedBytes) {
+		return laneguard.ErrPlanMismatch
+	}
+	return nil
+}
 
 var currentExecutable = os.Executable
 
@@ -89,6 +192,9 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	journalPath := flags.String("journal", "", "absolute durable execute-once journal path")
 	draftPath := flags.String("draft", "", "absolute authority-free approved-plan draft JSON path")
 	bridgeSocket := flags.String("bridge-socket", "", "absolute authenticated authority-bridge Unix socket path")
+	operatorSocket := flags.String("operator-socket", "", "absolute authenticated operator-prompt Unix socket path")
+	operatorGroup := flags.String("operator-group", "", "fixed primary group authorized to acknowledge operator prompts")
+	attemptDirectory := flags.String("attempt-directory", "", "absolute trusted directory for immutable lane-attempt evidence")
 	mode := flags.String("mode", "execute", "one-shot operation: execute or reconcile")
 	enableMutations := flags.Bool("enable-mutations", false, "enable the immutable physical RPIBOOT adapter")
 	printReleaseBinding := flags.Bool("print-release-binding", false, "print the immutable public release binding as JSON and exit")
@@ -123,7 +229,7 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		if err != nil {
 			return err
 		}
-		encoder := json.NewEncoder(os.Stdout)
+		encoder := json.NewEncoder(commandOutput)
 		encoder.SetEscapeHTML(false)
 		if *printReleaseMaterial {
 			return encoder.Encode(material)
@@ -131,7 +237,7 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		return encoder.Encode(material.Binding)
 	}
 	if !*enableMutations {
-		fmt.Fprintf(os.Stdout, "lane guard configuration valid; mutation disabled for %s/%s\n", laneConfig.StationID, laneConfig.LaneID)
+		fmt.Fprintf(commandOutput, "lane guard configuration valid; mutation disabled for %s/%s\n", laneConfig.StationID, laneConfig.LaneID)
 		return nil
 	}
 	if effectiveUID() != 0 {
@@ -140,8 +246,16 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if *mode != "execute" && *mode != "reconcile" {
 		return errors.New("mode must be execute or reconcile")
 	}
-	if *journalPath == "" || *draftPath == "" || *bridgeSocket == "" {
-		return errors.New("enabled operation requires journal, draft, and bridge-socket paths")
+	if *journalPath == "" || *draftPath == "" || *bridgeSocket == "" || *operatorSocket == "" || *operatorGroup == "" || *attemptDirectory == "" {
+		return errors.New("enabled operation requires journal, draft, bridge-socket, operator-socket, operator-group, and attempt-directory")
+	}
+	for label, path := range map[string]string{
+		"journal": *journalPath, "draft": *draftPath, "bridge socket": *bridgeSocket,
+		"operator socket": *operatorSocket, "attempt directory": *attemptDirectory,
+	} {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			return fmt.Errorf("%s path must be clean and absolute", label)
+		}
 	}
 	var draft laneguard.Plan
 	if err := loadStrictJSON(*draftPath, 1024*1024, &draft); err != nil {
@@ -162,12 +276,13 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		return err
 	}
 	bridgeMode := authoritybridge.Mode(*mode)
-	binding, err := requestAuthority(ctx, *bridgeSocket, authoritybridge.BridgeRequest{
+	bridgeRequest := authoritybridge.BridgeRequest{
 		SchemaVersion: authoritybridge.RequestSchemaVersion,
 		Mode:          bridgeMode,
 		TransactionID: draft.TransactionID,
 		DraftSnapshot: draft,
-	})
+	}
+	binding, err := requestAuthority(ctx, *bridgeSocket, bridgeRequest)
 	if err != nil {
 		return fmt.Errorf("obtain authenticated lane authority: %w", err)
 	}
@@ -194,11 +309,51 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 			return fmt.Errorf("validate authenticated plan and operation request: %w", err)
 		}
 	}
-	if *mode == "execute" && !time.Now().UTC().Before(plan.ApprovalExpiresAt) {
-		return laneguard.ErrApprovalExpired
-	}
 	if plan.Release != compiledRelease {
 		return fmt.Errorf("%w: approved release differs from the immutable lane-guard build", laneguard.ErrPlanMismatch)
+	}
+	attemptPath, err := plannedAttemptEvidencePath(*attemptDirectory, *mode, executeRequest, reconcileRequest)
+	if err != nil {
+		return fmt.Errorf("derive immutable attempt destination: %w", err)
+	}
+	operatorGID, err := resolveOperatorGID(*operatorGroup)
+	if err != nil {
+		return err
+	}
+	store, err := openLaneJournal(*journalPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, store.Close())
+	}()
+	attemptKey := laneguard.AttemptJournalKey(plan, originalRequest.Sequence)
+	durable, found, err := store.Get(attemptKey)
+	if err != nil {
+		return fmt.Errorf("read durable attempt before physical I/O: %w", err)
+	}
+	if found && !attemptMatchesAuthenticatedPlan(durable, plan, originalRequest.Sequence) {
+		return fmt.Errorf("%w: durable attempt differs from the authenticated operation", laneguard.ErrPlanMismatch)
+	}
+	destinationExists, err := inspectAttemptDestination(attemptPath, durable, found)
+	if err != nil {
+		return err
+	}
+	if destinationExists {
+		return publishDurableAttempt(attemptPath, durable, destinationExists, attemptStatusError(*mode, durable.Status))
+	}
+	if found && isPublishableAttemptStatus(durable.Status) &&
+		(*mode == "execute" || durable.Status != laneguard.AttemptUncertain) {
+		return publishDurableAttempt(attemptPath, durable, false, attemptStatusError(*mode, durable.Status))
+	}
+	if found && durable.Status == laneguard.AttemptStarted && *mode == "execute" {
+		return errors.Join(
+			laneguard.ErrReconciliationRequired,
+			fmt.Errorf("durable attempt %q remains started; immutable receipt was not published", attemptKey),
+		)
+	}
+	if *mode == "execute" && !time.Now().UTC().Before(plan.ApprovalExpiresAt) {
+		return laneguard.ErrApprovalExpired
 	}
 	initialMode := physicalrpi5.ModeFresh
 	if *mode == "reconcile" {
@@ -211,7 +366,18 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		InitialMode: initialMode, ExpectedCustomerKeyHash: expectedCustomerKeyHash,
 		ExpectedEEPROMHash: expectedEEPROMHash, ExpectedBootImageDigest: expectedBootImageDigest,
 	}
-	hardware, err := buildHardware(physicalConfig)
+	promptServer, err := listenOperatorPrompt(operatorprompt.Config{
+		SocketPath: *operatorSocket, AllowedPrimaryGID: operatorGID,
+	})
+	if err != nil {
+		return fmt.Errorf("create authenticated operator prompt socket: %w", err)
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, promptServer.Close())
+	}()
+	hardware, err := buildHardware(physicalConfig, physicalrpi5.Dependencies{
+		Journal: store, Prompter: promptServer,
+	})
 	if err != nil {
 		return fmt.Errorf("construct immutable physical adapter: %w", err)
 	}
@@ -220,11 +386,12 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 			resultErr = errors.Join(resultErr, closer.Close())
 		}()
 	}
-	store, err := laneguard.NewFileStore(*journalPath)
-	if err != nil {
-		return err
-	}
-	guard, err := laneguard.New(laneConfig, hardware, store)
+	guard, err := laneguard.NewWithDispatchAuthority(laneConfig, hardware, store, bridgeDispatchAuthority{
+		socketPath: *bridgeSocket,
+		request:    bridgeRequest,
+		config:     laneConfig,
+		mode:       bridgeMode,
+	})
 	if err != nil {
 		return err
 	}
@@ -233,20 +400,186 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 			return fmt.Errorf("load approved plan into fixed lane: %w", err)
 		}
 	}
-	var attempt laneguard.Attempt
 	if *mode == "reconcile" {
-		attempt, err = guard.ReconcilePlan(ctx, plan, reconcileRequest)
+		_, err = guard.ReconcilePlan(ctx, plan, reconcileRequest)
 	} else {
-		attempt, err = guard.Execute(ctx, executeRequest)
+		_, err = guard.Execute(ctx, executeRequest)
 	}
-	if attempt.Key != "" {
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetEscapeHTML(false)
-		if encodeErr := encoder.Encode(attempt); encodeErr != nil {
-			return errors.Join(err, fmt.Errorf("encode attempt result: %w", encodeErr))
+	durable, found, reloadErr := store.Get(attemptKey)
+	if reloadErr != nil {
+		return errors.Join(err, fmt.Errorf("reload durable attempt after lane operation; receipt not published: %w", reloadErr))
+	}
+	if !found {
+		return errors.Join(err, fmt.Errorf("durable attempt %q is missing after lane operation; receipt not published", attemptKey))
+	}
+	if !attemptMatchesAuthenticatedPlan(durable, plan, originalRequest.Sequence) {
+		return errors.Join(err, fmt.Errorf("%w: reloaded durable attempt differs from the authenticated operation; receipt not published", laneguard.ErrPlanMismatch))
+	}
+	if !isPublishableAttemptStatus(durable.Status) {
+		return errors.Join(err, fmt.Errorf(
+			"durable attempt %q has non-terminal status %q after lane operation; receipt not published",
+			attemptKey, durable.Status,
+		))
+	}
+	return publishDurableAttempt(attemptPath, durable, false, err)
+}
+
+const maximumAttemptEvidenceBytes = 1024 * 1024
+
+func attemptMatchesAuthenticatedPlan(attempt laneguard.Attempt, plan laneguard.Plan, sequence uint32) bool {
+	if sequence == 0 || int(sequence) > len(plan.Operations) {
+		return false
+	}
+	operation := plan.Operations[sequence-1]
+	return attempt.SchemaVersion == laneguard.AttemptSchemaVersion &&
+		attempt.Key == laneguard.AttemptJournalKey(plan, sequence) &&
+		attempt.TransactionID == plan.TransactionID && attempt.PlanDigest == plan.PlanDigest &&
+		attempt.TargetFingerprint == plan.TargetFingerprint && attempt.FenceEpoch == plan.FenceEpoch &&
+		attempt.ApprovalID == plan.ApprovalID && attempt.IntentReceipt == plan.IntentReceipt &&
+		attempt.IntentSequence == plan.IntentSequence && attempt.Sequence == sequence &&
+		attempt.Operation == operation.Operation && attempt.OperationDigest == operation.OperationDigest
+}
+
+func isPublishableAttemptStatus(status laneguard.AttemptStatus) bool {
+	switch status {
+	case laneguard.AttemptVerified, laneguard.AttemptUncertain,
+		laneguard.AttemptConfirmedNotApplied, laneguard.AttemptQuarantined:
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalAttemptEvidence(attempt laneguard.Attempt) ([]byte, error) {
+	encoded, err := json.Marshal(attempt)
+	if err != nil {
+		return nil, fmt.Errorf("encode canonical durable attempt evidence: %w", err)
+	}
+	return append(encoded, '\n'), nil
+}
+
+// inspectAttemptDestination distinguishes a genuinely new destination from a
+// prior successful (or link-complete) publication. An existing pathname is
+// accepted only when the journal already holds the exact publishable attempt
+// and the trusted immutable file contains its canonical bytes.
+func inspectAttemptDestination(path string, durable laneguard.Attempt, found bool) (bool, error) {
+	validationErr := validateAttemptDestination(path)
+	if validationErr == nil {
+		return false, nil
+	}
+	if !found || !isPublishableAttemptStatus(durable.Status) {
+		return false, errors.Join(
+			fmt.Errorf("validate immutable attempt destination before physical I/O: %w", validationErr),
+			errors.New("existing receipt cannot be reused without a matching durable publishable attempt"),
+		)
+	}
+	expected, err := canonicalAttemptEvidence(durable)
+	if err != nil {
+		return false, err
+	}
+	existing, readErr := readAttemptEvidence(path, maximumAttemptEvidenceBytes)
+	if readErr != nil {
+		return false, errors.Join(
+			fmt.Errorf("validate immutable attempt destination before physical I/O: %w", validationErr),
+			fmt.Errorf("read existing immutable attempt evidence: %w", readErr),
+		)
+	}
+	if !bytes.Equal(existing, expected) {
+		return false, errors.Join(
+			fmt.Errorf("validate immutable attempt destination before physical I/O: %w", validationErr),
+			errors.New("existing immutable attempt evidence differs from the durable journal record"),
+		)
+	}
+	return true, nil
+}
+
+func publishDurableAttempt(path string, attempt laneguard.Attempt, alreadyPublished bool, operationErr error) error {
+	encoded, err := canonicalAttemptEvidence(attempt)
+	if err != nil {
+		return errors.Join(operationErr, err)
+	}
+	if !alreadyPublished {
+		if writeErr := writeAttemptEvidence(path, encoded); writeErr != nil {
+			return errors.Join(operationErr, fmt.Errorf("publish immutable durable attempt evidence: %w", writeErr))
 		}
 	}
-	return err
+	summary := struct {
+		Path             string                  `json:"path"`
+		Status           laneguard.AttemptStatus `json:"status"`
+		Key              string                  `json:"key"`
+		AlreadyPublished bool                    `json:"already_published"`
+	}{Path: path, Status: attempt.Status, Key: attempt.Key, AlreadyPublished: alreadyPublished}
+	encoder := json.NewEncoder(commandOutput)
+	encoder.SetEscapeHTML(false)
+	if encodeErr := encoder.Encode(summary); encodeErr != nil {
+		return errors.Join(operationErr, fmt.Errorf("encode attempt publication summary: %w", encodeErr))
+	}
+	return operationErr
+}
+
+func attemptStatusError(mode string, status laneguard.AttemptStatus) error {
+	switch status {
+	case laneguard.AttemptVerified:
+		return nil
+	case laneguard.AttemptUncertain:
+		return laneguard.ErrReconciliationRequired
+	case laneguard.AttemptConfirmedNotApplied:
+		if mode == "execute" {
+			return laneguard.ErrConfirmedNotApplied
+		}
+		return nil
+	case laneguard.AttemptQuarantined:
+		return laneguard.ErrQuarantined
+	default:
+		return fmt.Errorf("durable attempt has non-publishable status %q", status)
+	}
+}
+
+const attemptPublicationIdentitySchemaVersion = "kaiba.provisioning.lane-attempt-publication/v1alpha1"
+
+func plannedAttemptEvidencePath(directory, mode string, execute laneguard.ExecuteRequest, reconcile laneguard.ReconcileRequest) (string, error) {
+	if directory == "" || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return "", errors.New("attempt directory must be a clean absolute path")
+	}
+	identity := struct {
+		SchemaVersion string                      `json:"schema_version"`
+		Mode          string                      `json:"mode"`
+		Execute       *laneguard.ExecuteRequest   `json:"execute,omitempty"`
+		Reconcile     *laneguard.ReconcileRequest `json:"reconcile,omitempty"`
+	}{SchemaVersion: attemptPublicationIdentitySchemaVersion, Mode: mode}
+	switch mode {
+	case "execute":
+		identity.Execute = &execute
+	case "reconcile":
+		identity.Reconcile = &reconcile
+	default:
+		return "", errors.New("attempt publication mode must be execute or reconcile")
+	}
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	path := filepath.Join(directory, fmt.Sprintf("lane-attempt-%x.json", digest[:]))
+	if filepath.Dir(path) != directory {
+		return "", errors.New("attempt evidence escaped its fixed directory")
+	}
+	return path, nil
+}
+
+func resolveOperatorGID(name string) (uint32, error) {
+	group, err := lookupOperatorGroup(name)
+	if err != nil {
+		return 0, fmt.Errorf("resolve operator group %q: %w", name, err)
+	}
+	if group == nil {
+		return 0, fmt.Errorf("resolve operator group %q: lookup returned no group", name)
+	}
+	value, err := strconv.ParseUint(group.Gid, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("operator group %q has invalid numeric GID %q: %w", name, group.Gid, err)
+	}
+	return uint32(value), nil
 }
 
 func immutableReleaseBinding() (releasebinding.Binding, error) {

@@ -22,6 +22,36 @@ func (function controlReaderFunc) GetTransaction(ctx context.Context, transactio
 	return function(ctx, transactionID)
 }
 
+func (function controlReaderFunc) PreflightCurrentClaim(ctx context.Context, request controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error) {
+	return function(ctx, request.TransactionID)
+}
+
+type recordingControlReader struct {
+	transaction          controlplane.Transaction
+	preflightTransaction controlplane.Transaction
+	preflightErr         error
+	getCalls             int
+	preflightCalls       int
+	preflightRequest     controlplane.CurrentClaimPreflightRequest
+}
+
+func (reader *recordingControlReader) GetTransaction(_ context.Context, _ string) (controlplane.Transaction, error) {
+	reader.getCalls++
+	return reader.transaction, nil
+}
+
+func (reader *recordingControlReader) PreflightCurrentClaim(_ context.Context, request controlplane.CurrentClaimPreflightRequest) (controlplane.Transaction, error) {
+	reader.preflightCalls++
+	reader.preflightRequest = request
+	if reader.preflightErr != nil {
+		return controlplane.Transaction{}, reader.preflightErr
+	}
+	if reader.preflightTransaction.SchemaVersion != "" {
+		return reader.preflightTransaction, nil
+	}
+	return reader.transaction, nil
+}
+
 type auditReaderFunc func(context.Context, string) ([]auditlog.Record, error)
 
 func (function auditReaderFunc) GetRecordsByReceiptIDs(ctx context.Context, transactionID string, _ []string) ([]auditlog.Record, error) {
@@ -30,6 +60,8 @@ func (function auditReaderFunc) GetRecordsByReceiptIDs(ctx context.Context, tran
 
 type bridgeFixture struct {
 	now               time.Time
+	controlNow        *time.Time
+	control           *controlplane.Service
 	request           BridgeRequest
 	transaction       controlplane.Transaction
 	records           []auditlog.Record
@@ -39,15 +71,9 @@ type bridgeFixture struct {
 
 func TestBinderReturnsOnlyTheCurrentAuthenticatedExecution(t *testing.T) {
 	fixture := newBridgeFixture(t)
-	controlCalls := 0
+	control := &recordingControlReader{transaction: fixture.transaction}
 	binder := Binder{
-		Control: controlReaderFunc(func(_ context.Context, transactionID string) (controlplane.Transaction, error) {
-			controlCalls++
-			if transactionID != fixture.transaction.ID {
-				t.Fatalf("control transaction = %q", transactionID)
-			}
-			return fixture.transaction, nil
-		}),
+		Control: control,
 		Audit: auditReaderFunc(func(_ context.Context, transactionID string) ([]auditlog.Record, error) {
 			if transactionID != fixture.transaction.ID {
 				t.Fatalf("audit transaction = %q", transactionID)
@@ -60,8 +86,20 @@ func TestBinderReturnsOnlyTheCurrentAuthenticatedExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if controlCalls != 2 {
-		t.Fatalf("control reads = %d, want 2", controlCalls)
+	if control.getCalls != 2 || control.preflightCalls != 1 {
+		t.Fatalf("control requests = %d GET / %d preflight", control.getCalls, control.preflightCalls)
+	}
+	wantPreflight := controlplane.CurrentClaimPreflightRequest{
+		SchemaVersion: controlplane.CurrentClaimPreflightRequestSchemaVersion,
+		MutationContext: controlplane.MutationContext{
+			TransactionID: fixture.transaction.ID, ExpectedResourceVersion: fixture.transaction.ResourceVersion,
+			ClaimID: fixture.transaction.ActiveClaim.ID, FenceEpoch: fixture.transaction.FenceEpoch,
+		},
+		ApprovalID: fixture.transaction.Approval.ID, PlanDigest: fixture.request.DraftSnapshot.PlanDigest,
+		MinimumClaimRemainingSeconds: 90, MinimumApprovalRemainingSeconds: 30,
+	}
+	if control.preflightRequest != wantPreflight {
+		t.Fatalf("current-claim preflight = %#v, want %#v", control.preflightRequest, wantPreflight)
 	}
 	if execution.ExecuteRequest == nil || execution.ReconcileRequest != nil || execution.ExecuteRequest.Sequence != 1 || execution.Plan.IntentSequence != 1 ||
 		execution.Plan.IntentReceipt != fixture.intentReceiptID ||
@@ -177,6 +215,108 @@ func TestBinderRejectsControlSnapshotChangeAcrossAuditRead(t *testing.T) {
 	}
 }
 
+func TestBinderRejectsSameVersionDriftReturnedByServerTimePreflight(t *testing.T) {
+	fixture := newBridgeFixture(t)
+	drifted := cloneBridgeTransaction(t, fixture.transaction)
+	drifted.UpdatedAt = drifted.UpdatedAt.Add(time.Nanosecond)
+	if drifted.ResourceVersion != fixture.transaction.ResourceVersion {
+		t.Fatal("test fixture changed the resource version")
+	}
+	control := &recordingControlReader{transaction: fixture.transaction, preflightTransaction: drifted}
+	binder := fixedBinder(fixture, fixture.records)
+	binder.Control = control
+	binding, err := binder.Bind(context.Background(), fixture.request)
+	if !errors.Is(err, ErrAuthorityChanged) {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	if binding.ExecuteRequest != nil || binding.ReconcileRequest != nil || binding.Plan.TransactionID != "" {
+		t.Fatalf("drifted preflight returned a binding: %#v", binding)
+	}
+	if control.getCalls != 2 || control.preflightCalls != 1 {
+		t.Fatalf("control requests = %d GET / %d preflight", control.getCalls, control.preflightCalls)
+	}
+}
+
+func TestBinderRejectsAuthorityExpiredByTheControlServerClock(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		expires func(bridgeFixture) time.Time
+		want    error
+	}{
+		{name: "claim", expires: func(fixture bridgeFixture) time.Time { return fixture.transaction.ActiveClaim.ExpiresAt }, want: controlplane.ErrLeaseExpired},
+		{name: "approval", expires: func(fixture bridgeFixture) time.Time { return fixture.transaction.Approval.ExpiresAt }, want: controlplane.ErrIllegalTransition},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBridgeFixture(t)
+			*fixture.controlNow = test.expires(fixture)
+			if !fixture.transaction.ActiveClaim.ExpiresAt.After(fixture.now) || !fixture.transaction.Approval.ExpiresAt.After(fixture.now) {
+				t.Fatal("station clock does not lag the authority expiry in the fixture")
+			}
+			binder := fixedBinder(fixture, fixture.records)
+			binder.Control = fixture.control
+			binding, err := binder.Bind(context.Background(), fixture.request)
+			if !errors.Is(err, ErrAuthoritySource) || !errors.Is(err, test.want) {
+				t.Fatalf("Bind() error = %v, want server-time rejection %v", err, test.want)
+			}
+			if binding.ExecuteRequest != nil || binding.ReconcileRequest != nil || binding.Plan.TransactionID != "" {
+				t.Fatalf("server-expired authority returned a binding: %#v", binding)
+			}
+		})
+	}
+}
+
+func TestBinderRejectsServerAuthorityThatCannotCoverTheDispatchWindow(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		serverNow func(bridgeFixture) time.Time
+		want      error
+	}{
+		{
+			name: "claim",
+			serverNow: func(fixture bridgeFixture) time.Time {
+				return fixture.transaction.ActiveClaim.ExpiresAt.Add(-90*time.Second + time.Nanosecond)
+			},
+			want: controlplane.ErrLeaseExpired,
+		},
+		{
+			name: "approval",
+			serverNow: func(fixture bridgeFixture) time.Time {
+				return fixture.transaction.Approval.ExpiresAt.Add(-30*time.Second + time.Nanosecond)
+			},
+			want: controlplane.ErrIllegalTransition,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBridgeFixture(t)
+			*fixture.controlNow = test.serverNow(fixture)
+			binder := fixedBinder(fixture, fixture.records)
+			binder.Control = fixture.control
+			binding, err := binder.Bind(context.Background(), fixture.request)
+			if !errors.Is(err, ErrAuthoritySource) || !errors.Is(err, test.want) {
+				t.Fatalf("Bind() error = %v, want minimum-window rejection %v", err, test.want)
+			}
+			if binding.ExecuteRequest != nil || binding.ReconcileRequest != nil || binding.Plan.TransactionID != "" {
+				t.Fatalf("insufficient authority window returned a binding: %#v", binding)
+			}
+		})
+	}
+}
+
+func TestBinderRoundsDispatchAuthorityWindowsUpToWholeSeconds(t *testing.T) {
+	fixture := newBridgeFixture(t)
+	control := &recordingControlReader{transaction: fixture.transaction}
+	binder := fixedBinder(fixture, fixture.records)
+	binder.Control = control
+	binder.LeaseSafetyMargin = 30*time.Second + time.Nanosecond
+	if _, err := binder.Bind(context.Background(), fixture.request); err != nil {
+		t.Fatal(err)
+	}
+	if control.preflightRequest.MinimumClaimRemainingSeconds != 91 ||
+		control.preflightRequest.MinimumApprovalRemainingSeconds != 31 {
+		t.Fatalf("rounded preflight windows = %#v", control.preflightRequest)
+	}
+}
+
 func TestBinderRejectsExpiredApprovalAndInsufficientClaimLease(t *testing.T) {
 	fixture := newBridgeFixture(t)
 	t.Run("expired approval", func(t *testing.T) {
@@ -282,6 +422,10 @@ func TestBinderPropagatesAuthoritySourceFailuresWithoutUsingPartialState(t *test
 			Audit:   auditReaderFunc(func(context.Context, string) ([]auditlog.Record, error) { return nil, sourceErr }),
 		},
 		"second control read": secondReadErrorBinder(fixture, sourceErr),
+		"current-claim preflight": {
+			Control: &recordingControlReader{transaction: fixture.transaction, preflightErr: sourceErr},
+			Audit:   auditReaderFunc(func(context.Context, string) ([]auditlog.Record, error) { return fixture.records, nil }),
+		},
 	}
 	for name, binder := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -305,7 +449,10 @@ func TestBinderRejectsReconciliationWithoutAReconciliationClaim(t *testing.T) {
 
 func TestBinderReconstructsExpiredAttemptUnderFreshReconciliationClaim(t *testing.T) {
 	fixture := newReconciliationBridgeFixture(t, "station-reconcile", "lane-reconcile")
-	binding, err := fixedBinder(fixture, fixture.records).Bind(context.Background(), fixture.request)
+	control := &recordingControlReader{transaction: fixture.transaction}
+	binder := fixedBinder(fixture, fixture.records)
+	binder.Control = control
+	binding, err := binder.Bind(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,6 +470,18 @@ func TestBinderReconstructsExpiredAttemptUnderFreshReconciliationClaim(t *testin
 	}
 	if !fixture.now.After(binding.Plan.ApprovalExpiresAt) {
 		t.Fatal("fixture did not prove reconciliation after original approval expiry")
+	}
+	wantPreflight := controlplane.CurrentClaimPreflightRequest{
+		SchemaVersion: controlplane.CurrentClaimPreflightRequestSchemaVersion,
+		MutationContext: controlplane.MutationContext{
+			TransactionID: fixture.transaction.ID, ExpectedResourceVersion: fixture.transaction.ResourceVersion,
+			ClaimID: fixture.transaction.ActiveClaim.ID, FenceEpoch: fixture.transaction.FenceEpoch,
+		},
+		MinimumClaimRemainingSeconds: 330,
+	}
+	if control.preflightCalls != 1 || control.preflightRequest != wantPreflight ||
+		control.preflightRequest.ApprovalID != "" || control.preflightRequest.PlanDigest != "" {
+		t.Fatalf("reconciliation preflight = %#v", control.preflightRequest)
 	}
 }
 
@@ -357,6 +516,7 @@ func secondReadErrorBinder(fixture bridgeFixture, sourceErr error) Binder {
 func newBridgeFixture(t *testing.T) bridgeFixture {
 	t.Helper()
 	now := time.Date(2026, 8, 22, 16, 0, 0, 0, time.UTC)
+	controlNow := now
 	operations := campaign.DevelopmentOperations()
 	operationNames := make([]string, len(operations))
 	for index, operation := range operations {
@@ -382,7 +542,7 @@ func newBridgeFixture(t *testing.T) bridgeFixture {
 		t.Fatal(err)
 	}
 	control, err := controlplane.NewService(&controlplane.MemoryStore{},
-		controlplane.WithClock(func() time.Time { return now }),
+		controlplane.WithClock(func() time.Time { return controlNow }),
 		controlplane.WithIDGenerator(func(prefix string) (string, error) { return prefix + "-bridge", nil }),
 	)
 	if err != nil {
@@ -453,7 +613,7 @@ func newBridgeFixture(t *testing.T) bridgeFixture {
 		t.Fatal(err)
 	}
 	return bridgeFixture{
-		now: now, request: BridgeRequest{
+		now: now, controlNow: &controlNow, control: control, request: BridgeRequest{
 			SchemaVersion: RequestSchemaVersion, Mode: ModeExecute,
 			TransactionID: transaction.ID, DraftSnapshot: draft.Snapshot(),
 		},

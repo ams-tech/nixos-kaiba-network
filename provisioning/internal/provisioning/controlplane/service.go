@@ -27,9 +27,10 @@ var (
 )
 
 const (
-	minimumLease            = 30 * time.Second
-	maximumLease            = time.Hour
-	maximumApprovalLifetime = 24 * time.Hour
+	minimumLease             = 30 * time.Second
+	maximumLease             = time.Hour
+	maximumApprovalLifetime  = 24 * time.Hour
+	maximumApprovalClockSkew = time.Minute
 )
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
@@ -106,6 +107,43 @@ func (s *Service) GetTransaction(_ context.Context, transactionID string) (Trans
 // authority over the target.
 func (s *Service) GetTransactionForReconciliation(ctx context.Context, transactionID string) (Transaction, error) {
 	return s.GetTransaction(ctx, transactionID)
+}
+
+// PreflightCurrentClaim verifies an exact mutation context against the
+// control plane's current resource version, fence, and server clock without
+// changing durable state. It grants no authority beyond the claim already
+// authenticated by the transport boundary.
+func (s *Service) PreflightCurrentClaim(_ context.Context, request CurrentClaimPreflightRequest) (Transaction, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := validateCurrentClaimPreflightRequest(request); err != nil {
+		return Transaction{}, err
+	}
+	transaction, exists := s.state.Transactions[request.TransactionID]
+	if !exists {
+		return Transaction{}, ErrNotFound
+	}
+	if transaction.ResourceVersion != request.ExpectedResourceVersion {
+		return Transaction{}, fmt.Errorf("%w: got %d, want %d", ErrVersionConflict, transaction.ResourceVersion, request.ExpectedResourceVersion)
+	}
+	now := s.clock().UTC()
+	claim, err := requireCurrentClaim(&transaction, request.ClaimID, request.FenceEpoch, now, "")
+	if err != nil {
+		return Transaction{}, err
+	}
+	if minimum := time.Duration(request.MinimumClaimRemainingSeconds) * time.Second; minimum > 0 && claim.ExpiresAt.Sub(now) < minimum {
+		return Transaction{}, fmt.Errorf("%w: claim does not cover the requested minimum remaining window", ErrLeaseExpired)
+	}
+	if request.ApprovalID != "" {
+		approval, err := requireCurrentApproval(&transaction, claim, request.ApprovalID, request.PlanDigest, now)
+		if err != nil {
+			return Transaction{}, err
+		}
+		if minimum := time.Duration(request.MinimumApprovalRemainingSeconds) * time.Second; minimum > 0 && approval.ExpiresAt.Sub(now) < minimum {
+			return Transaction{}, fmt.Errorf("%w: approval does not cover the requested minimum remaining window", ErrIllegalTransition)
+		}
+	}
+	return cloneTransaction(transaction)
 }
 
 func (s *Service) CreateTransaction(_ context.Context, request CreateTransactionRequest) (Transaction, error) {
@@ -221,9 +259,48 @@ func (s *Service) RenewClaim(_ context.Context, request RenewClaimRequest) (Tran
 		if err != nil {
 			return err
 		}
+		if err := requireClaimRenewalAuthorization(transaction, claim, request, now); err != nil {
+			return err
+		}
 		claim.ExpiresAt = now.Add(time.Duration(request.LeaseDurationSeconds) * time.Second)
 		return nil
 	})
+}
+
+// requireClaimRenewalAuthorization applies server-clock authorization checks
+// inside the same durable mutation that extends a claim. Approval-free renewal
+// remains available for evidence publication and read-only reconciliation, but
+// a ready campaign must name its exact current approval and an unapproved draft
+// must carry the operator-reviewed target-bound deadline.
+func requireClaimRenewalAuthorization(transaction *Transaction, claim *Claim, request RenewClaimRequest, now time.Time) error {
+	if transaction.Status == StatusTargetBound {
+		deadline := request.TargetBoundAuthorizationExpiresAt
+		if deadline == nil || request.ApprovalID != "" {
+			return fmt.Errorf("%w: target-bound renewal requires its reviewed authorization deadline", ErrIllegalTransition)
+		}
+		if transaction.Approval != nil || len(transaction.Operations) != 0 || len(transaction.ClaimHistory) != 0 ||
+			transaction.Target == nil || transaction.Quarantine != nil || transaction.SecurityApplied != nil || transaction.Abort != nil ||
+			claim.Mode != ClaimModeMutation || claim.AssetID != transaction.AssetID {
+			return fmt.Errorf("%w: target-bound renewal requires a clean fixed mutation campaign", ErrIllegalTransition)
+		}
+		if !deadline.After(now) || deadline.After(now.Add(maximumApprovalLifetime)) {
+			return fmt.Errorf("%w: target-bound authorization deadline is not current", ErrIllegalTransition)
+		}
+		return nil
+	}
+
+	if request.TargetBoundAuthorizationExpiresAt != nil {
+		return fmt.Errorf("%w: target-bound authorization deadline does not match transaction state", ErrIllegalTransition)
+	}
+	if transaction.Status == StatusCommitApproved && request.ApprovalID == "" {
+		return fmt.Errorf("%w: approved campaign renewal requires its exact current approval", ErrIllegalTransition)
+	}
+	if request.ApprovalID != "" {
+		if _, err := requireCurrentApproval(transaction, claim, request.ApprovalID, request.PlanDigest, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) TransferClaim(_ context.Context, request TransferClaimRequest) (Transaction, error) {
@@ -289,9 +366,9 @@ func (s *Service) ReleaseClaim(_ context.Context, request ReleaseClaimRequest) (
 			return err
 		}
 		switch transaction.Status {
-		case StatusSecurityApplied, StatusQuarantined, StatusAborted:
+		case StatusSecurityApplied, StatusQuarantined, StatusReconciled, StatusAborted:
 		default:
-			return fmt.Errorf("%w: claims may be released only after security_applied, quarantine, or proven clean abort", ErrIllegalTransition)
+			return fmt.Errorf("%w: claims may be released only after security_applied, quarantine, conclusive reconciliation, or proven clean abort", ErrIllegalTransition)
 		}
 		closed := *claim
 		closed.Status = ClaimReleased

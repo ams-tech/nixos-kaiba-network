@@ -2009,11 +2009,15 @@ let
     }
     {
       id = "authenticated-authority-bridge";
-      description = "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, the v1alpha4 lane plan, and the v1alpha3 authority bridge fail closed against boot-mode or authority tampering. The digest-bound policy requires normal for cold_power_cycle and rpiboot for the other six operations without exposing physical paths, an operator-selected mode, or a generic mutation primitive. This is software-only contract evidence; it does not claim a manual BOOTSEL handshake, direct mode observation, or hardware enforcement.";
+      description = "Independent approver mTLS identity, stable control/audit reads, typed server-time claim and approval preflights, strict Unix IPC, the v1alpha4 lane plan, and the v1alpha3 authority bridge fail closed against clock, boot-mode, or authority tampering before emitting a hardware request. After delayed physical pre-observation, the guard reacquires the exact binding and control requires operation-budget-plus-margin claim time and dispatch-margin approval time before AttemptStarted or hardware dispatch. The digest-bound policy requires normal for cold_power_cycle and rpiboot for the other six operations without exposing physical paths, an operator-selected mode, or a generic mutation primitive. The combined software contract reaches the authenticated, journal-backed physical-mode boundary, but every target interface remains simulated; this makes no live BOOTSEL, USB, UART, GPIO, mutation, or enforcement claim.";
+    }
+    {
+      id = "authenticated-physical-mode-workflow";
+      description = "Software tests cover the fixed seven-operation workflow and development terminalization; independent approver mTLS and typed approver-only preflight; server-time claim and approval checks before audited transitions and after delayed pre-observation with minimum remaining windows; approval- or reviewed-deadline-bound same-claim renewals authorized atomically without rebasing immutable proposal resource versions; exact committed approval replay after expiry while audit-only attempts fail; and selector-free terminal claim release that cannot retarget a later claim. They also cover role-separated control/audit clients and audit-before-control writes, durable trusted attempt receipts, exact existing-receipt and summary replay, publication-only retry for durable execute and non-uncertain reconciliation results, prompt-capable read-only re-observation of reconciliation AttemptUncertain with zero mutation redispatch, authenticated Unix-socket BOOTSEL acknowledgements, and the journal-backed Raspberry Pi 5 mode state machine. The native acknowledgement wrapper is tested compositionally, not as a live NixOS runtime setgid deployment. GPIO, USB, UART, power, timeout, cancellation, restart, and safe-off behavior use fakes or simulated OS interfaces; this row does not qualify live hardware or claim security enforcement.";
     }
     {
       id = "authenticated-restart-reconciliation";
-      description = "Durable control, audit, and execute-once journals survive simulated process restarts while mTLS authority reads, strict Unix IPC, plan compilation, the lane guard, and the production Raspberry Pi 5 adapter implementation reconcile both applied and not-applied uncertain ownership outcomes by observation without redispatch. Target-facing OS interfaces are simulated; this makes no live-hardware or security-enforcement claim.";
+      description = "The restart integration reopens durable control, audit, execute-once, and boot-transition stores, reacquires read-only reconciliation authority over mTLS and strict Unix IPC, and performs direct observation through the Raspberry Pi 5 adapter to resolve applied and not-applied outcomes without mutation redispatch. Separate command and guard tests prove exact durable terminal-receipt verification and publication replay without target I/O, plus repeated read-only observation for reconciliation AttemptUncertain. The restart integration uses deterministic simulated prompt acknowledgements rather than the Unix peer-authentication prompt server, and every target-facing OS interface is simulated; this makes no live-hardware or security-enforcement claim.";
     }
     {
       id = "media-staging-fixture";
@@ -4908,6 +4912,8 @@ let
         nativeBuildInputs = [
           pkgs.binutils
           pkgs.check-jsonschema
+          pkgs.go
+          pkgs.gnugrep
           pkgs.jq
         ];
       }
@@ -4917,12 +4923,86 @@ let
         test -x ${built.serviceSuite}/bin/kaiba-provision-authority-bridge
         test -x ${built.serviceSuite}/bin/kaiba-provision-control
         test -x ${built.serviceSuite}/bin/kaiba-provision-lane-guard
+        test ! -e ${built.serviceSuite}/bin/kaiba-provision-lane-workflow
         test -x ${built.serviceSuite}/bin/kaiba-provision-signer
         test -x ${built.serviceSuite}/bin/kaiba-provision-signing-client
         test -x ${built.serviceSuite}/bin/kaiba-provision-signing-gate
         test -x ${built.serviceSuite}/bin/kaiba-provision-station
         test -x ${built.serviceSuite}/bin/kaiba-provision-yubikey-wrapper
         test -x ${built.signedBootTool}/bin/kaiba-provision-sign-boot
+        test -x ${built.laneOperator}/bin/kaiba-provision-lane-operator
+        test -x ${built.laneWorkflow}/bin/kaiba-provision-lane-workflow
+        test '${built.laneOperator.kaibaLaneOperator.authority}' = 'acknowledgement_only'
+        test '${builtins.toJSON built.laneOperator.kaibaLaneOperator.directHardwareAccess}' = 'false'
+        test '${builtins.toJSON built.laneOperator.kaibaLaneOperator.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.laneOperator.kaibaLaneOperator.operationSelectionCapable}' = 'false'
+        test '${builtins.toJSON built.laneOperator.kaibaLaneOperator.physicalPathSelectionCapable}' = 'false'
+        test '${built.laneWorkflow.kaibaLaneWorkflow.authority}' = 'fixed_authenticated_lane_workflow'
+        test '${builtins.toJSON built.laneWorkflow.kaibaLaneWorkflow.directHardwareAccess}' = 'false'
+        test '${builtins.toJSON built.laneWorkflow.kaibaLaneWorkflow.mutationCapable}' = 'false'
+        test '${builtins.toJSON built.laneWorkflow.kaibaLaneWorkflow.operationSelectionCapable}' = 'false'
+        test '${builtins.toJSON built.laneWorkflow.kaibaLaneWorkflow.physicalPathSelectionCapable}' = 'false'
+
+        export CGO_ENABLED=0
+        export GOCACHE="$TMPDIR/go-cache"
+        export GOPATH="$TMPDIR/go-path"
+        (
+          cd ${built.goSource}
+          go list -deps ./cmd/kaiba-provision-lane-operator \
+            > "$TMPDIR/lane-operator-deps"
+          go list -deps ./cmd/kaiba-provision-lane-workflow \
+            > "$TMPDIR/lane-workflow-deps"
+        )
+        while IFS= read -r package; do
+          case "$package" in
+            github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle|\
+            github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/campaign|\
+            github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard|\
+            github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/operatorprompt|\
+            github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/releasebinding|\
+            github.com/ams-tech/nixos-kaiba-network/provisioning/cmd/kaiba-provision-lane-operator)
+              ;;
+            github.com/ams-tech/nixos-kaiba-network/provisioning/*)
+              echo "lane operator imports an unapproved repository package: $package" >&2
+              exit 1
+              ;;
+          esac
+        done < "$TMPDIR/lane-operator-deps"
+        grep -Fx \
+          github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/operatorprompt \
+          "$TMPDIR/lane-operator-deps"
+        for package in \
+          github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/physicalrpi5 \
+          github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rpi5 \
+          github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mediawriter \
+          github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mediastager
+        do
+          if grep -Fx "$package" "$TMPDIR/lane-operator-deps"; then
+            echo "lane operator imports forbidden package: $package" >&2
+            exit 1
+          fi
+        done
+        for package in \
+          github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/physicalrpi5 \
+          github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rpi5 \
+          github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mediawriter \
+          github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mediastager
+        do
+          if grep -Fx "$package" "$TMPDIR/lane-workflow-deps"; then
+            echo "lane authority workflow imports forbidden package: $package" >&2
+            exit 1
+          fi
+        done
+        if strings ${built.laneOperator}/bin/kaiba-provision-lane-operator \
+          | grep -E 'internal/provisioning/physicalrpi5([./]|$)|/bin/rpiboot|/bin/gpioset'; then
+          echo 'lane operator links a physical mutation capability' >&2
+          exit 1
+        fi
+        if strings ${built.laneWorkflow}/bin/kaiba-provision-lane-workflow \
+          | grep -E 'internal/provisioning/physicalrpi5([./]|$)|/bin/rpiboot|/bin/gpioset'; then
+          echo 'lane authority workflow links a physical mutation capability' >&2
+          exit 1
+        fi
         test -x ${built.provision}/bin/kaiba-provision
         test -x ${built.rehearsal}/bin/kaiba-provision-rehearsal
         test '${built.rehearsal.kaibaRehearsal.authority}' = \
@@ -5118,6 +5198,17 @@ let
         jq -e '
           [.automated.checks[]
             | select(.id == "authenticated-authority-bridge")
+            | [.system, .status]
+          ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
+        ' ${canonicalJSON}/report-input.json > /dev/null
+
+        jq -e \
+          '[.checks[] | select(.id == "authenticated-physical-mode-workflow") | .status]
+            == ["passed"]' \
+          ${canonicalJSON}/platform.json > /dev/null
+        jq -e '
+          [.automated.checks[]
+            | select(.id == "authenticated-physical-mode-workflow")
             | [.system, .status]
           ] == [["aarch64-linux", "not-observed"], ["x86_64-linux", "passed"]]
         ' ${canonicalJSON}/report-input.json > /dev/null

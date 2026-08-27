@@ -110,14 +110,16 @@ func TestBoundPlanLoadsOpaquePlanAndExecutesCurrentRequestThroughPublicAPI(t *te
 		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", UARTPath: "/dev/serial/by-id/compiler-public-api",
 		PowerGPIO: laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17}, LeaseSafetyMargin: 30 * time.Second,
 	}
+	journal := laneguard.NewMemoryStore()
 	hardware := &boundPlanTestHardware{
+		journal: journal,
 		observation: laneguard.Observation{
 			EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
 			TargetFingerprint: request.TargetFingerprint, State: request.ExpectedPrestate,
 		},
 		poststate: draftSnapshot.Operations[0].ExpectedPoststate,
 	}
-	guard, err := laneguard.NewWithClock(config, hardware, laneguard.NewMemoryStore(), boundPlanTestClock{fixture.authority.Now})
+	guard, err := laneguard.NewWithClock(config, hardware, journal, boundPlanTestClock{fixture.authority.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -720,17 +722,106 @@ type boundPlanTestClock struct{ now time.Time }
 func (clock boundPlanTestClock) Now() time.Time { return clock.now }
 
 type boundPlanTestHardware struct {
+	journal     laneguard.Journal
 	observation laneguard.Observation
 	poststate   laneguard.DirectState
+	transitions int
 }
 
-func (hardware *boundPlanTestHardware) Observe(context.Context, laneguard.Config) (laneguard.Observation, error) {
-	return hardware.observation, nil
+func (hardware *boundPlanTestHardware) Observe(_ context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.Observation, error) {
+	hardware.transitions++
+	outcome, err := recordBoundPlanBootTransition(hardware.journal, config, action, hardware.transitions)
+	observation := hardware.observation
+	observation.BootTransition = outcome
+	return observation, err
 }
 
-func (hardware *boundPlanTestHardware) Execute(_ context.Context, _ laneguard.Config, _ laneguard.Operation) (laneguard.OperationResult, error) {
+func (hardware *boundPlanTestHardware) Execute(_ context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.OperationResult, error) {
+	hardware.transitions++
+	outcome, err := recordBoundPlanBootTransition(hardware.journal, config, action, hardware.transitions)
 	hardware.observation.State = hardware.poststate
-	return laneguard.OperationResult{OutputDigest: digest("f"), Detail: "compiler public API test"}, nil
+	return laneguard.OperationResult{
+		OutputDigest: digest("f"), Detail: "compiler public API test", BootTransition: outcome,
+	}, err
+}
+
+func recordBoundPlanBootTransition(journal laneguard.Journal, config laneguard.Config, action laneguard.HardwareAction, ordinal int) (laneguard.BootTransitionOutcome, error) {
+	started := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC).Add(time.Duration(ordinal) * time.Minute)
+	transition, err := journal.BeginBootTransition(laneguard.BeginBootTransitionRequest{
+		Action: action, StartedAt: started, RecordedAt: started.Add(2 * time.Second),
+		PowerOffObservedAt: started.Add(time.Second), USBAbsentObservedAt: started.Add(2 * time.Second),
+		ColdIntervalEndsAt: started.Add(4 * time.Second), PromptID: "hold_prompt",
+		PromptDigest: digest("a"), PromptExpiresAt: started.Add(2 * time.Minute),
+	})
+	if err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	transition.Status = laneguard.BootTransitionAwaitingOperator
+	transition.UpdatedAt = transition.ColdIntervalEndsAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	transition.Status = laneguard.BootTransitionOperatorAcknowledged
+	transition.Operator = laneguard.OperatorPeer{UID: 1000, GID: 1000, PID: int32(2000 + ordinal)}
+	transition.OperatorAcknowledgedAt = transition.ColdIntervalEndsAt.Add(time.Second)
+	transition.UpdatedAt = transition.OperatorAcknowledgedAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	transition.Status = laneguard.BootTransitionPowerApplied
+	transition.PowerAppliedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
+	transition.UpdatedAt = transition.PowerAppliedAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	transition.Status = laneguard.BootTransitionModeObserved
+	transition.ModeObservedAt = transition.PowerAppliedAt.Add(time.Second)
+	transition.ObservedMode = action.RequestedBootMode
+	transition.RPIBootSysfsPath = config.RPIBootSysfsPath
+	transition.RPIBootObservationMethod = laneguard.RPIBootObservationSysfsPoll
+	transition.RPIBootPollInterval = 50 * time.Millisecond
+	if action.RequestedBootMode == laneguard.BootModeRPIBoot {
+		transition.RPIBootEligibleTargets = 1
+		transition.ReleasePromptID = "release_prompt"
+		transition.ReleasePromptDigest = digest("b")
+		transition.ReleasePromptExpiresAt = transition.ModeObservedAt.Add(time.Minute)
+	} else {
+		transition.UARTPath = config.UARTPath
+		transition.UARTOutputDigest = digest("c")
+		transition.RPIBootNotObservedThrough = transition.ModeObservedAt
+	}
+	transition.UpdatedAt = transition.ModeObservedAt
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	if action.RequestedBootMode == laneguard.BootModeRPIBoot {
+		transition.Status = laneguard.BootTransitionOperatorReleased
+		transition.ReleaseOperator = transition.Operator
+		transition.OperatorReleasedAt = transition.ModeObservedAt.Add(time.Second)
+		transition.UpdatedAt = transition.OperatorReleasedAt
+		if err := journal.PutBootTransition(transition); err != nil {
+			return laneguard.BootTransitionOutcome{}, err
+		}
+	}
+	transition.Status = laneguard.BootTransitionCompleted
+	transition.SafeOffObservedAt = transition.ModeObservedAt.Add(2 * time.Second)
+	if !transition.OperatorReleasedAt.IsZero() {
+		transition.SafeOffObservedAt = transition.OperatorReleasedAt.Add(time.Second)
+	}
+	transition.CompletedAt = transition.SafeOffObservedAt
+	transition.UpdatedAt = transition.CompletedAt
+	evidence, err := transition.Evidence()
+	if err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	transition.EvidenceDigest, err = evidence.Digest()
+	if err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	if err := journal.PutBootTransition(transition); err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	return transition.Outcome()
 }
 
 func newFixture(t *testing.T) fixture {

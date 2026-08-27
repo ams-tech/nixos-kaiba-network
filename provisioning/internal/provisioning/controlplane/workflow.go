@@ -38,11 +38,126 @@ func (s *Service) BindTarget(_ context.Context, request BindTargetRequest) (Tran
 	})
 }
 
+// PreflightApproval validates a complete approver-authenticated proposal
+// against the current target-bound transaction without changing durable state.
+// It also accepts the exact already-committed control approval so a lost
+// response can be retried without station credentials. The audit service's
+// idempotency record independently binds the proposal approval-event time.
+func (s *Service) PreflightApproval(_ context.Context, request ApprovalPreflightRequest) (Transaction, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := validateApprovalPreflightRequest(request); err != nil {
+		return Transaction{}, err
+	}
+	transaction, exists := s.state.Transactions[request.TransactionID]
+	if !exists {
+		return Transaction{}, ErrNotFound
+	}
+	if err := matchApprovalPreflight(&transaction, request, s.clock().UTC()); err != nil {
+		return Transaction{}, err
+	}
+	return cloneTransaction(transaction)
+}
+
+func matchApprovalPreflight(transaction *Transaction, request ApprovalPreflightRequest, now time.Time) error {
+	if transaction.ID != request.TransactionID || transaction.TransactionDigest != request.TransactionDigest {
+		return fmt.Errorf("%w: approval transaction identity or digest changed", ErrConflict)
+	}
+
+	var claim *Claim
+	switch transaction.Status {
+	case StatusTargetBound:
+		if err := validateCurrentApprovalPreflightTimes(request.ApprovedAt, request.ExpiresAt, now); err != nil {
+			return err
+		}
+		current, err := requireCurrentClaim(transaction, request.ClaimID, request.FenceEpoch, now, ClaimModeMutation)
+		if err != nil {
+			return err
+		}
+		claim = current
+		if transaction.ResourceVersion != request.ExpectedResourceVersion {
+			return ErrVersionConflict
+		}
+		if transaction.Approval != nil || len(transaction.Operations) != 0 {
+			return fmt.Errorf("%w: target-bound transaction contains approval state", ErrConflict)
+		}
+	case StatusCommitApproved:
+		// This is the read-only half of a lost-response replay. Match the
+		// immutable committed approval and its original claim snapshot before
+		// consulting any current lease or approval window: both are allowed to
+		// have expired since the successful commit.
+		if transaction.ResourceVersion <= request.ExpectedResourceVersion || len(transaction.Operations) != 0 {
+			return fmt.Errorf("%w: transaction is not an exact initial approval replay", ErrConflict)
+		}
+		current, err := requireApprovalReplayClaim(transaction, request.ClaimID, request.FenceEpoch)
+		if err != nil {
+			return err
+		}
+		claim = current
+		approval := transaction.Approval
+		if approval == nil || approval.ID != request.ApprovalID || approval.ApproverID != request.ApproverID ||
+			approval.TransactionDigest != request.TransactionDigest || approval.PlanDigest != request.PlanDigest ||
+			approval.StationID != request.StationID || approval.LaneID != request.LaneID ||
+			approval.FenceEpoch != request.FenceEpoch || approval.TargetFingerprint != request.TargetFingerprint ||
+			approval.Release != request.Release || !equalOrderedStrings(approval.AllowedOperations, request.AllowedOperations) ||
+			!approval.ExpiresAt.Equal(request.ExpiresAt) {
+			return fmt.Errorf("%w: committed approval differs from the preflight proposal", ErrConflict)
+		}
+	default:
+		return fmt.Errorf("%w: approval preflight requires target_bound or its exact committed replay", ErrIllegalTransition)
+	}
+
+	if claim.StationID != request.StationID || claim.LaneID != request.LaneID ||
+		!equalOrderedStrings(claim.AllowedStages, request.AllowedOperations) {
+		return fmt.Errorf("%w: approval claim ownership or ordered operations changed", ErrConflict)
+	}
+	if transaction.Target == nil || transaction.Target.FenceEpoch != request.FenceEpoch ||
+		transaction.Target.Fingerprint != request.TargetFingerprint {
+		return fmt.Errorf("%w: approval target binding changed", ErrConflict)
+	}
+	if request.ApprovedAt.Before(transaction.Target.BoundAt) || !claim.ExpiresAt.After(request.ApprovedAt) {
+		return fmt.Errorf("%w: approval time is outside the target-bound claim", ErrConflict)
+	}
+	if request.Release.SignedReleaseManifestDigest != transaction.BundleDigest ||
+		request.Release.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash {
+		return fmt.Errorf("%w: approval release binding changed", ErrConflict)
+	}
+
+	return nil
+}
+
+func requireApprovalReplayClaim(transaction *Transaction, claimID string, fenceEpoch uint64) (*Claim, error) {
+	claim := transaction.ActiveClaim
+	if claim == nil || claim.Status != ClaimActive || claim.ID != claimID ||
+		claim.FenceEpoch != fenceEpoch || transaction.FenceEpoch != fenceEpoch {
+		return nil, ErrStaleFence
+	}
+	if claim.Mode != ClaimModeMutation {
+		return nil, fmt.Errorf("%w: claim mode %q does not authorize %q", ErrIllegalTransition, claim.Mode, ClaimModeMutation)
+	}
+	return claim, nil
+}
+
+func equalOrderedStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Service) RecordApproval(_ context.Context, request RecordApprovalRequest) (Transaction, error) {
-	if err := validateRecordApprovalRequest(request, s.clock().UTC()); err != nil {
+	if err := validateRecordApprovalRequest(request); err != nil {
 		return Transaction{}, err
 	}
 	return s.mutate("record_approval", request.IdempotencyKey, request.TransactionID, request.ExpectedResourceVersion, request, func(now time.Time, _ *persistedState, transaction *Transaction) error {
+		if err := validateCurrentApprovalExpiry(request.ExpiresAt, now); err != nil {
+			return err
+		}
 		claim, err := requireCurrentClaim(transaction, request.ClaimID, request.FenceEpoch, now, ClaimModeMutation)
 		if err != nil {
 			return err
@@ -57,9 +172,6 @@ func (s *Service) RecordApproval(_ context.Context, request RecordApprovalReques
 			request.Release.SignedReleaseManifestDigest != transaction.BundleDigest ||
 			request.Release.ExpectedCustomerKeyHash != transaction.ExpectedCustomerKeyHash {
 			return fmt.Errorf("%w: approval binding does not match the transaction and target", ErrConflict)
-		}
-		if !request.ExpiresAt.After(now) {
-			return fmt.Errorf("%w: approval already expired", ErrIllegalTransition)
 		}
 		if previous := transaction.Approval; previous != nil && request.PlanDigest == previous.PlanDigest &&
 			(request.Release != previous.Release || !request.ExpiresAt.Equal(previous.ExpiresAt)) {

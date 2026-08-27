@@ -294,6 +294,9 @@ func TestClientDeadlineBoundsAStalledSocket(t *testing.T) {
 }
 
 func TestClientRoundTripBudgetCoversAllSequentialAuthorityReads(t *testing.T) {
+	if authorityReadsPerBinding != 4 {
+		t.Fatalf("authority requests per binding = %d, want 4", authorityReadsPerBinding)
+	}
 	minimum := authorityReadsPerBinding * AuthorityReadTimeout
 	if wireRoundTripTimeout <= minimum {
 		t.Fatalf("wire round-trip timeout %s does not exceed authority-read budget %s", wireRoundTripTimeout, minimum)

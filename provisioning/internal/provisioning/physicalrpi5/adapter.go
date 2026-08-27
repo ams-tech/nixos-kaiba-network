@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,8 +13,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/laneguard"
+	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/operatorprompt"
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rpi5"
 )
 
@@ -24,23 +27,46 @@ const (
 	signedBootMarker   = "KAIBA_SECURE_BOOT_EVIDENCE=pass"
 	negativeBootProof  = "KAIBA_NEGATIVE_BOOT_REJECTED"
 	rootIntegrityProof = "KAIBA_ROOT_INTEGRITY_REJECTED"
+
+	holdBOOTSELInstructions    = "Hold BOOTSEL before target power is applied and keep holding it until a separate release prompt appears."
+	releaseBOOTSELInstructions = "Release BOOTSEL now; do not disconnect target power or the lane USB connection."
+	normalBootInstructions     = "Leave BOOTSEL untouched while target power is applied."
 )
 
 var (
 	ErrNoRPIBootTarget  = errors.New("no BCM2712 RPIBOOT target is present")
 	ErrAmbiguousTargets = errors.New("RPIBOOT target selection is ambiguous")
 	ErrUnexpectedTarget = errors.New("RPIBOOT target is not on the fixed lane path")
+	ErrWrongBootMode    = errors.New("observed boot mode differs from the authorized mode")
 	ErrMetadataMismatch = errors.New("authoritative RPIBOOT metadata does not match approved state")
 	ErrBootEvidence     = errors.New("signed-boot UART evidence does not match the immutable target manifest")
 	ErrUARTTestEvidence = errors.New("UART test evidence does not contain exactly one expected proof record")
+	ErrRestartRecovered = errors.New("an interrupted boot transition was recovered before new hardware I/O")
 )
 
+// Prompter is the only operator-channel surface the privileged adapter needs.
+// operatorprompt.Server satisfies this interface with its Present method.
+type Prompter interface {
+	Present(context.Context, operatorprompt.Prompt) (operatorprompt.Acknowledgement, error)
+}
+
+type Clock interface {
+	Now() time.Time
+}
+
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now() }
+
 type Dependencies struct {
-	Runner  Runner
-	FS      FileSystem
-	GPIO    GPIO
-	UART    UART
-	Sleeper Sleeper
+	Runner   Runner
+	FS       FileSystem
+	GPIO     GPIO
+	UART     UART
+	Sleeper  Sleeper
+	Journal  laneguard.Journal
+	Prompter Prompter
+	Clock    Clock
 }
 
 type Adapter struct {
@@ -51,12 +77,16 @@ type Adapter struct {
 	gpio        GPIO
 	uart        UART
 	sleeper     Sleeper
+	journal     laneguard.Journal
+	prompter    Prompter
+	clock       Clock
 	lane        *laneguard.Config
 	target      *rpi5.Observation
 	directState laneguard.DirectState
 	lastUART    []byte
 	mode        string
 	power       PowerLease
+	usbPin      USBInstancePin
 }
 
 func New(config Config, dependencies Dependencies) (*Adapter, error) {
@@ -65,6 +95,12 @@ func New(config Config, dependencies Dependencies) (*Adapter, error) {
 	config.ExpectedEEPROMHash = normalizeDigest(config.ExpectedEEPROMHash)
 	if err := config.Validate(); err != nil {
 		return nil, err
+	}
+	if dependencies.Journal == nil {
+		return nil, errors.New("durable lane journal is required")
+	}
+	if dependencies.Prompter == nil {
+		return nil, errors.New("authenticated operator prompter is required")
 	}
 	runner := dependencies.Runner
 	if runner == nil {
@@ -86,112 +122,628 @@ func New(config Config, dependencies Dependencies) (*Adapter, error) {
 	if sleeper == nil {
 		sleeper = TimerSleeper{}
 	}
+	clock := dependencies.Clock
+	if clock == nil {
+		clock = wallClock{}
+	}
 	return &Adapter{
-		config: config, runner: runner, filesystem: filesystem,
-		gpio: gpio, uart: uart, sleeper: sleeper, mode: config.InitialMode,
+		config: config, runner: runner, filesystem: filesystem, gpio: gpio, uart: uart,
+		sleeper: sleeper, journal: dependencies.Journal, prompter: dependencies.Prompter,
+		clock: clock, mode: config.InitialMode,
 	}, nil
 }
 
-func (adapter *Adapter) Observe(ctx context.Context, lane laneguard.Config) (result laneguard.Observation, resultErr error) {
+func (adapter *Adapter) Observe(ctx context.Context, lane laneguard.Config, action laneguard.HardwareAction) (result laneguard.Observation, resultErr error) {
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
-	if err := adapter.bindLane(lane); err != nil {
+	if err := adapter.prepareLane(ctx, lane); err != nil {
 		return laneguard.Observation{}, err
 	}
-	if err := adapter.ensurePower(ctx, lane.PowerGPIO); err != nil {
+	if err := adapter.validateAction(lane, action, false); err != nil {
 		return laneguard.Observation{}, err
 	}
-	defer func() {
-		if adapter.power != nil {
-			if err := adapter.releasePower(); err != nil {
-				resultErr = errors.Join(resultErr, err)
+	payload := func(payloadCtx context.Context) (laneguard.OperationResult, error) {
+		if adapter.mode == ModeAuto {
+			owned, ownedErr := adapter.readbackLocked(payloadCtx, lane, action.TargetFingerprint, adapter.config.Paths.OwnedReadbackBundle, ModeOwned)
+			if ownedErr == nil {
+				return owned, nil
 			}
-		}
-	}()
-	if err := adapter.waitForExpectedTarget(ctx, lane.RPIBootSysfsPath); err != nil {
-		return laneguard.Observation{}, err
-	}
-	candidates, err := adapter.eligibleTargets(ctx, lane.RPIBootSysfsPath)
-	if err != nil {
-		return laneguard.Observation{}, err
-	}
-	if len(candidates) != 1 {
-		return laneguard.Observation{}, fmt.Errorf("%w: found %d eligible devices", ErrAmbiguousTargets, len(candidates))
-	}
-	if candidates[0] != lane.RPIBootSysfsPath {
-		return laneguard.Observation{}, fmt.Errorf("%w: found %s", ErrUnexpectedTarget, candidates[0])
-	}
-	if adapter.mode == ModeAuto {
-		_, ownedErr := adapter.readbackLocked(ctx, lane, adapter.config.Paths.OwnedReadbackBundle, ModeOwned)
-		if ownedErr != nil {
-			_, freshErr := adapter.readbackLocked(ctx, lane, adapter.config.Paths.FreshReadbackBundle, ModeFresh)
+			fresh, freshErr := adapter.readbackLocked(payloadCtx, lane, action.TargetFingerprint, adapter.config.Paths.FreshReadbackBundle, ModeFresh)
 			if freshErr != nil {
-				return laneguard.Observation{}, errors.Join(errors.New("auto-reconciliation could not establish fresh or owned state"), ownedErr, freshErr)
+				return laneguard.OperationResult{}, errors.Join(errors.New("auto-reconciliation could not establish fresh or owned state"), ownedErr, freshErr)
 			}
+			return fresh, nil
 		}
-	} else {
 		bundle := adapter.config.Paths.FreshReadbackBundle
 		if adapter.mode == ModeOwned {
 			bundle = adapter.config.Paths.OwnedReadbackBundle
 		}
-		if _, err := adapter.readbackLocked(ctx, lane, bundle, adapter.mode); err != nil {
-			return laneguard.Observation{}, err
-		}
+		return adapter.readbackLocked(payloadCtx, lane, action.TargetFingerprint, bundle, adapter.mode)
 	}
-	if err := adapter.releasePowerAndConfirm(ctx, lane); err != nil {
-		return laneguard.Observation{}, err
+	_, outcome, err := adapter.runBootTransition(ctx, lane, action, payload)
+	result.BootTransition = outcome
+	if err != nil {
+		return result, err
 	}
-	return adapter.cachedObservation(lane), nil
-}
-
-func (adapter *Adapter) Execute(ctx context.Context, lane laneguard.Config, operation laneguard.Operation) (result laneguard.OperationResult, resultErr error) {
-	adapter.mu.Lock()
-	defer adapter.mu.Unlock()
-	if err := adapter.bindLane(lane); err != nil {
-		return laneguard.OperationResult{}, err
-	}
-	defer func() {
-		if adapter.power != nil {
-			if err := adapter.releasePower(); err != nil {
-				resultErr = errors.Join(resultErr, err)
-			}
-		}
-	}()
-	switch operation {
-	case laneguard.OperationProgramCustomerKeyAndEEPROM:
-		result, resultErr = adapter.commitLocked(ctx, lane)
-	case laneguard.OperationColdPowerCycle:
-		result, resultErr = adapter.coldPowerCycleLocked(ctx, lane)
-	case laneguard.OperationVerifySignedBoot:
-		resultErr = errors.New("standalone signed-boot verification is unsupported; the bounded cold-power operation captures and verifies it")
-	case laneguard.OperationOwnedReadback:
-		result, resultErr = adapter.readbackLocked(ctx, lane, adapter.config.Paths.OwnedReadbackBundle, ModeOwned)
-	case laneguard.OperationTestOwnedRecovery:
-		result, resultErr = adapter.readbackLocked(ctx, lane, adapter.config.Paths.OwnedRecoveryBundle, ModeOwned)
-	case laneguard.OperationPostRecoveryReadback:
-		result, resultErr = adapter.readbackLocked(ctx, lane, adapter.config.Paths.OwnedReadbackBundle, ModeOwned)
-	case laneguard.OperationTestNegativeBoot:
-		result, resultErr = adapter.uartBundleTestLocked(ctx, lane, adapter.config.Paths.NegativeBootBundle, []byte(negativeBootProof), "negative_boot_rejected")
-	case laneguard.OperationTestRootIntegrity:
-		result, resultErr = adapter.uartBundleTestLocked(ctx, lane, adapter.config.Paths.RootIntegrityBundle, []byte(rootIntegrityProof), "root_integrity_rejected")
-	default:
-		resultErr = fmt.Errorf("unsupported physical operation %q", operation)
-	}
-	if resultErr != nil {
-		return result, resultErr
-	}
-	if err := adapter.releasePowerAndConfirm(ctx, lane); err != nil {
-		resultErr = errors.Join(resultErr, err)
-		return result, resultErr
-	}
+	result = adapter.cachedObservation(lane)
+	result.BootTransition = outcome
 	return result, nil
 }
 
-func (adapter *Adapter) commitLocked(ctx context.Context, lane laneguard.Config) (laneguard.OperationResult, error) {
+func (adapter *Adapter) Execute(ctx context.Context, lane laneguard.Config, action laneguard.HardwareAction) (result laneguard.OperationResult, resultErr error) {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if err := adapter.prepareLane(ctx, lane); err != nil {
+		return laneguard.OperationResult{}, err
+	}
+	if err := adapter.validateAction(lane, action, true); err != nil {
+		return laneguard.OperationResult{}, err
+	}
+	payload := func(payloadCtx context.Context) (laneguard.OperationResult, error) {
+		switch action.Operation {
+		case laneguard.OperationProgramCustomerKeyAndEEPROM:
+			return adapter.commitLocked(payloadCtx, lane, action.TargetFingerprint)
+		case laneguard.OperationColdPowerCycle:
+			return laneguard.OperationResult{}, errors.New("normal cold-power evidence must be captured by the boot-transition state machine")
+		case laneguard.OperationVerifySignedBoot:
+			return laneguard.OperationResult{}, errors.New("standalone signed-boot verification is unsupported; the bounded cold-power operation captures and verifies it")
+		case laneguard.OperationOwnedReadback:
+			return adapter.readbackLocked(payloadCtx, lane, action.TargetFingerprint, adapter.config.Paths.OwnedReadbackBundle, ModeOwned)
+		case laneguard.OperationTestOwnedRecovery:
+			return adapter.readbackLocked(payloadCtx, lane, action.TargetFingerprint, adapter.config.Paths.OwnedRecoveryBundle, ModeOwned)
+		case laneguard.OperationPostRecoveryReadback:
+			return adapter.readbackLocked(payloadCtx, lane, action.TargetFingerprint, adapter.config.Paths.OwnedReadbackBundle, ModeOwned)
+		case laneguard.OperationTestNegativeBoot:
+			return adapter.uartBundleTestLocked(payloadCtx, lane, adapter.config.Paths.NegativeBootBundle, []byte(negativeBootProof), "negative_boot_rejected")
+		case laneguard.OperationTestRootIntegrity:
+			return adapter.uartBundleTestLocked(payloadCtx, lane, adapter.config.Paths.RootIntegrityBundle, []byte(rootIntegrityProof), "root_integrity_rejected")
+		default:
+			return laneguard.OperationResult{}, fmt.Errorf("unsupported physical operation %q", action.Operation)
+		}
+	}
+	result, outcome, err := adapter.runBootTransition(ctx, lane, action, payload)
+	result.BootTransition = outcome
+	return result, err
+}
+
+func (adapter *Adapter) prepareLane(ctx context.Context, lane laneguard.Config) error {
+	if err := adapter.bindLane(lane); err != nil {
+		return err
+	}
+	if err := adapter.recoverIncompleteTransitions(ctx, lane); err != nil {
+		return err
+	}
+	quarantined, err := adapter.journal.HasQuarantinedBootTransition()
+	if err != nil {
+		return fmt.Errorf("read durable boot-transition quarantine: %w", err)
+	}
+	if quarantined {
+		return laneguard.ErrQuarantined
+	}
+	return nil
+}
+
+func (adapter *Adapter) validateAction(lane laneguard.Config, action laneguard.HardwareAction, execute bool) error {
+	if err := action.Validate(); err != nil {
+		return err
+	}
+	if action.StationID != lane.StationID || action.LaneID != lane.LaneID {
+		return errors.New("hardware action does not belong to the fixed lane")
+	}
+	if execute {
+		if action.Phase != laneguard.HardwarePhaseExecute {
+			return errors.New("Execute requires an execute-phase hardware action")
+		}
+	} else {
+		switch action.Phase {
+		case laneguard.HardwarePhasePreObservation, laneguard.HardwarePhasePostObservation, laneguard.HardwarePhaseReconciliation:
+		default:
+			return errors.New("Observe requires an observation-phase hardware action")
+		}
+	}
+	return nil
+}
+
+func (adapter *Adapter) runBootTransition(
+	ctx context.Context,
+	lane laneguard.Config,
+	action laneguard.HardwareAction,
+	payload func(context.Context) (laneguard.OperationResult, error),
+) (laneguard.OperationResult, laneguard.BootTransitionOutcome, error) {
+	startedAt := adapter.now()
+	powerOffAt, usbAbsentAt, err := adapter.proveSafeOff(ctx, lane)
+	if err != nil {
+		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, fmt.Errorf("establish initial safe-off state: %w", err)
+	}
+	coldEndsAt := usbAbsentAt.Add(adapter.config.MinimumColdInterval)
+	kind := operatorprompt.KindHoldBOOTSEL
+	instructions := holdBOOTSELInstructions
+	if action.RequestedBootMode == laneguard.BootModeNormal {
+		kind = operatorprompt.KindNormalNoAction
+		instructions = normalBootInstructions
+	}
+	prompt, err := adapter.newPrompt(action, kind, instructions, coldEndsAt.Add(adapter.config.OperatorPromptTimeout))
+	if err != nil {
+		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, err
+	}
+	transition, err := adapter.journal.BeginBootTransition(laneguard.BeginBootTransitionRequest{
+		Action: action, StartedAt: startedAt, RecordedAt: adapter.atLeast(usbAbsentAt),
+		PowerOffObservedAt: powerOffAt, USBAbsentObservedAt: usbAbsentAt, ColdIntervalEndsAt: coldEndsAt,
+		PromptID: prompt.ID, PromptDigest: prompt.Digest, PromptExpiresAt: prompt.ExpiresAt,
+	})
+	if err != nil {
+		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, fmt.Errorf("durably begin boot transition: %w", err)
+	}
+	if err := adapter.sleeper.Sleep(ctx, adapter.config.MinimumColdInterval); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureInterrupted, fmt.Errorf("maintain minimum cold interval: %w", err))
+	}
+	transition.Status = laneguard.BootTransitionAwaitingOperator
+	transition.UpdatedAt = adapter.atLeast(transition.ColdIntervalEndsAt)
+	if err := adapter.journal.PutBootTransition(transition); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist operator-ready transition: %w", err))
+	}
+	acknowledgement, err := adapter.prompter.Present(ctx, prompt)
+	if err != nil {
+		failure := laneguard.BootTransitionFailureOperatorRejected
+		if errors.Is(err, operatorprompt.ErrPromptExpired) || errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			failure = laneguard.BootTransitionFailureOperatorTimeout
+		}
+		if ctx.Err() != nil {
+			failure = laneguard.BootTransitionFailureInterrupted
+		}
+		return adapter.failTransition(ctx, lane, transition, failure, fmt.Errorf("obtain operator boot-mode acknowledgement: %w", err))
+	}
+	if err := validatePromptAcknowledgement(prompt, acknowledgement, transition.ColdIntervalEndsAt); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureOperatorRejected, err)
+	}
+	transition.Status = laneguard.BootTransitionOperatorAcknowledged
+	transition.Operator = acknowledgement.Peer
+	transition.OperatorAcknowledgedAt = acknowledgement.AcknowledgedAt.UTC()
+	transition.UpdatedAt = adapter.atLeast(transition.OperatorAcknowledgedAt)
+	if err := adapter.journal.PutBootTransition(transition); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist operator acknowledgement: %w", err))
+	}
+	if action.RequestedBootMode == laneguard.BootModeNormal {
+		return adapter.runNormalTransition(ctx, lane, transition)
+	}
+	return adapter.runRPIBootTransition(ctx, lane, transition, payload)
+}
+
+func (adapter *Adapter) runRPIBootTransition(
+	ctx context.Context,
+	lane laneguard.Config,
+	transition laneguard.BootTransition,
+	payload func(context.Context) (laneguard.OperationResult, error),
+) (laneguard.OperationResult, laneguard.BootTransitionOutcome, error) {
+	if err := adapter.ensurePower(ctx, lane.PowerGPIO); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("apply target power: %w", err))
+	}
+	transition.Status = laneguard.BootTransitionPowerApplied
+	transition.PowerAppliedAt = adapter.atLeast(transition.OperatorAcknowledgedAt)
+	transition.UpdatedAt = transition.PowerAppliedAt
+	if err := adapter.journal.PutBootTransition(transition); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist power application: %w", err))
+	}
+	if err := adapter.waitForExpectedTarget(ctx, lane.RPIBootSysfsPath); err != nil {
+		failure := laneguard.BootTransitionFailureHardware
+		if errors.Is(err, ErrNoRPIBootTarget) {
+			failure = laneguard.BootTransitionFailureWrongMode
+		} else if errors.Is(err, ErrUnexpectedTarget) || errors.Is(err, ErrAmbiguousTargets) {
+			failure = laneguard.BootTransitionFailureTargetContinuity
+		}
+		if ctx.Err() != nil {
+			failure = laneguard.BootTransitionFailureInterrupted
+		}
+		return adapter.failTransition(ctx, lane, transition, failure, err)
+	}
+	modeObservedAt := adapter.atLeast(transition.PowerAppliedAt)
+	releasePrompt, err := adapter.newPrompt(transition.Action, operatorprompt.KindReleaseBOOTSEL, releaseBOOTSELInstructions, modeObservedAt.Add(adapter.config.OperatorPromptTimeout))
+	if err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, err)
+	}
+	transition.Status = laneguard.BootTransitionModeObserved
+	transition.ModeObservedAt = modeObservedAt
+	transition.ObservedMode = laneguard.BootModeRPIBoot
+	transition.RPIBootSysfsPath = lane.RPIBootSysfsPath
+	transition.RPIBootEligibleTargets = 1
+	transition.RPIBootObservationMethod = laneguard.RPIBootObservationSysfsPoll
+	transition.RPIBootPollInterval = adapter.config.USBPollInterval
+	transition.ReleasePromptID = releasePrompt.ID
+	transition.ReleasePromptDigest = releasePrompt.Digest
+	transition.ReleasePromptExpiresAt = releasePrompt.ExpiresAt
+	transition.UpdatedAt = modeObservedAt
+	if err := adapter.journal.PutBootTransition(transition); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist observed RPIBOOT mode and release prompt: %w", err))
+	}
+	releaseAcknowledgement, err := adapter.prompter.Present(ctx, releasePrompt)
+	if err != nil {
+		failure := laneguard.BootTransitionFailureOperatorRejected
+		if errors.Is(err, operatorprompt.ErrPromptExpired) || errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			failure = laneguard.BootTransitionFailureOperatorTimeout
+		}
+		if ctx.Err() != nil {
+			failure = laneguard.BootTransitionFailureInterrupted
+		}
+		return adapter.failTransition(ctx, lane, transition, failure, fmt.Errorf("obtain BOOTSEL release acknowledgement: %w", err))
+	}
+	if err := validatePromptAcknowledgement(releasePrompt, releaseAcknowledgement, transition.ModeObservedAt); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureOperatorRejected, err)
+	}
+	transition.Status = laneguard.BootTransitionOperatorReleased
+	transition.ReleaseOperator = releaseAcknowledgement.Peer
+	transition.OperatorReleasedAt = releaseAcknowledgement.AcknowledgedAt.UTC()
+	transition.UpdatedAt = adapter.atLeast(transition.OperatorReleasedAt)
+	if err := adapter.journal.PutBootTransition(transition); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist BOOTSEL release acknowledgement: %w", err))
+	}
+	if err := adapter.requireExactTarget(ctx, lane.RPIBootSysfsPath); err != nil {
+		failure := laneguard.BootTransitionFailureHardware
+		if errors.Is(err, ErrNoRPIBootTarget) || errors.Is(err, ErrUnexpectedTarget) || errors.Is(err, ErrAmbiguousTargets) {
+			failure = laneguard.BootTransitionFailureTargetContinuity
+		}
+		return adapter.failTransition(ctx, lane, transition, failure, fmt.Errorf("recheck fixed RPIBOOT target after release: %w", err))
+	}
+	if transition.Action.Phase == laneguard.HardwarePhaseExecute {
+		pin, err := adapter.pinRPIBootInstance(lane.RPIBootSysfsPath)
+		if err != nil {
+			return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureTargetContinuity, err)
+		}
+		adapter.usbPin = pin
+		defer func() {
+			adapter.usbPin = nil
+			_ = pin.Close()
+		}()
+		if err := adapter.preflightRPIBootIdentityLocked(ctx, lane, transition.Action.TargetFingerprint); err != nil {
+			failure := laneguard.BootTransitionFailureHardware
+			if errors.Is(err, laneguard.ErrTargetContinuity) || errors.Is(err, ErrNoRPIBootTarget) ||
+				errors.Is(err, ErrUnexpectedTarget) || errors.Is(err, ErrAmbiguousTargets) {
+				failure = laneguard.BootTransitionFailureTargetContinuity
+			}
+			if ctx.Err() != nil {
+				failure = laneguard.BootTransitionFailureInterrupted
+			}
+			return adapter.failTransition(ctx, lane, transition, failure, err)
+		}
+	}
+	result, err := payload(ctx)
+	if err != nil {
+		failure := laneguard.BootTransitionFailureHardware
+		if errors.Is(err, laneguard.ErrTargetContinuity) || errors.Is(err, ErrNoRPIBootTarget) || errors.Is(err, ErrUnexpectedTarget) || errors.Is(err, ErrAmbiguousTargets) {
+			failure = laneguard.BootTransitionFailureTargetContinuity
+		}
+		if ctx.Err() != nil {
+			failure = laneguard.BootTransitionFailureInterrupted
+		}
+		return adapter.failTransition(ctx, lane, transition, failure, err)
+	}
+	outcome, err := adapter.completeTransition(ctx, lane, transition)
+	if err != nil {
+		return result, outcome, err
+	}
+	result.BootTransition = outcome
+	return result, outcome, nil
+}
+
+func (adapter *Adapter) runNormalTransition(
+	ctx context.Context,
+	lane laneguard.Config,
+	transition laneguard.BootTransition,
+) (laneguard.OperationResult, laneguard.BootTransitionOutcome, error) {
+	if adapter.target == nil || adapter.mode != ModeOwned {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, errors.New("normal cold-power boot requires an authoritative owned-target readback"))
+	}
+	uartCtx, cancelUART := context.WithTimeout(ctx, adapter.config.UARTTimeout)
+	defer cancelUART()
+	var watcher *normalModeWatcher
+	evidence, captureErr := adapter.uart.Capture(uartCtx, lane.UARTPath, []byte(signedBootMarker), adapter.config.MaximumOutputBytes, func() error {
+		var err error
+		watcher, err = adapter.startNormalModeWatcher(uartCtx, lane.RPIBootSysfsPath, cancelUART)
+		if err != nil {
+			return err
+		}
+		if err := adapter.ensurePower(uartCtx, lane.PowerGPIO); err != nil {
+			return fmt.Errorf("apply target power: %w", err)
+		}
+		transition.Status = laneguard.BootTransitionPowerApplied
+		transition.PowerAppliedAt = adapter.atLeast(transition.OperatorAcknowledgedAt)
+		transition.UpdatedAt = transition.PowerAppliedAt
+		if err := adapter.journal.PutBootTransition(transition); err != nil {
+			return fmt.Errorf("persist power application: %w", err)
+		}
+		return nil
+	})
+	if watcher == nil {
+		failure := laneguard.BootTransitionFailureHardware
+		if errors.Is(captureErr, ErrWrongBootMode) {
+			failure = laneguard.BootTransitionFailureWrongMode
+		}
+		return adapter.failTransition(ctx, lane, transition, failure, fmt.Errorf("arm normal-boot UART and RPIBOOT watcher: %w", captureErr))
+	}
+	if captureErr == nil {
+		captureErr = validateSignedBootEvidence(evidence, adapter.config.ExpectedBootImageDigest)
+	}
+	notObservedThrough, watcherErr := watcher.stopAndRecheck(ctx)
+	if watcherErr != nil {
+		failure := laneguard.BootTransitionFailureHardware
+		if errors.Is(watcherErr, ErrWrongBootMode) {
+			failure = laneguard.BootTransitionFailureWrongMode
+		}
+		return adapter.failTransition(ctx, lane, transition, failure, errors.Join(watcherErr, captureErr))
+	}
+	if captureErr != nil {
+		failure := laneguard.BootTransitionFailureHardware
+		if ctx.Err() != nil {
+			failure = laneguard.BootTransitionFailureInterrupted
+		}
+		return adapter.failTransition(ctx, lane, transition, failure, fmt.Errorf("capture signed cold-boot UART evidence: %w", captureErr))
+	}
+	modeObservedAt := notObservedThrough
+	if modeObservedAt.Before(transition.PowerAppliedAt) {
+		modeObservedAt = transition.PowerAppliedAt
+		notObservedThrough = modeObservedAt
+	}
+	transition.Status = laneguard.BootTransitionModeObserved
+	transition.ModeObservedAt = modeObservedAt
+	transition.ObservedMode = laneguard.BootModeNormal
+	transition.RPIBootSysfsPath = lane.RPIBootSysfsPath
+	transition.RPIBootEligibleTargets = 0
+	transition.UARTPath = lane.UARTPath
+	transition.UARTOutputDigest = digestBytes(evidence)
+	transition.RPIBootObservationMethod = laneguard.RPIBootObservationSysfsPoll
+	transition.RPIBootPollInterval = adapter.config.USBPollInterval
+	transition.RPIBootNotObservedThrough = notObservedThrough
+	transition.UpdatedAt = modeObservedAt
+	if err := adapter.journal.PutBootTransition(transition); err != nil {
+		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist normal-boot mode evidence: %w", err))
+	}
+	adapter.lastUART = append(adapter.lastUART[:0], evidence...)
+	adapter.directState.PowerState = "signed_os"
+	result := laneguard.OperationResult{OutputDigest: digestBytes(evidence), Detail: "minimum cold interval and signed boot UART evidence verified"}
+	outcome, err := adapter.completeTransition(ctx, lane, transition)
+	if err != nil {
+		return result, outcome, err
+	}
+	result.BootTransition = outcome
+	return result, outcome, nil
+}
+
+type normalModeWatcher struct {
+	adapter      *Adapter
+	expectedPath string
+	cancel       context.CancelFunc
+	done         chan struct{}
+
+	mu      sync.Mutex
+	err     error
+	through time.Time
+}
+
+func (adapter *Adapter) startNormalModeWatcher(ctx context.Context, expectedPath string, cancelUART context.CancelFunc) (*normalModeWatcher, error) {
+	if err := adapter.requireNoTargets(ctx, expectedPath); err != nil {
+		return nil, errors.Join(ErrWrongBootMode, err)
+	}
+	watchCtx, cancel := context.WithCancel(ctx)
+	watcher := &normalModeWatcher{
+		adapter: adapter, expectedPath: expectedPath, cancel: cancel, done: make(chan struct{}),
+		through: adapter.now(),
+	}
+	armed := make(chan struct{})
+	go func() {
+		defer close(watcher.done)
+		close(armed)
+		for {
+			if err := adapter.sleeper.Sleep(watchCtx, adapter.config.USBPollInterval); err != nil {
+				return
+			}
+			if err := adapter.requireNoTargets(watchCtx, expectedPath); err != nil {
+				watcher.mu.Lock()
+				if watcher.err == nil {
+					watcher.err = err
+				}
+				watcher.mu.Unlock()
+				cancelUART()
+				return
+			}
+			watcher.mu.Lock()
+			watcher.through = adapter.now()
+			watcher.mu.Unlock()
+		}
+	}()
+	<-armed
+	return watcher, nil
+}
+
+func (watcher *normalModeWatcher) stopAndRecheck(ctx context.Context) (time.Time, error) {
+	checkCtx, checkCancel := context.WithTimeout(context.WithoutCancel(ctx), watcher.adapter.config.CleanupTimeout)
+	defer checkCancel()
+	checkErr := watcher.adapter.requireNoTargets(checkCtx, watcher.expectedPath)
+	checkedAt := watcher.adapter.now()
+	watcher.cancel()
+	<-watcher.done
+	watcher.mu.Lock()
+	defer watcher.mu.Unlock()
+	if checkErr != nil && watcher.err == nil {
+		watcher.err = checkErr
+	}
+	if watcher.err == nil && checkedAt.After(watcher.through) {
+		watcher.through = checkedAt
+	}
+	return watcher.through, watcher.err
+}
+
+func (adapter *Adapter) recoverIncompleteTransitions(ctx context.Context, lane laneguard.Config) error {
+	incomplete, err := adapter.journal.IncompleteBootTransitions()
+	if err != nil {
+		return fmt.Errorf("read incomplete boot transitions: %w", err)
+	}
+	if len(incomplete) == 0 {
+		return nil
+	}
+	_, safeOffAt, safeErr := adapter.proveSafeOff(ctx, lane)
+	for _, transition := range incomplete {
+		terminal := transition
+		terminal.UpdatedAt = adapter.atLeast(transition.UpdatedAt, safeOffAt)
+		if safeErr != nil {
+			terminal.Status = laneguard.BootTransitionQuarantined
+			terminal.Failure = laneguard.BootTransitionFailureSafeOffUnproven
+			terminal.SafeOffObservedAt = time.Time{}
+		} else {
+			terminal.Status = laneguard.BootTransitionInterruptedSafeOff
+			terminal.Failure = laneguard.BootTransitionFailureInterrupted
+			terminal.SafeOffObservedAt = terminal.UpdatedAt
+		}
+		if err := adapter.journal.PutBootTransition(terminal); err != nil {
+			return errors.Join(ErrRestartRecovered, safeErr, fmt.Errorf("terminalize interrupted transition %q: %w", transition.Key, err))
+		}
+	}
+	if safeErr != nil {
+		return errors.Join(ErrRestartRecovered, errors.New("restart recovery quarantined the lane because safe-off was not proven"), safeErr)
+	}
+	return nil
+}
+
+func (adapter *Adapter) failTransition(
+	ctx context.Context,
+	lane laneguard.Config,
+	transition laneguard.BootTransition,
+	failure laneguard.BootTransitionFailure,
+	cause error,
+) (laneguard.OperationResult, laneguard.BootTransitionOutcome, error) {
+	_, safeOffAt, safeErr := adapter.proveSafeOff(ctx, lane)
+	return adapter.terminalizeTransition(ctx, transition, failure, cause, safeOffAt, safeErr)
+}
+
+func (adapter *Adapter) terminalizeTransition(
+	ctx context.Context,
+	transition laneguard.BootTransition,
+	failure laneguard.BootTransitionFailure,
+	cause error,
+	safeOffAt time.Time,
+	safeErr error,
+) (laneguard.OperationResult, laneguard.BootTransitionOutcome, error) {
+	stored, exists, readErr := adapter.journal.GetBootTransition(transition.Key)
+	if readErr != nil {
+		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, errors.Join(cause, safeErr, fmt.Errorf("reload durable boot transition for terminalization: %w", readErr))
+	}
+	if !exists {
+		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, errors.Join(cause, safeErr, errors.New("durable boot transition disappeared before terminalization"))
+	}
+	if stored.IsTerminal() {
+		outcome, outcomeErr := stored.Outcome()
+		if outcomeErr != nil {
+			return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, errors.Join(
+				cause, safeErr, fmt.Errorf("derive outcome from already-persisted terminal boot transition: %w", outcomeErr),
+			)
+		}
+		return laneguard.OperationResult{BootTransition: outcome}, outcome, errors.Join(cause, safeErr)
+	}
+	progress, mergeErr := laneguard.MergeBootTransitionProgress(stored, transition)
+	if mergeErr != nil {
+		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, errors.Join(
+			cause, safeErr, fmt.Errorf("merge locally observed boot-transition progress; durable record remains incomplete for restart recovery: %w", mergeErr),
+		)
+	}
+	terminal := progress
+	terminal.UpdatedAt = adapter.atLeast(stored.UpdatedAt, progress.UpdatedAt, safeOffAt)
+	if safeErr != nil {
+		terminal.Status = laneguard.BootTransitionQuarantined
+		terminal.Failure = laneguard.BootTransitionFailureSafeOffUnproven
+		terminal.SafeOffObservedAt = time.Time{}
+	} else {
+		terminal.SafeOffObservedAt = terminal.UpdatedAt
+		if failure == laneguard.BootTransitionFailureInterrupted || ctx.Err() != nil {
+			terminal.Status = laneguard.BootTransitionInterruptedSafeOff
+			terminal.Failure = laneguard.BootTransitionFailureInterrupted
+		} else {
+			terminal.Status = laneguard.BootTransitionAbortedSafeOff
+			terminal.Failure = failure
+		}
+	}
+	if err := adapter.journal.PutBootTransition(terminal); err != nil {
+		persistErr := fmt.Errorf("persist terminal boot transition: %w", err)
+		outcome, reloadErr := adapter.reloadDurableOutcome(terminal.Key)
+		if reloadErr == nil {
+			return laneguard.OperationResult{BootTransition: outcome}, outcome, errors.Join(cause, safeErr, persistErr)
+		}
+		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, errors.Join(
+			cause, safeErr, persistErr,
+			fmt.Errorf("durable record remains incomplete for restart recovery: %w", reloadErr),
+		)
+	}
+	outcome, err := adapter.reloadDurableOutcome(terminal.Key)
+	if err != nil {
+		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, errors.Join(cause, safeErr, err)
+	}
+	return laneguard.OperationResult{BootTransition: outcome}, outcome, errors.Join(cause, safeErr)
+}
+
+func (adapter *Adapter) completeTransition(ctx context.Context, lane laneguard.Config, transition laneguard.BootTransition) (laneguard.BootTransitionOutcome, error) {
+	_, safeOffAt, safeErr := adapter.proveSafeOff(ctx, lane)
+	if safeErr != nil {
+		_, outcome, err := adapter.terminalizeTransition(ctx, transition, laneguard.BootTransitionFailureHardware, errors.New("prove final safe-off state"), safeOffAt, safeErr)
+		return outcome, err
+	}
+	transition.Status = laneguard.BootTransitionCompleted
+	transition.SafeOffObservedAt = adapter.atLeast(transition.UpdatedAt, safeOffAt)
+	transition.CompletedAt = adapter.atLeast(transition.SafeOffObservedAt)
+	transition.UpdatedAt = transition.CompletedAt
+	evidence, err := transition.Evidence()
+	if err != nil {
+		_, outcome, terminalErr := adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, err)
+		return outcome, terminalErr
+	}
+	transition.EvidenceDigest, err = evidence.Digest()
+	if err != nil {
+		_, outcome, terminalErr := adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, err)
+		return outcome, terminalErr
+	}
+	if err := adapter.journal.PutBootTransition(transition); err != nil {
+		_, outcome, terminalErr := adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist completed boot transition: %w", err))
+		return outcome, terminalErr
+	}
+	outcome, err := adapter.reloadDurableOutcome(transition.Key)
+	if err != nil {
+		return laneguard.BootTransitionOutcome{}, err
+	}
+	return outcome, nil
+}
+
+func (adapter *Adapter) proveSafeOff(ctx context.Context, lane laneguard.Config) (time.Time, time.Time, error) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adapter.config.CleanupTimeout)
+	defer cancel()
+	releaseErr := adapter.releasePower()
+	powerOffAt := adapter.now()
+	disappearanceErr := adapter.waitForDisappearance(cleanupCtx, lane.RPIBootSysfsPath)
+	if disappearanceErr != nil {
+		disappearanceErr = fmt.Errorf("confirm USB absence after relay release: %w", disappearanceErr)
+	}
+	usbAbsentAt := adapter.atLeast(powerOffAt)
+	if releaseErr == nil && disappearanceErr == nil && adapter.target != nil {
+		adapter.directState.PowerState = "powered_off"
+	}
+	return powerOffAt, usbAbsentAt, errors.Join(releaseErr, disappearanceErr)
+}
+
+func (adapter *Adapter) reloadDurableOutcome(key string) (laneguard.BootTransitionOutcome, error) {
+	durable, exists, err := adapter.journal.GetBootTransition(key)
+	if err != nil {
+		return laneguard.BootTransitionOutcome{}, fmt.Errorf("reload terminal boot transition: %w", err)
+	}
+	if !exists || durable.Key != key {
+		return laneguard.BootTransitionOutcome{}, errors.New("terminal boot transition was not durably readable by its exact key")
+	}
+	outcome, err := durable.Outcome()
+	if err != nil {
+		return laneguard.BootTransitionOutcome{}, fmt.Errorf("derive outcome from reloaded terminal boot transition: %w", err)
+	}
+	return outcome, nil
+}
+
+func (adapter *Adapter) commitLocked(ctx context.Context, lane laneguard.Config, expectedFingerprint string) (laneguard.OperationResult, error) {
 	if adapter.mode != ModeFresh {
 		return laneguard.OperationResult{}, errors.New("fresh ownership commit is forbidden for an owned target")
 	}
-	output, commandErr := adapter.runRPIBootLocked(ctx, lane, adapter.config.Paths.FreshCommitBundle)
+	output, commandErr := adapter.runRPIBootPayloadLocked(ctx, lane, adapter.config.Paths.FreshCommitBundle)
 	metadata, extractErr := rpi5.ExtractMetadataObject(output)
 	if extractErr != nil {
 		if commandErr != nil {
@@ -203,7 +755,7 @@ func (adapter *Adapter) commitLocked(ctx context.Context, lane laneguard.Config)
 	if err != nil {
 		return laneguard.OperationResult{}, fmt.Errorf("parse fresh commit metadata: %w", err)
 	}
-	if err := adapter.validateContinuity(observation); err != nil {
+	if err := adapter.validateContinuity(observation, expectedFingerprint); err != nil {
 		return laneguard.OperationResult{}, err
 	}
 	if observation.CustomerKeyHash != adapter.config.ExpectedCustomerKeyHash ||
@@ -222,8 +774,8 @@ func (adapter *Adapter) commitLocked(ctx context.Context, lane laneguard.Config)
 	return laneguard.OperationResult{OutputDigest: digestBytes(output), Detail: detail}, nil
 }
 
-func (adapter *Adapter) readbackLocked(ctx context.Context, lane laneguard.Config, bundle, mode string) (laneguard.OperationResult, error) {
-	output, commandErr := adapter.runRPIBootLocked(ctx, lane, bundle)
+func (adapter *Adapter) readbackLocked(ctx context.Context, lane laneguard.Config, expectedFingerprint, bundle, mode string) (laneguard.OperationResult, error) {
+	output, commandErr := adapter.runRPIBootPayloadLocked(ctx, lane, bundle)
 	if commandErr != nil {
 		return laneguard.OperationResult{}, commandErr
 	}
@@ -235,7 +787,7 @@ func (adapter *Adapter) readbackLocked(ctx context.Context, lane laneguard.Confi
 	if err != nil {
 		return laneguard.OperationResult{}, fmt.Errorf("parse RPIBOOT readback metadata: %w", err)
 	}
-	if err := adapter.validateContinuity(observation); err != nil {
+	if err := adapter.validateContinuity(observation, expectedFingerprint); err != nil {
 		return laneguard.OperationResult{}, err
 	}
 	switch mode {
@@ -256,41 +808,49 @@ func (adapter *Adapter) readbackLocked(ctx context.Context, lane laneguard.Confi
 	return laneguard.OperationResult{OutputDigest: digestBytes(output), Detail: mode + " RPIBOOT readback verified"}, nil
 }
 
-func (adapter *Adapter) coldPowerCycleLocked(ctx context.Context, lane laneguard.Config) (laneguard.OperationResult, error) {
-	if adapter.target == nil || adapter.mode != ModeOwned {
-		return laneguard.OperationResult{}, errors.New("cold power cycle requires an authoritative owned-target readback")
+// preflightRPIBootIdentityLocked performs an immutable read-only readback
+// immediately before an execute payload. It intentionally validates into a
+// local value and never updates adapter mode, cached target, or direct state,
+// so a mismatch cannot be hidden by adopting the replacement as current.
+func (adapter *Adapter) preflightRPIBootIdentityLocked(ctx context.Context, lane laneguard.Config, expectedFingerprint string) error {
+	bundle := adapter.config.Paths.FreshReadbackBundle
+	mode := ModeFresh
+	if adapter.mode == ModeOwned {
+		bundle = adapter.config.Paths.OwnedReadbackBundle
+		mode = ModeOwned
+	} else if adapter.mode != ModeFresh {
+		return errors.New("RPIBOOT identity preflight has no valid adapter mode")
 	}
-	if err := adapter.releasePower(); err != nil {
-		return laneguard.OperationResult{}, err
-	}
-	if err := adapter.waitForDisappearance(ctx, lane.RPIBootSysfsPath); err != nil {
-		return laneguard.OperationResult{}, err
-	}
-	if err := adapter.sleeper.Sleep(ctx, adapter.config.MinimumColdInterval); err != nil {
-		return laneguard.OperationResult{}, fmt.Errorf("maintain minimum cold interval: %w", err)
-	}
-	marker := []byte(signedBootMarker)
-	uartCtx, cancel := context.WithTimeout(ctx, adapter.config.UARTTimeout)
-	defer cancel()
-	evidence, err := adapter.uart.Capture(uartCtx, lane.UARTPath, marker, adapter.config.MaximumOutputBytes, func() error {
-		return adapter.ensurePower(ctx, lane.PowerGPIO)
-	})
+	output, err := adapter.runRPIBootPayloadLocked(ctx, lane, bundle)
 	if err != nil {
-		return laneguard.OperationResult{}, fmt.Errorf("capture signed cold-boot UART evidence: %w", err)
+		return fmt.Errorf("run bounded %s identity preflight: %w", mode, err)
 	}
-	if err := validateSignedBootEvidence(evidence, adapter.config.ExpectedBootImageDigest); err != nil {
-		return laneguard.OperationResult{}, err
+	metadata, err := rpi5.ExtractMetadataObject(output)
+	if err != nil {
+		return fmt.Errorf("extract %s identity preflight metadata: %w", mode, err)
 	}
-	adapter.lastUART = append(adapter.lastUART[:0], evidence...)
-	adapter.directState.PowerState = "signed_os"
-	return laneguard.OperationResult{OutputDigest: digestBytes(evidence), Detail: "minimum cold interval and signed boot UART evidence verified"}, nil
+	observation, err := rpi5.ParseMetadata(metadata)
+	if err != nil {
+		return fmt.Errorf("parse %s identity preflight metadata: %w", mode, err)
+	}
+	if err := adapter.validateContinuity(observation, expectedFingerprint); err != nil {
+		return fmt.Errorf("%s identity preflight: %w", mode, err)
+	}
+	if mode == ModeFresh && observation.CustomerKeyHash != zeroCustomerKey {
+		return fmt.Errorf("%w: fresh identity preflight observed a programmed customer key", laneguard.ErrTargetContinuity)
+	}
+	if mode == ModeOwned && (observation.CustomerKeyHash != adapter.config.ExpectedCustomerKeyHash ||
+		observation.EEPROMHash != adapter.config.ExpectedEEPROMHash) {
+		return fmt.Errorf("%w: owned identity preflight key or EEPROM digest differs", laneguard.ErrTargetContinuity)
+	}
+	return nil
 }
 
 func (adapter *Adapter) uartBundleTestLocked(ctx context.Context, lane laneguard.Config, bundle string, marker []byte, powerState string) (laneguard.OperationResult, error) {
 	uartCtx, cancel := context.WithTimeout(ctx, adapter.config.UARTTimeout)
 	defer cancel()
 	evidence, err := adapter.uart.Capture(uartCtx, lane.UARTPath, marker, adapter.config.MaximumOutputBytes, func() error {
-		_, runErr := adapter.runRPIBootLocked(ctx, lane, bundle)
+		_, runErr := adapter.runRPIBootPayloadLocked(ctx, lane, bundle)
 		return runErr
 	})
 	if err != nil {
@@ -304,11 +864,14 @@ func (adapter *Adapter) uartBundleTestLocked(ctx context.Context, lane laneguard
 	return laneguard.OperationResult{OutputDigest: digestBytes(evidence), Detail: "UART rejection evidence verified"}, nil
 }
 
-func (adapter *Adapter) runRPIBootLocked(ctx context.Context, lane laneguard.Config, bundle string) ([]byte, error) {
-	if err := adapter.ensurePower(ctx, lane.PowerGPIO); err != nil {
-		return nil, err
+// runRPIBootPayloadLocked performs no power or boot-mode selection. The
+// durable transition has already proved exact target selection and BOOTSEL
+// release before any payload helper is reached.
+func (adapter *Adapter) runRPIBootPayloadLocked(ctx context.Context, lane laneguard.Config, bundle string) ([]byte, error) {
+	if adapter.power == nil {
+		return nil, errors.New("RPIBOOT payload requires an active transition-owned power lease")
 	}
-	if err := adapter.waitForExpectedTarget(ctx, lane.RPIBootSysfsPath); err != nil {
+	if err := adapter.requireExactTarget(ctx, lane.RPIBootSysfsPath); err != nil {
 		return nil, err
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, adapter.config.CommandTimeout)
@@ -316,7 +879,25 @@ func (adapter *Adapter) runRPIBootLocked(ctx context.Context, lane laneguard.Con
 	stdout := &boundedBuffer{maximum: adapter.config.MaximumOutputBytes}
 	stderr := &boundedBuffer{maximum: adapter.config.MaximumOutputBytes}
 	usbPath := filepath.Base(lane.RPIBootSysfsPath)
-	err := adapter.runner.Run(commandCtx, adapter.config.Paths.RPIBootBinary, []string{"-p", usbPath, "-d", bundle}, stdout, stderr)
+	arguments := []string{"-p", usbPath, "-d", bundle}
+	var err error
+	if adapter.usbPin != nil {
+		guarded, ok := adapter.runner.(GuardedRunner)
+		if !ok {
+			return nil, errors.New("RPIBOOT execute runner lacks the required process-start identity guard")
+		}
+		err = guarded.RunGuarded(commandCtx, adapter.config.Paths.RPIBootBinary, arguments, func() error {
+			if err := adapter.requireExactTarget(commandCtx, lane.RPIBootSysfsPath); err != nil {
+				return err
+			}
+			if err := adapter.usbPin.Verify(); err != nil {
+				return errors.Join(laneguard.ErrTargetContinuity, fmt.Errorf("pinned USB instance changed before runner start: %w", err))
+			}
+			return nil
+		}, stdout, stderr)
+	} else {
+		err = adapter.runner.Run(commandCtx, adapter.config.Paths.RPIBootBinary, arguments, stdout, stderr)
+	}
 	if stdout.overflow || stderr.overflow {
 		return nil, fmt.Errorf("rpiboot output exceeds %d bytes", adapter.config.MaximumOutputBytes)
 	}
@@ -326,25 +907,43 @@ func (adapter *Adapter) runRPIBootLocked(ctx context.Context, lane laneguard.Con
 	return append([]byte(nil), stdout.bytes...), nil
 }
 
+func (adapter *Adapter) pinRPIBootInstance(expectedPath string) (USBInstancePin, error) {
+	pinner, ok := adapter.filesystem.(USBInstancePinner)
+	if !ok {
+		return nil, errors.New("physical filesystem cannot pin a USB sysfs device instance")
+	}
+	pin, err := pinner.PinUSBInstance(expectedPath)
+	if err != nil {
+		return nil, errors.Join(laneguard.ErrTargetContinuity, fmt.Errorf("pin fixed RPIBOOT USB instance: %w", err))
+	}
+	if err := pin.Verify(); err != nil {
+		_ = pin.Close()
+		return nil, errors.Join(laneguard.ErrTargetContinuity, fmt.Errorf("verify pinned RPIBOOT USB instance: %w", err))
+	}
+	return pin, nil
+}
+
 func (adapter *Adapter) waitForExpectedTarget(ctx context.Context, expectedPath string) error {
 	waitCtx, cancel := context.WithTimeout(ctx, adapter.config.USBReappearTimeout)
 	defer cancel()
 	for {
-		candidates, err := adapter.eligibleTargets(waitCtx, expectedPath)
+		topology, err := adapter.inspectUSBTopology(waitCtx, expectedPath, true)
 		if err != nil {
 			return err
 		}
 		switch {
-		case len(candidates) == 1 && candidates[0] == expectedPath:
+		case topology.expectedPresent && len(topology.eligible) == 1 && topology.eligible[0] == expectedPath:
 			return nil
-		case len(candidates) == 0:
+		case !topology.expectedPresent && len(topology.eligible) == 0:
 			if err := adapter.sleeper.Sleep(waitCtx, adapter.config.USBPollInterval); err != nil {
 				return errors.Join(ErrNoRPIBootTarget, fmt.Errorf("wait for fixed RPIBOOT target reappearance: %w", err))
 			}
-		case len(candidates) > 1:
-			return fmt.Errorf("%w: found %d eligible devices", ErrAmbiguousTargets, len(candidates))
+		case len(topology.eligible) > 1:
+			return fmt.Errorf("%w: found %d eligible devices", ErrAmbiguousTargets, len(topology.eligible))
+		case topology.expectedPresent:
+			return fmt.Errorf("%w: fixed sysfs node changed USB identity", ErrUnexpectedTarget)
 		default:
-			return fmt.Errorf("%w: found %s", ErrUnexpectedTarget, candidates[0])
+			return fmt.Errorf("%w: found %s", ErrUnexpectedTarget, topology.eligible[0])
 		}
 	}
 }
@@ -353,14 +952,14 @@ func (adapter *Adapter) waitForDisappearance(ctx context.Context, expectedPath s
 	waitCtx, cancel := context.WithTimeout(ctx, adapter.config.USBDisappearTimeout)
 	defer cancel()
 	for {
-		candidates, err := adapter.eligibleTargets(waitCtx, expectedPath)
+		topology, err := adapter.inspectUSBTopology(waitCtx, expectedPath, true)
 		if err != nil {
 			return fmt.Errorf("wait for RPIBOOT target disappearance: %w", err)
 		}
-		if len(candidates) == 0 {
+		if !topology.expectedPresent && len(topology.eligible) == 0 {
 			return nil
 		}
-		if len(candidates) != 1 || candidates[0] != expectedPath {
+		if !topology.expectedPresent || len(topology.eligible) != 1 || topology.eligible[0] != expectedPath {
 			return ErrUnexpectedTarget
 		}
 		if err := adapter.sleeper.Sleep(waitCtx, adapter.config.USBPollInterval); err != nil {
@@ -369,9 +968,37 @@ func (adapter *Adapter) waitForDisappearance(ctx context.Context, expectedPath s
 	}
 }
 
+func (adapter *Adapter) requireExactTarget(ctx context.Context, expectedPath string) error {
+	topology, err := adapter.inspectUSBTopology(ctx, expectedPath, true)
+	if err != nil {
+		return err
+	}
+	if !topology.expectedPresent && len(topology.eligible) == 0 {
+		return ErrNoRPIBootTarget
+	}
+	if len(topology.eligible) > 1 {
+		return ErrAmbiguousTargets
+	}
+	if !topology.expectedPresent || len(topology.eligible) != 1 || topology.eligible[0] != expectedPath {
+		return ErrUnexpectedTarget
+	}
+	return nil
+}
+
+func (adapter *Adapter) requireNoTargets(ctx context.Context, expectedPath string) error {
+	topology, err := adapter.inspectUSBTopology(ctx, expectedPath, false)
+	if err != nil {
+		return err
+	}
+	if len(topology.eligible) != 0 {
+		return fmt.Errorf("%w: observed %d BCM2712 target(s)", ErrWrongBootMode, len(topology.eligible))
+	}
+	return nil
+}
+
 func (adapter *Adapter) ensurePower(ctx context.Context, descriptor laneguard.GPIODescriptor) error {
 	if adapter.power != nil {
-		return nil
+		return errors.New("target power is already held outside a fresh transition")
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, adapter.config.CommandTimeout)
 	defer cancel()
@@ -395,42 +1022,43 @@ func (adapter *Adapter) releasePower() error {
 	return nil
 }
 
-func (adapter *Adapter) releasePowerAndConfirm(ctx context.Context, lane laneguard.Config) error {
-	if err := adapter.releasePower(); err != nil {
-		return err
-	}
-	if err := adapter.waitForDisappearance(ctx, lane.RPIBootSysfsPath); err != nil {
-		return fmt.Errorf("confirm target disappearance after power release: %w", err)
-	}
-	if adapter.target != nil {
-		adapter.directState.PowerState = "powered_off"
-	}
-	return nil
+type usbTopology struct {
+	expectedPresent bool
+	eligible        []string
 }
 
-func (adapter *Adapter) eligibleTargets(ctx context.Context, expectedPath string) ([]string, error) {
+func (adapter *Adapter) inspectUSBTopology(ctx context.Context, expectedPath string, strictExpectedAttributes bool) (usbTopology, error) {
 	root := filepath.Dir(expectedPath)
 	entries, err := adapter.filesystem.ReadDir(root)
 	if err != nil {
-		return nil, fmt.Errorf("read USB sysfs: %w", err)
+		return usbTopology{}, fmt.Errorf("read USB sysfs: %w", err)
 	}
-	candidates := make([]string, 0, 1)
+	result := usbTopology{eligible: make([]string, 0, 1)}
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return usbTopology{}, err
 		}
 		base := filepath.Join(root, entry.Name())
+		expected := base == expectedPath
+		if expected {
+			result.expectedPresent = true
+		}
 		vendor, vendorErr := adapter.filesystem.ReadFile(filepath.Join(base, "idVendor"))
 		product, productErr := adapter.filesystem.ReadFile(filepath.Join(base, "idProduct"))
 		if vendorErr != nil || productErr != nil {
+			if expected && strictExpectedAttributes {
+				return usbTopology{}, errors.Join(
+					fmt.Errorf("read fixed USB sysfs node attributes at %s", expectedPath), vendorErr, productErr,
+				)
+			}
 			continue
 		}
-		if strings.ToLower(strings.TrimSpace(string(vendor))) == broadcomVendorID && strings.ToLower(strings.TrimSpace(string(product))) == bcm2712ProductID {
-			candidates = append(candidates, base)
+		if strings.EqualFold(strings.TrimSpace(string(vendor)), broadcomVendorID) && strings.EqualFold(strings.TrimSpace(string(product)), bcm2712ProductID) {
+			result.eligible = append(result.eligible, base)
 		}
 	}
-	sort.Strings(candidates)
-	return candidates, nil
+	sort.Strings(result.eligible)
+	return result, nil
 }
 
 func (adapter *Adapter) bindLane(lane laneguard.Config) error {
@@ -448,7 +1076,10 @@ func (adapter *Adapter) bindLane(lane laneguard.Config) error {
 	return nil
 }
 
-func (adapter *Adapter) validateContinuity(observation rpi5.Observation) error {
+func (adapter *Adapter) validateContinuity(observation rpi5.Observation, expectedFingerprint string) error {
+	if observation.TargetFingerprint != expectedFingerprint {
+		return fmt.Errorf("%w: metadata fingerprint does not match the authority-bound target", laneguard.ErrTargetContinuity)
+	}
 	if adapter.target != nil && adapter.target.TargetFingerprint != observation.TargetFingerprint {
 		return fmt.Errorf("%w: metadata fingerprint changed", laneguard.ErrTargetContinuity)
 	}
@@ -460,6 +1091,41 @@ func (adapter *Adapter) cachedObservation(lane laneguard.Config) laneguard.Obser
 		EligibleTargets: 1, RPIBootSysfsPath: lane.RPIBootSysfsPath,
 		TargetFingerprint: adapter.target.TargetFingerprint, State: adapter.directState,
 	}
+}
+
+func (adapter *Adapter) newPrompt(action laneguard.HardwareAction, kind operatorprompt.Kind, instructions string, expiresAt time.Time) (operatorprompt.Prompt, error) {
+	material, err := json.Marshal(struct {
+		Action    laneguard.HardwareAction `json:"action"`
+		Kind      operatorprompt.Kind      `json:"kind"`
+		ExpiresAt time.Time                `json:"expires_at"`
+	}{Action: action, Kind: kind, ExpiresAt: expiresAt.UTC()})
+	if err != nil {
+		return operatorprompt.Prompt{}, err
+	}
+	digest := sha256.Sum256(material)
+	id := "boot-" + string(kind) + "-" + hex.EncodeToString(digest[:8])
+	return operatorprompt.New(action, kind, id, instructions, expiresAt)
+}
+
+func validatePromptAcknowledgement(prompt operatorprompt.Prompt, acknowledgement operatorprompt.Acknowledgement, notBefore time.Time) error {
+	if acknowledgement.SchemaVersion != operatorprompt.AcknowledgementSchemaVersion ||
+		acknowledgement.PromptID != prompt.ID || acknowledgement.PromptDigest != prompt.Digest || acknowledgement.Peer.PID <= 0 ||
+		acknowledgement.AcknowledgedAt.Before(notBefore) || !acknowledgement.AcknowledgedAt.Before(prompt.ExpiresAt) {
+		return errors.New("operator acknowledgement does not match the durable prompt, timing, or peer")
+	}
+	return nil
+}
+
+func (adapter *Adapter) now() time.Time { return adapter.clock.Now().UTC() }
+
+func (adapter *Adapter) atLeast(values ...time.Time) time.Time {
+	result := adapter.now()
+	for _, value := range values {
+		if value.After(result) {
+			result = value.UTC()
+		}
+	}
+	return result
 }
 
 func directState(observation rpi5.Observation, powerState string) laneguard.DirectState {
