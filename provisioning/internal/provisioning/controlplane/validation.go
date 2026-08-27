@@ -82,6 +82,9 @@ func validateCurrentClaimPreflightRequest(request CurrentClaimPreflightRequest) 
 	if request.ApprovalID != "" && (!validIdentifier(request.ApprovalID) || !validDigest(request.PlanDigest)) {
 		return invalid("approval_id or plan_digest is invalid")
 	}
+	if request.MinimumApprovalRemainingSeconds != 0 && request.ApprovalID == "" {
+		return invalid("minimum_approval_remaining_seconds requires approval_id and plan_digest")
+	}
 	return nil
 }
 

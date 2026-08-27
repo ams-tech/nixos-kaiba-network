@@ -51,6 +51,29 @@ type mutableClock struct{ now time.Time }
 
 func (clock *mutableClock) Now() time.Time { return clock.now }
 
+type recordingDispatchAuthority struct {
+	executeCalls        int
+	reconciliationCalls int
+	execute             func(context.Context, Plan, ExecuteRequest) error
+	reconciliation      func(context.Context, Plan, ReconcileRequest) error
+}
+
+func (authority *recordingDispatchAuthority) RecheckExecute(ctx context.Context, plan Plan, request ExecuteRequest) error {
+	authority.executeCalls++
+	if authority.execute != nil {
+		return authority.execute(ctx, plan, request)
+	}
+	return nil
+}
+
+func (authority *recordingDispatchAuthority) RecheckReconciliation(ctx context.Context, plan Plan, request ReconcileRequest) error {
+	authority.reconciliationCalls++
+	if authority.reconciliation != nil {
+		return authority.reconciliation(ctx, plan, request)
+	}
+	return nil
+}
+
 type fakeHardware struct {
 	mu              sync.Mutex
 	journal         Journal
@@ -297,6 +320,138 @@ func TestGuardRecordsIntentBeforeCallingHardware(t *testing.T) {
 	}
 	if _, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute))); err != nil {
 		t.Fatalf("execute: %v", err)
+	}
+}
+
+func TestDispatchAuthorityDenialAfterPreObservationLeavesNoStartedAttempt(t *testing.T) {
+	config := testConfig()
+	plan := testPlan()
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	hardware := &fakeHardware{
+		journal: store,
+		observation: Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+		},
+		after: map[Operation]DirectState{plan.Operations[0].Operation: plan.Operations[0].ExpectedPoststate},
+	}
+	denied := errors.New("server dispatch authority expired")
+	authority := &recordingDispatchAuthority{}
+	authority.execute = func(_ context.Context, gotPlan Plan, gotRequest ExecuteRequest) error {
+		if !samePlan(gotPlan, plan) || gotRequest != requestFor(plan, 1, now.Add(10*time.Minute)) {
+			t.Fatalf("dispatch authority input = %#v / %#v", gotPlan, gotRequest)
+		}
+		if hardware.observeCount != 1 || hardware.executeCount != 0 {
+			t.Fatalf("dispatch recheck order = observations:%d executions:%d", hardware.observeCount, hardware.executeCount)
+		}
+		if attempt, found, err := store.Get(attemptKey(plan, 1)); err != nil || found || attempt != (Attempt{}) {
+			t.Fatalf("attempt existed before dispatch authority: %#v, %t, %v", attempt, found, err)
+		}
+		return denied
+	}
+	guard, err := NewWithClockAndDispatchAuthority(config, hardware, store, fakeClock{now}, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, denied) {
+		t.Fatalf("dispatch denial error = %v", err)
+	}
+	if authority.executeCalls != 1 || authority.reconciliationCalls != 0 || hardware.executeCount != 0 {
+		t.Fatalf("denied dispatch calls = authority:%d/%d hardware:%d", authority.executeCalls, authority.reconciliationCalls, hardware.executeCount)
+	}
+	if attempt, found, err := store.Get(attemptKey(plan, 1)); err != nil || found || attempt != (Attempt{}) {
+		t.Fatalf("denied dispatch persisted AttemptStarted: %#v, %t, %v", attempt, found, err)
+	}
+}
+
+func TestReconciliationDispatchAuthorityDenialPreventsTargetObservation(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	hardware.executeErr = errors.New("execution response lost")
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	uncertain, err := guard.Execute(context.Background(), request)
+	if !errors.Is(err, ErrReconciliationRequired) || uncertain.Status != AttemptUncertain {
+		t.Fatalf("uncertain execution = %#v, %v", uncertain, err)
+	}
+
+	restartedHardware := &fakeHardware{
+		journal: store,
+		observation: Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath,
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
+		},
+	}
+	denied := errors.New("server reconciliation authority expired")
+	authority := &recordingDispatchAuthority{}
+	authority.reconciliation = func(_ context.Context, gotPlan Plan, gotRequest ReconcileRequest) error {
+		if !samePlan(gotPlan, plan) || gotRequest != reconcileRequest(plan, request, now.Add(10*time.Minute)) {
+			t.Fatalf("reconciliation dispatch authority input = %#v / %#v", gotPlan, gotRequest)
+		}
+		if restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+			t.Fatalf("reconciliation reached hardware before authority: observations=%d executions=%d", restartedHardware.observeCount, restartedHardware.executeCount)
+		}
+		persisted, found, getErr := store.Get(attemptKey(plan, 1))
+		if getErr != nil || !found || persisted != uncertain {
+			t.Fatalf("journal changed before reconciliation authority: %#v, %t, %v", persisted, found, getErr)
+		}
+		return denied
+	}
+	restarted, err := NewWithClockAndDispatchAuthority(testConfig(), restartedHardware, store, fakeClock{now}, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute))); !errors.Is(err, denied) {
+		t.Fatalf("reconciliation dispatch denial error = %v", err)
+	}
+	if authority.reconciliationCalls != 1 || authority.executeCalls != 0 || restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+		t.Fatalf("denied reconciliation calls = authority:%d/%d hardware:%d/%d", authority.executeCalls, authority.reconciliationCalls, restartedHardware.observeCount, restartedHardware.executeCount)
+	}
+	persisted, found, err := store.Get(attemptKey(plan, 1))
+	if err != nil || !found || persisted != uncertain {
+		t.Fatalf("reconciliation denial changed the attempt: %#v, %t, %v", persisted, found, err)
+	}
+}
+
+func TestDurableTerminalReplaySkipsDispatchAuthority(t *testing.T) {
+	guard, _, store, plan, now := newTestGuard(t)
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	verified, err := guard.Execute(context.Background(), request)
+	if err != nil || verified.Status != AttemptVerified {
+		t.Fatalf("initial execution = %#v, %v", verified, err)
+	}
+	restartedHardware := &fakeHardware{journal: store}
+	authority := &recordingDispatchAuthority{
+		execute: func(context.Context, Plan, ExecuteRequest) error {
+			t.Fatal("terminal execute replay reached dispatch authority")
+			return nil
+		},
+		reconciliation: func(context.Context, Plan, ReconcileRequest) error {
+			t.Fatal("terminal reconciliation replay reached dispatch authority")
+			return nil
+		},
+	}
+	restarted, err := NewWithClockAndDispatchAuthority(testConfig(), restartedHardware, store, fakeClock{now}, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if replayed, err := restarted.Execute(context.Background(), request); err != nil || replayed != verified {
+		t.Fatalf("terminal execute replay = %#v, %v", replayed, err)
+	}
+	if replayed, err := restarted.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute))); err != nil || replayed != verified {
+		t.Fatalf("terminal reconciliation replay = %#v, %v", replayed, err)
+	}
+	if authority.executeCalls != 0 || authority.reconciliationCalls != 0 || restartedHardware.observeCount != 0 || restartedHardware.executeCount != 0 {
+		t.Fatalf("terminal replay calls = authority:%d/%d hardware:%d/%d", authority.executeCalls, authority.reconciliationCalls, restartedHardware.observeCount, restartedHardware.executeCount)
 	}
 }
 

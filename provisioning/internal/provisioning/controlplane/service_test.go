@@ -318,6 +318,82 @@ func TestCurrentClaimPreflightOptionallyRequiresTheExactCurrentApproval(t *testi
 	}
 }
 
+func TestCurrentClaimPreflightEnforcesServerClockMinimumRemainingWindows(t *testing.T) {
+	t.Run("claim", func(t *testing.T) {
+		store := &MemoryStore{}
+		fixture := newTestFixture(t, store)
+		transaction := fixture.createClaimBind(developmentCampaignNames())
+		request := CurrentClaimPreflightRequest{
+			SchemaVersion:                CurrentClaimPreflightRequestSchemaVersion,
+			MutationContext:              contextFor(transaction),
+			MinimumClaimRemainingSeconds: 90,
+		}
+		fixture.now = transaction.ActiveClaim.ExpiresAt.Add(-90 * time.Second)
+		if _, err := fixture.service.PreflightCurrentClaim(context.Background(), request); err != nil {
+			t.Fatalf("exact minimum claim window: %v", err)
+		}
+		before, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.now = fixture.now.Add(time.Nanosecond)
+		if _, err := fixture.service.PreflightCurrentClaim(context.Background(), request); !errors.Is(err, ErrLeaseExpired) {
+			t.Fatalf("short claim window error = %v, want ErrLeaseExpired", err)
+		}
+		after, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(after) != string(before) {
+			t.Fatal("rejected minimum claim window changed durable state")
+		}
+	})
+
+	t.Run("approval", func(t *testing.T) {
+		store := &MemoryStore{}
+		fixture := newTestFixture(t, store)
+		transaction := fixture.createClaimBindApprove(developmentCampaignNames())
+		var err error
+		transaction, err = fixture.service.RenewClaim(context.Background(), RenewClaimRequest{
+			SchemaVersion: RenewClaimRequestSchemaVersion, IdempotencyKey: "renew-for-minimum-window",
+			TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+			ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch, LeaseDurationSeconds: 3600,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := CurrentClaimPreflightRequest{
+			SchemaVersion:                   CurrentClaimPreflightRequestSchemaVersion,
+			MutationContext:                 contextFor(transaction),
+			ApprovalID:                      transaction.Approval.ID,
+			PlanDigest:                      transaction.Approval.PlanDigest,
+			MinimumClaimRemainingSeconds:    60,
+			MinimumApprovalRemainingSeconds: 30,
+		}
+		fixture.now = transaction.Approval.ExpiresAt.Add(-30 * time.Second)
+		if _, err := fixture.service.PreflightCurrentClaim(context.Background(), request); err != nil {
+			t.Fatalf("exact minimum approval window: %v", err)
+		}
+		fixture.now = fixture.now.Add(time.Nanosecond)
+		if _, err := fixture.service.PreflightCurrentClaim(context.Background(), request); !errors.Is(err, ErrIllegalTransition) {
+			t.Fatalf("short approval window error = %v, want ErrIllegalTransition", err)
+		}
+	})
+
+	t.Run("approval window requires approval binding", func(t *testing.T) {
+		fixture := newTestFixture(t, &MemoryStore{})
+		transaction := fixture.createClaimBind(developmentCampaignNames())
+		request := CurrentClaimPreflightRequest{
+			SchemaVersion:                   CurrentClaimPreflightRequestSchemaVersion,
+			MutationContext:                 contextFor(transaction),
+			MinimumApprovalRemainingSeconds: 1,
+		}
+		if _, err := fixture.service.PreflightCurrentClaim(context.Background(), request); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("unbound approval window error = %v, want ErrInvalid", err)
+		}
+	})
+}
+
 func TestApprovalPreflightIsReadOnlyAndAcceptsOnlyExactStateOrReplay(t *testing.T) {
 	fixture := newTestFixture(t, &MemoryStore{})
 	operations := developmentCampaignNames()

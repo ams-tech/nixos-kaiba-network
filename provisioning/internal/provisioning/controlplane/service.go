@@ -131,9 +131,16 @@ func (s *Service) PreflightCurrentClaim(_ context.Context, request CurrentClaimP
 	if err != nil {
 		return Transaction{}, err
 	}
+	if minimum := time.Duration(request.MinimumClaimRemainingSeconds) * time.Second; minimum > 0 && claim.ExpiresAt.Sub(now) < minimum {
+		return Transaction{}, fmt.Errorf("%w: claim does not cover the requested minimum remaining window", ErrLeaseExpired)
+	}
 	if request.ApprovalID != "" {
-		if _, err := requireCurrentApproval(&transaction, claim, request.ApprovalID, request.PlanDigest, now); err != nil {
+		approval, err := requireCurrentApproval(&transaction, claim, request.ApprovalID, request.PlanDigest, now)
+		if err != nil {
 			return Transaction{}, err
+		}
+		if minimum := time.Duration(request.MinimumApprovalRemainingSeconds) * time.Second; minimum > 0 && approval.ExpiresAt.Sub(now) < minimum {
+			return Transaction{}, fmt.Errorf("%w: approval does not cover the requested minimum remaining window", ErrIllegalTransition)
 		}
 	}
 	return cloneTransaction(transaction)

@@ -17,7 +17,7 @@ const (
 	CreateTransactionRequestSchemaVersion     = "provisioning.kaiba.network/create-transaction-request/v1alpha3"
 	AcquireClaimRequestSchemaVersion          = "provisioning.kaiba.network/acquire-claim-request/v1alpha1"
 	RenewClaimRequestSchemaVersion            = "provisioning.kaiba.network/renew-claim-request/v1alpha1"
-	CurrentClaimPreflightRequestSchemaVersion = "provisioning.kaiba.network/current-claim-preflight-request/v1alpha1"
+	CurrentClaimPreflightRequestSchemaVersion = "provisioning.kaiba.network/current-claim-preflight-request/v1alpha2"
 	TransferClaimRequestSchemaVersion         = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
 	ReleaseClaimRequestSchemaVersion          = "provisioning.kaiba.network/release-claim-request/v1alpha1"
 	BindTargetRequestSchemaVersion            = "provisioning.kaiba.network/bind-target-request/v1alpha1"
@@ -266,13 +266,16 @@ type MutationContext struct {
 
 // CurrentClaimPreflightRequest is a receipt-free, read-only request to verify
 // that an exact mutation context still names the server's current unexpired
-// claim and, when supplied, its exact current approval. It deliberately
+// claim and, when supplied, its exact current approval. Optional minimum
+// remaining windows are measured from the server's clock. It deliberately
 // carries no operation selector or mutation input.
 type CurrentClaimPreflightRequest struct {
 	SchemaVersion string `json:"schema_version"`
 	MutationContext
-	ApprovalID string `json:"approval_id,omitempty"`
-	PlanDigest string `json:"plan_digest,omitempty"`
+	ApprovalID                      string `json:"approval_id,omitempty"`
+	PlanDigest                      string `json:"plan_digest,omitempty"`
+	MinimumClaimRemainingSeconds    uint32 `json:"minimum_claim_remaining_seconds,omitempty"`
+	MinimumApprovalRemainingSeconds uint32 `json:"minimum_approval_remaining_seconds,omitempty"`
 }
 
 type BindTargetRequest struct {

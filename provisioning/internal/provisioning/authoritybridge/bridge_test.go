@@ -96,6 +96,7 @@ func TestBinderReturnsOnlyTheCurrentAuthenticatedExecution(t *testing.T) {
 			ClaimID: fixture.transaction.ActiveClaim.ID, FenceEpoch: fixture.transaction.FenceEpoch,
 		},
 		ApprovalID: fixture.transaction.Approval.ID, PlanDigest: fixture.request.DraftSnapshot.PlanDigest,
+		MinimumClaimRemainingSeconds: 90, MinimumApprovalRemainingSeconds: 30,
 	}
 	if control.preflightRequest != wantPreflight {
 		t.Fatalf("current-claim preflight = %#v, want %#v", control.preflightRequest, wantPreflight)
@@ -264,6 +265,58 @@ func TestBinderRejectsAuthorityExpiredByTheControlServerClock(t *testing.T) {
 	}
 }
 
+func TestBinderRejectsServerAuthorityThatCannotCoverTheDispatchWindow(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		serverNow func(bridgeFixture) time.Time
+		want      error
+	}{
+		{
+			name: "claim",
+			serverNow: func(fixture bridgeFixture) time.Time {
+				return fixture.transaction.ActiveClaim.ExpiresAt.Add(-90*time.Second + time.Nanosecond)
+			},
+			want: controlplane.ErrLeaseExpired,
+		},
+		{
+			name: "approval",
+			serverNow: func(fixture bridgeFixture) time.Time {
+				return fixture.transaction.Approval.ExpiresAt.Add(-30*time.Second + time.Nanosecond)
+			},
+			want: controlplane.ErrIllegalTransition,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newBridgeFixture(t)
+			*fixture.controlNow = test.serverNow(fixture)
+			binder := fixedBinder(fixture, fixture.records)
+			binder.Control = fixture.control
+			binding, err := binder.Bind(context.Background(), fixture.request)
+			if !errors.Is(err, ErrAuthoritySource) || !errors.Is(err, test.want) {
+				t.Fatalf("Bind() error = %v, want minimum-window rejection %v", err, test.want)
+			}
+			if binding.ExecuteRequest != nil || binding.ReconcileRequest != nil || binding.Plan.TransactionID != "" {
+				t.Fatalf("insufficient authority window returned a binding: %#v", binding)
+			}
+		})
+	}
+}
+
+func TestBinderRoundsDispatchAuthorityWindowsUpToWholeSeconds(t *testing.T) {
+	fixture := newBridgeFixture(t)
+	control := &recordingControlReader{transaction: fixture.transaction}
+	binder := fixedBinder(fixture, fixture.records)
+	binder.Control = control
+	binder.LeaseSafetyMargin = 30*time.Second + time.Nanosecond
+	if _, err := binder.Bind(context.Background(), fixture.request); err != nil {
+		t.Fatal(err)
+	}
+	if control.preflightRequest.MinimumClaimRemainingSeconds != 91 ||
+		control.preflightRequest.MinimumApprovalRemainingSeconds != 31 {
+		t.Fatalf("rounded preflight windows = %#v", control.preflightRequest)
+	}
+}
+
 func TestBinderRejectsExpiredApprovalAndInsufficientClaimLease(t *testing.T) {
 	fixture := newBridgeFixture(t)
 	t.Run("expired approval", func(t *testing.T) {
@@ -424,6 +477,7 @@ func TestBinderReconstructsExpiredAttemptUnderFreshReconciliationClaim(t *testin
 			TransactionID: fixture.transaction.ID, ExpectedResourceVersion: fixture.transaction.ResourceVersion,
 			ClaimID: fixture.transaction.ActiveClaim.ID, FenceEpoch: fixture.transaction.FenceEpoch,
 		},
+		MinimumClaimRemainingSeconds: 330,
 	}
 	if control.preflightCalls != 1 || control.preflightRequest != wantPreflight ||
 		control.preflightRequest.ApprovalID != "" || control.preflightRequest.PlanDigest != "" {

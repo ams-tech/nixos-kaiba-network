@@ -170,6 +170,12 @@ func TestOneShotCommandUsesDurableJournalAndExactReceiptRetryAvoidsMutation(t *t
 	setImmutableTestGlobals(t)
 	plan, request := commandPlanAndRequest()
 	stubAuthorityResult(t, plan, request)
+	authorityCalls := 0
+	stubAuthority := requestAuthority
+	requestAuthority = func(ctx context.Context, socketPath string, request authoritybridge.BridgeRequest) (authoritybridge.BoundRequest, error) {
+		authorityCalls++
+		return stubAuthority(ctx, socketPath, request)
+	}
 	hardware := &commandHardware{
 		observation: laneguard.Observation{
 			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
@@ -257,6 +263,9 @@ func TestOneShotCommandUsesDurableJournalAndExactReceiptRetryAvoidsMutation(t *t
 		t.Fatalf("existing evidence changed or resources were reopened: %v executions=%d hardware-close=%d prompt-close=%d",
 			err, hardware.executions, hardware.closed, server.closed)
 	}
+	if authorityCalls != 3 {
+		t.Fatalf("initial dispatch plus publication-only replay authority calls = %d, want 3", authorityCalls)
+	}
 
 	if err := run(context.Background(), []string{"--rpiboot-binary", "/tmp/evil"}); err == nil {
 		t.Fatal("caller-selectable rpiboot path flag was accepted")
@@ -266,6 +275,76 @@ func TestOneShotCommandUsesDurableJournalAndExactReceiptRetryAvoidsMutation(t *t
 	}
 	if err := run(context.Background(), []string{"--request", "/tmp/root-request.json"}); err == nil {
 		t.Fatal("root-supplied executable request flag was accepted")
+	}
+}
+
+func TestOneShotCommandDispatchAuthorityDenialLeavesNoStartedAttempt(t *testing.T) {
+	restoreCommandGlobals(t)
+	effectiveUID = func() int { return 0 }
+	setImmutableTestGlobals(t)
+	plan, executeRequest := commandPlanAndRequest()
+	dispatchDenied := errors.New("server-time dispatch authority expired")
+	authorityCalls := 0
+	requestAuthority = func(_ context.Context, _ string, request authoritybridge.BridgeRequest) (authoritybridge.BoundRequest, error) {
+		authorityCalls++
+		if request.Mode != authoritybridge.ModeExecute {
+			t.Fatalf("authority mode = %q", request.Mode)
+		}
+		if authorityCalls == 1 {
+			return authoritybridge.BoundRequest{Plan: plan, ExecuteRequest: &executeRequest}, nil
+		}
+		return authoritybridge.BoundRequest{}, dispatchDenied
+	}
+	hardware := &commandHardware{
+		observation: laneguard.Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+		},
+		poststate: plan.Operations[0].ExpectedPoststate,
+	}
+	buildHardware = func(_ physicalrpi5.Config, dependencies physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+		hardware.journal = dependencies.Journal
+		return hardware, nil
+	}
+	directory := t.TempDir()
+	draftPath := writeJSON(t, directory, "draft.json", commandDraft(plan))
+	journalPath := filepath.Join(directory, "journal.json")
+	err := run(context.Background(), commandMutationArguments(t, directory, draftPath, journalPath))
+	if !errors.Is(err, dispatchDenied) {
+		t.Fatalf("dispatch denial error = %v", err)
+	}
+	if authorityCalls != 2 || hardware.observations != 1 || hardware.executions != 0 {
+		t.Fatalf("denied command calls = authority:%d observations:%d executions:%d", authorityCalls, hardware.observations, hardware.executions)
+	}
+	store, err := laneguard.NewFileStore(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if attempt, found, err := store.Get(laneguard.AttemptJournalKey(plan, 1)); err != nil || found || attempt != (laneguard.Attempt{}) {
+		t.Fatalf("dispatch denial persisted AttemptStarted: %#v, %t, %v", attempt, found, err)
+	}
+}
+
+func TestBridgeDispatchAuthorityRejectsChangedExecutionBinding(t *testing.T) {
+	restoreCommandGlobals(t)
+	plan, executeRequest := commandPlanAndRequest()
+	changed := executeRequest
+	changed.ClaimExpiresAt = changed.ClaimExpiresAt.Add(time.Second)
+	requestAuthority = func(context.Context, string, authoritybridge.BridgeRequest) (authoritybridge.BoundRequest, error) {
+		return authoritybridge.BoundRequest{Plan: plan, ExecuteRequest: &changed}, nil
+	}
+	authority := bridgeDispatchAuthority{
+		socketPath: "/run/kaiba/authority.sock",
+		request: authoritybridge.BridgeRequest{
+			SchemaVersion: authoritybridge.RequestSchemaVersion, Mode: authoritybridge.ModeExecute,
+			TransactionID: plan.TransactionID, DraftSnapshot: commandDraft(plan),
+		},
+		config: commandLaneConfig(),
+		mode:   authoritybridge.ModeExecute,
+	}
+	if err := authority.RecheckExecute(context.Background(), plan, executeRequest); !errors.Is(err, laneguard.ErrPlanMismatch) {
+		t.Fatalf("changed refreshed binding error = %v", err)
 	}
 }
 
@@ -334,7 +413,7 @@ func TestCommandReconcilesRestartWithModeAutoAndNoRedispatch(t *testing.T) {
 	if err := run(context.Background(), append(append([]string(nil), common...), "--mode", "reconcile")); err != nil {
 		t.Fatalf("restart reconciliation = %v", err)
 	}
-	if authorityCalls != 2 || len(adapterModes) != 2 || adapterModes[0] != physicalrpi5.ModeFresh || adapterModes[1] != physicalrpi5.ModeAuto {
+	if authorityCalls != 4 || len(adapterModes) != 2 || adapterModes[0] != physicalrpi5.ModeFresh || adapterModes[1] != physicalrpi5.ModeAuto {
 		t.Fatalf("dispatch = authority:%d modes:%#v", authorityCalls, adapterModes)
 	}
 	if hardware.executions != 1 || hardware.observations != 2 {
@@ -1023,6 +1102,18 @@ func commandMutationArguments(t *testing.T, directory, draftPath, journalPath st
 		"--operator-socket", filepath.Join(directory, "operator.sock"),
 		"--operator-group", "kaiba-operator",
 		"--attempt-directory", attemptDirectory,
+	}
+}
+
+func commandLaneConfig() laneguard.Config {
+	return laneguard.Config{
+		SchemaVersion:     laneguard.ContractSchemaVersion,
+		StationID:         "development-station",
+		LaneID:            "lane-1",
+		RPIBootSysfsPath:  "/sys/bus/usb/devices/1-1",
+		UARTPath:          "/dev/serial/by-id/kaiba-target-uart",
+		PowerGPIO:         laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0"},
+		LeaseSafetyMargin: 30 * time.Second,
 	}
 }
 

@@ -80,6 +80,80 @@ var (
 
 var requestAuthority = authoritybridge.Request
 
+type bridgeDispatchAuthority struct {
+	socketPath string
+	request    authoritybridge.BridgeRequest
+	config     laneguard.Config
+	mode       authoritybridge.Mode
+}
+
+func (authority bridgeDispatchAuthority) RecheckExecute(ctx context.Context, plan laneguard.Plan, request laneguard.ExecuteRequest) error {
+	if authority.mode != authoritybridge.ModeExecute || authority.request.Mode != authoritybridge.ModeExecute {
+		return errors.New("execution dispatch used a non-execution authority mode")
+	}
+	binding, err := requestAuthority(ctx, authority.socketPath, authority.request)
+	if err != nil {
+		return fmt.Errorf("refresh authenticated execution authority: %w", err)
+	}
+	if binding.ExecuteRequest == nil || binding.ReconcileRequest != nil {
+		return errors.New("refreshed authority returned the wrong request variant for execution")
+	}
+	if err := laneguard.ValidatePlanRequest(authority.config, binding.Plan, *binding.ExecuteRequest); err != nil {
+		return fmt.Errorf("validate refreshed execution authority: %w", err)
+	}
+	return compareDispatchBinding(
+		struct {
+			Plan    laneguard.Plan           `json:"plan"`
+			Request laneguard.ExecuteRequest `json:"execute_request"`
+		}{Plan: plan, Request: request},
+		struct {
+			Plan    laneguard.Plan           `json:"plan"`
+			Request laneguard.ExecuteRequest `json:"execute_request"`
+		}{Plan: binding.Plan, Request: *binding.ExecuteRequest},
+	)
+}
+
+func (authority bridgeDispatchAuthority) RecheckReconciliation(ctx context.Context, plan laneguard.Plan, request laneguard.ReconcileRequest) error {
+	if authority.mode != authoritybridge.ModeReconcile || authority.request.Mode != authoritybridge.ModeReconcile {
+		return errors.New("reconciliation dispatch used a non-reconciliation authority mode")
+	}
+	binding, err := requestAuthority(ctx, authority.socketPath, authority.request)
+	if err != nil {
+		return fmt.Errorf("refresh authenticated reconciliation authority: %w", err)
+	}
+	if binding.ExecuteRequest != nil || binding.ReconcileRequest == nil {
+		return errors.New("refreshed authority returned the wrong request variant for reconciliation")
+	}
+	if err := laneguard.ValidateReconcileRequest(authority.config, binding.Plan, *binding.ReconcileRequest); err != nil {
+		return fmt.Errorf("validate refreshed reconciliation authority: %w", err)
+	}
+	return compareDispatchBinding(
+		struct {
+			Plan    laneguard.Plan             `json:"plan"`
+			Request laneguard.ReconcileRequest `json:"reconcile_request"`
+		}{Plan: plan, Request: request},
+		struct {
+			Plan    laneguard.Plan             `json:"plan"`
+			Request laneguard.ReconcileRequest `json:"reconcile_request"`
+		}{Plan: binding.Plan, Request: *binding.ReconcileRequest},
+	)
+}
+
+func compareDispatchBinding(expected, refreshed any) error {
+	expectedBytes, err := json.Marshal(expected)
+	if err != nil {
+		return fmt.Errorf("encode expected dispatch authority: %w", err)
+	}
+	refreshedBytes, err := json.Marshal(refreshed)
+	if err != nil {
+		return fmt.Errorf("encode refreshed dispatch authority: %w", err)
+	}
+	if !bytes.Equal(expectedBytes, refreshedBytes) {
+		return laneguard.ErrPlanMismatch
+	}
+	return nil
+}
+
 var currentExecutable = os.Executable
 
 type releaseMaterialDeriver func(string, []releasebindingmanifest.ArtifactPath, releasebindingmanifest.ReleaseExpectations, releasebindingmanifest.ValidationMode) (immutableReleaseMaterial, error)
@@ -202,12 +276,13 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		return err
 	}
 	bridgeMode := authoritybridge.Mode(*mode)
-	binding, err := requestAuthority(ctx, *bridgeSocket, authoritybridge.BridgeRequest{
+	bridgeRequest := authoritybridge.BridgeRequest{
 		SchemaVersion: authoritybridge.RequestSchemaVersion,
 		Mode:          bridgeMode,
 		TransactionID: draft.TransactionID,
 		DraftSnapshot: draft,
-	})
+	}
+	binding, err := requestAuthority(ctx, *bridgeSocket, bridgeRequest)
 	if err != nil {
 		return fmt.Errorf("obtain authenticated lane authority: %w", err)
 	}
@@ -311,7 +386,12 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 			resultErr = errors.Join(resultErr, closer.Close())
 		}()
 	}
-	guard, err := laneguard.New(laneConfig, hardware, store)
+	guard, err := laneguard.NewWithDispatchAuthority(laneConfig, hardware, store, bridgeDispatchAuthority{
+		socketPath: *bridgeSocket,
+		request:    bridgeRequest,
+		config:     laneConfig,
+		mode:       bridgeMode,
+	})
 	if err != nil {
 		return err
 	}

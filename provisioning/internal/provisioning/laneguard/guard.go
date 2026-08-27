@@ -24,6 +24,26 @@ type Hardware interface {
 	Execute(context.Context, Config, HardwareAction) (OperationResult, error)
 }
 
+// DispatchAuthority rechecks the exact immutable plan and request immediately
+// before the guard creates a durable execution intent or observes a target for
+// reconciliation. Production implementations must consult the authenticated
+// authority source; the default implementation is intentionally local-only for
+// package users that do not own that transport boundary.
+type DispatchAuthority interface {
+	RecheckExecute(context.Context, Plan, ExecuteRequest) error
+	RecheckReconciliation(context.Context, Plan, ReconcileRequest) error
+}
+
+type localDispatchAuthority struct{}
+
+func (localDispatchAuthority) RecheckExecute(context.Context, Plan, ExecuteRequest) error {
+	return nil
+}
+
+func (localDispatchAuthority) RecheckReconciliation(context.Context, Plan, ReconcileRequest) error {
+	return nil
+}
+
 type Clock interface {
 	Now() time.Time
 }
@@ -38,16 +58,33 @@ type Guard struct {
 	hardware           Hardware
 	store              Journal
 	clock              Clock
+	dispatchAuthority  DispatchAuthority
 	plan               *Plan
 	reconciliationOnly bool
 	lockedOut          bool
 }
 
 func New(config Config, hardware Hardware, store Journal) (*Guard, error) {
-	return NewWithClock(config, hardware, store, systemClock{})
+	return newGuard(config, hardware, store, systemClock{}, localDispatchAuthority{})
 }
 
 func NewWithClock(config Config, hardware Hardware, store Journal, clock Clock) (*Guard, error) {
+	return newGuard(config, hardware, store, clock, localDispatchAuthority{})
+}
+
+// NewWithDispatchAuthority constructs a guard whose final dispatch boundary is
+// backed by an authenticated external authority source.
+func NewWithDispatchAuthority(config Config, hardware Hardware, store Journal, authority DispatchAuthority) (*Guard, error) {
+	return newGuard(config, hardware, store, systemClock{}, authority)
+}
+
+// NewWithClockAndDispatchAuthority is the testable form of
+// NewWithDispatchAuthority.
+func NewWithClockAndDispatchAuthority(config Config, hardware Hardware, store Journal, clock Clock, authority DispatchAuthority) (*Guard, error) {
+	return newGuard(config, hardware, store, clock, authority)
+}
+
+func newGuard(config Config, hardware Hardware, store Journal, clock Clock, authority DispatchAuthority) (*Guard, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -60,8 +97,11 @@ func NewWithClock(config Config, hardware Hardware, store Journal, clock Clock) 
 	if clock == nil {
 		return nil, errors.New("clock is required")
 	}
+	if authority == nil {
+		return nil, errors.New("dispatch authority is required")
+	}
 	config.SchemaVersion = ContractSchemaVersion
-	return &Guard{config: config, hardware: hardware, store: store, clock: clock}, nil
+	return &Guard{config: config, hardware: hardware, store: store, clock: clock, dispatchAuthority: authority}, nil
 }
 
 // LoadPlan validates and binds this guard instance to one approved plan, then
@@ -197,6 +237,23 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	if observation.State != operation.ExpectedPrestate {
 		return Attempt{}, ErrPrestateMismatch
 	}
+	executionAction, err := makeHardwareAction(plan, operation, HardwarePhaseExecute, nil)
+	if err != nil {
+		return Attempt{}, err
+	}
+	if err := guard.dispatchAuthority.RecheckExecute(operationCtx, clonePlan(plan), request); err != nil {
+		return Attempt{}, errors.Join(fmt.Errorf("recheck execution dispatch authority: %w", err), context.Cause(operationCtx))
+	}
+	if err := context.Cause(operationCtx); err != nil {
+		return Attempt{}, err
+	}
+	current = guard.clock.Now()
+	if !current.Before(plan.ApprovalExpiresAt) {
+		return Attempt{}, ErrApprovalExpired
+	}
+	if !LeaseCoversOperation(current, request.ClaimExpiresAt, operation.MaximumDuration, guard.config.LeaseSafetyMargin) {
+		return Attempt{}, ErrLeaseInvalid
+	}
 	now := current.UTC()
 	attempt := Attempt{
 		SchemaVersion: AttemptSchemaVersion, Key: key,
@@ -211,10 +268,6 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	}
 	if err := guard.store.Put(attempt); err != nil {
 		return Attempt{}, fmt.Errorf("record execute-once intent: %w", err)
-	}
-	executionAction, err := makeHardwareAction(plan, operation, HardwarePhaseExecute, nil)
-	if err != nil {
-		return Attempt{}, err
 	}
 	result, executeErr := guard.hardware.Execute(operationCtx, guard.config, executionAction)
 	transitionErr := guard.validateBootTransitionOutcome(executionAction, result.BootTransition, executeErr == nil)
@@ -325,6 +378,15 @@ func (guard *Guard) reconcileLocked(ctx context.Context, request ReconcileReques
 	reconciliationAction, err := makeHardwareAction(plan, operation, HardwarePhaseReconciliation, &request.Claim)
 	if err != nil {
 		return Attempt{}, err
+	}
+	if err := guard.dispatchAuthority.RecheckReconciliation(reconciliationCtx, clonePlan(plan), request); err != nil {
+		return Attempt{}, errors.Join(fmt.Errorf("recheck reconciliation dispatch authority: %w", err), context.Cause(reconciliationCtx))
+	}
+	if err := context.Cause(reconciliationCtx); err != nil {
+		return Attempt{}, err
+	}
+	if !LeaseCoversOperation(guard.clock.Now(), request.Claim.ExpiresAt, ReconciliationObservationBudget, guard.config.LeaseSafetyMargin) {
+		return Attempt{}, ErrLeaseInvalid
 	}
 	observation, err := guard.observeBoundTarget(reconciliationCtx, plan.TargetFingerprint, reconciliationAction)
 	err = errors.Join(err, context.Cause(reconciliationCtx))
