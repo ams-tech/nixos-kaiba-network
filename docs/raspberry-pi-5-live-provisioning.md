@@ -1198,9 +1198,13 @@ production claim:
 
 ## Remaining live-only gates before SB-08
 
-The software transaction and manual-prompt deliverables are complete, but they
-do not authorize a sacrificial ownership mutation. Exactly these live gates
-remain:
+The local software transaction, manual-prompt, public-evidence review, and
+private-evidence-boundary deliverables are complete, but they do not authorize
+a sacrificial ownership mutation. The exact pushed merge/pre-ceremony revision
+must still pass the repository's x86_64 and **native** AArch64 pipeline,
+including its station-image build; that non-live, revision-bound release gate
+is not replaced by local x86_64 results and is not counted below. Exactly these
+five live gates remain:
 
 1. Complete the development-token ceremony and assemble the exact signed
    release from authenticated live-token results, including PIN, touch,
@@ -1219,11 +1223,18 @@ remain:
    display, GPIO, or NVMe back-power; prove observed USB disappearance and the
    cold interval; and run fail-off drills for relay-control loss, process death,
    kernel/station restart, complete station power loss, and emergency stop.
-5. Run the physical wrong-mode, absent/additional/moved/replaced-target,
-   BOOTSEL timing, USB continuity, UART failure, restart/recovery, and
-   source-isolation campaign with inert, explicitly non-OTP-capable payloads.
-   Every ambiguous or unsafe result must cleanly abort or quarantine. The fixed
-   actuator remains deferred and is not a gate for this manual campaign.
+5. First close every deferred baseline check for the exact candidate board:
+   explicit destructive-use authorization for the selected storage without
+   appraising contents or binding storage identity; the remaining customer-OTP
+   and device-private-key rows; installed EEPROM contents, effective
+   write-protection posture, and EEPROM/recovery authenticity; inventory
+   ownership and prior-transaction history; and non-VideoCore debug or
+   alternate execution paths. Then run the physical wrong-mode,
+   absent/additional/moved/replaced-target, BOOTSEL timing, USB continuity,
+   UART failure, restart/recovery, and source-isolation campaign with inert,
+   explicitly non-OTP-capable payloads. Every ambiguous or unsafe result must
+   cleanly abort or quarantine. The fixed actuator remains deferred and is not
+   a gate for this manual campaign.
 
 The development `BOOT_ORDER=0xf216`, unlocked VideoCore JTAG, `BOOT_UART=1`,
 self-update, recovery, and EEPROM write-protection postures remain explicitly

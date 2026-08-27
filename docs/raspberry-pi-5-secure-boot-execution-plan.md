@@ -189,7 +189,7 @@ These rules apply to every work item and rehearsal:
 | ID | Milestone | Current status | Exit condition |
 | --- | --- | --- | --- |
 | SB-00 | Read-only hardware qualification | Complete | Reviewed record is checked in and bound to the frozen profile and probe inputs. |
-| SB-01 | Baseline and documentation closeout | In progress | The profile decision, deferred target checks, documentation, and current-revision CI evidence are reviewed. |
+| SB-01 | Baseline and documentation closeout | In progress; public closeout complete, exact-board and merge-revision gates pending | The profile decision, deferred target checks, documentation, and current-revision CI evidence are reviewed. |
 | SB-02 | Development signing root | Not started | The development YubiKey and signing service pass the live key, PIN, touch, token-binding, and failure tests. |
 | SB-03 | Complete signed release | In progress | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
 | SB-04 | Target-media staging | In progress | The exact NVMe layout is written and cold-read back with matching digests. |
@@ -258,17 +258,24 @@ claim.
 
 ### Deliverables
 
-- [ ] Independently verify the qualification record's source revision,
+- [x] Independently verify the qualification record's source revision,
   station-system closure digest, profile policy digest, adapter version, and
-  probe input digests.
-- [ ] Confirm the checked record remains the only public, redacted evidence;
+  probe input digests. The reviewed source revision resolves to the frozen Git
+  commit, the record and closure digest are canonical, and the provisioning
+  result revalidates the profile-policy/status-promotion rule, adapter, tool,
+  bundle, firmware, and configuration bindings.
+- [x] Confirm the checked record remains the only public, redacted evidence;
   retain raw probe results only under the approved private-evidence policy.
+  The evidence directory rejects every entry other than its policy README and
+  the single whitelist-redacted qualification record; raw probe files remain
+  outside Git by policy.
 - [x] Promote the device-class profile from `experimental` to `stable` in a
   status-only change that preserves the qualification policy digest.
 - [x] Update repository text that still describes physical qualification as
   pending or the physical foundation as wholly unqualified.
 - [ ] Close, for the exact candidate board, every deferred check in the device
-  profile:
+  profile. This is the exact-board precondition portion of live-only gate 5 in
+  the live runbook:
   - explicit destructive-use authorization for the selected storage; existing
     contents are not appraised or bound and storage hardware identity is not a
     trust input;
@@ -280,9 +287,11 @@ claim.
 - [x] Record the approved development posture for JTAG, boot order, EEPROM
   updates, EEPROM write protection, recovery, self-update, root integrity, and
   rollback.
-- [ ] Obtain green x86_64 and native AArch64 checks for the final pre-ceremony
-  revision, including the provisioning result, secure-boot target evaluation,
-  artifact checks, station image, and `rpiboot` metadata contract.
+- [ ] After this branch is pushed, obtain green x86_64 and **native** AArch64
+  checks for the exact merge/pre-ceremony revision, including the provisioning
+  result, secure-boot target evaluation, artifact checks, station image, and
+  `rpiboot` metadata contract. Local x86_64 race, vet, report-build, and flake
+  evaluation results do not substitute for that revision-bound native job.
 
 ### Exit criteria
 
