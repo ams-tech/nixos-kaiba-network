@@ -522,6 +522,7 @@ func PrepareNextIntent(ctx context.Context, snapshot laneguard.Plan, now time.Ti
 		TransactionID:  transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch,
 		LeaseDurationSeconds: claimLeaseSeconds,
+		ApprovalID:           transaction.Approval.ID, PlanDigest: snapshot.PlanDigest,
 	})
 	if err != nil {
 		return IntentProposal{}, controlplane.Transaction{}, fmt.Errorf("renew fixed campaign claim: %w", err)
@@ -572,6 +573,8 @@ func RenewPendingIntent(ctx context.Context, snapshot laneguard.Plan, now time.T
 		ClaimID:                 transaction.ActiveClaim.ID,
 		FenceEpoch:              transaction.FenceEpoch,
 		LeaseDurationSeconds:    claimLeaseSeconds,
+		ApprovalID:              transaction.Approval.ID,
+		PlanDigest:              snapshot.PlanDigest,
 	})
 	if err != nil {
 		return controlplane.Transaction{}, fmt.Errorf("renew pending-intent claim: %w", err)
@@ -669,11 +672,12 @@ func RenewTargetBoundCampaign(ctx context.Context, snapshot laneguard.Plan, now 
 			transaction.ActiveClaim.ID,
 			fmt.Sprint(transaction.ResourceVersion),
 		),
-		TransactionID:           transaction.ID,
-		ExpectedResourceVersion: transaction.ResourceVersion,
-		ClaimID:                 transaction.ActiveClaim.ID,
-		FenceEpoch:              transaction.FenceEpoch,
-		LeaseDurationSeconds:    claimLeaseSeconds,
+		TransactionID:                     transaction.ID,
+		ExpectedResourceVersion:           transaction.ResourceVersion,
+		ClaimID:                           transaction.ActiveClaim.ID,
+		FenceEpoch:                        transaction.FenceEpoch,
+		LeaseDurationSeconds:              claimLeaseSeconds,
+		TargetBoundAuthorizationExpiresAt: &snapshot.ApprovalExpiresAt,
 	})
 	if err != nil {
 		return controlplane.Transaction{}, fmt.Errorf("renew target-bound campaign claim: %w", err)
@@ -736,6 +740,8 @@ func RenewReadyCampaign(ctx context.Context, snapshot laneguard.Plan, now time.T
 		ClaimID:                 transaction.ActiveClaim.ID,
 		FenceEpoch:              transaction.FenceEpoch,
 		LeaseDurationSeconds:    claimLeaseSeconds,
+		ApprovalID:              transaction.Approval.ID,
+		PlanDigest:              snapshot.PlanDigest,
 	})
 	if err != nil {
 		return controlplane.Transaction{}, fmt.Errorf("renew ready-campaign claim: %w", err)

@@ -16,7 +16,7 @@ const (
 
 	CreateTransactionRequestSchemaVersion     = "provisioning.kaiba.network/create-transaction-request/v1alpha3"
 	AcquireClaimRequestSchemaVersion          = "provisioning.kaiba.network/acquire-claim-request/v1alpha1"
-	RenewClaimRequestSchemaVersion            = "provisioning.kaiba.network/renew-claim-request/v1alpha1"
+	RenewClaimRequestSchemaVersion            = "provisioning.kaiba.network/renew-claim-request/v1alpha2"
 	CurrentClaimPreflightRequestSchemaVersion = "provisioning.kaiba.network/current-claim-preflight-request/v1alpha2"
 	TransferClaimRequestSchemaVersion         = "provisioning.kaiba.network/transfer-claim-request/v1alpha1"
 	ReleaseClaimRequestSchemaVersion          = "provisioning.kaiba.network/release-claim-request/v1alpha1"
@@ -225,13 +225,16 @@ type AcquireClaimRequest struct {
 }
 
 type RenewClaimRequest struct {
-	SchemaVersion           string `json:"schema_version"`
-	IdempotencyKey          string `json:"idempotency_key"`
-	TransactionID           string `json:"transaction_id"`
-	ExpectedResourceVersion uint64 `json:"expected_resource_version"`
-	ClaimID                 string `json:"claim_id"`
-	FenceEpoch              uint64 `json:"fence_epoch"`
-	LeaseDurationSeconds    uint32 `json:"lease_duration_seconds"`
+	SchemaVersion                     string     `json:"schema_version"`
+	IdempotencyKey                    string     `json:"idempotency_key"`
+	TransactionID                     string     `json:"transaction_id"`
+	ExpectedResourceVersion           uint64     `json:"expected_resource_version"`
+	ClaimID                           string     `json:"claim_id"`
+	FenceEpoch                        uint64     `json:"fence_epoch"`
+	LeaseDurationSeconds              uint32     `json:"lease_duration_seconds"`
+	ApprovalID                        string     `json:"approval_id,omitempty"`
+	PlanDigest                        string     `json:"plan_digest,omitempty"`
+	TargetBoundAuthorizationExpiresAt *time.Time `json:"target_bound_authorization_expires_at,omitempty"`
 }
 
 type TransferClaimRequest struct {

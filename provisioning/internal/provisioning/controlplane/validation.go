@@ -66,6 +66,20 @@ func validateRenewClaimRequest(request RenewClaimRequest) error {
 	}); err != nil {
 		return err
 	}
+	if (request.ApprovalID == "") != (request.PlanDigest == "") {
+		return invalid("approval_id and plan_digest must either both be absent or both be present")
+	}
+	if request.ApprovalID != "" && (!validIdentifier(request.ApprovalID) || !validDigest(request.PlanDigest)) {
+		return invalid("approval_id or plan_digest is invalid")
+	}
+	if request.TargetBoundAuthorizationExpiresAt != nil {
+		if request.TargetBoundAuthorizationExpiresAt.IsZero() {
+			return invalid("target_bound_authorization_expires_at must be non-zero")
+		}
+		if request.ApprovalID != "" {
+			return invalid("target-bound authorization and approval binding are mutually exclusive")
+		}
+	}
 	return validateLease(request.LeaseDurationSeconds)
 }
 

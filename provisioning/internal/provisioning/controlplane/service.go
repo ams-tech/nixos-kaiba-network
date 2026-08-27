@@ -259,9 +259,48 @@ func (s *Service) RenewClaim(_ context.Context, request RenewClaimRequest) (Tran
 		if err != nil {
 			return err
 		}
+		if err := requireClaimRenewalAuthorization(transaction, claim, request, now); err != nil {
+			return err
+		}
 		claim.ExpiresAt = now.Add(time.Duration(request.LeaseDurationSeconds) * time.Second)
 		return nil
 	})
+}
+
+// requireClaimRenewalAuthorization applies server-clock authorization checks
+// inside the same durable mutation that extends a claim. Approval-free renewal
+// remains available for evidence publication and read-only reconciliation, but
+// a ready campaign must name its exact current approval and an unapproved draft
+// must carry the operator-reviewed target-bound deadline.
+func requireClaimRenewalAuthorization(transaction *Transaction, claim *Claim, request RenewClaimRequest, now time.Time) error {
+	if transaction.Status == StatusTargetBound {
+		deadline := request.TargetBoundAuthorizationExpiresAt
+		if deadline == nil || request.ApprovalID != "" {
+			return fmt.Errorf("%w: target-bound renewal requires its reviewed authorization deadline", ErrIllegalTransition)
+		}
+		if transaction.Approval != nil || len(transaction.Operations) != 0 || len(transaction.ClaimHistory) != 0 ||
+			transaction.Target == nil || transaction.Quarantine != nil || transaction.SecurityApplied != nil || transaction.Abort != nil ||
+			claim.Mode != ClaimModeMutation || claim.AssetID != transaction.AssetID {
+			return fmt.Errorf("%w: target-bound renewal requires a clean fixed mutation campaign", ErrIllegalTransition)
+		}
+		if !deadline.After(now) || deadline.After(now.Add(maximumApprovalLifetime)) {
+			return fmt.Errorf("%w: target-bound authorization deadline is not current", ErrIllegalTransition)
+		}
+		return nil
+	}
+
+	if request.TargetBoundAuthorizationExpiresAt != nil {
+		return fmt.Errorf("%w: target-bound authorization deadline does not match transaction state", ErrIllegalTransition)
+	}
+	if transaction.Status == StatusCommitApproved && request.ApprovalID == "" {
+		return fmt.Errorf("%w: approved campaign renewal requires its exact current approval", ErrIllegalTransition)
+	}
+	if request.ApprovalID != "" {
+		if _, err := requireCurrentApproval(transaction, claim, request.ApprovalID, request.PlanDigest, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) TransferClaim(_ context.Context, request TransferClaimRequest) (Transaction, error) {

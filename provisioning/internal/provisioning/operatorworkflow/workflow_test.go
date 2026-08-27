@@ -713,6 +713,111 @@ func TestRenewTargetBoundCampaignRejectsApprovalHistoryOrStateDrift(t *testing.T
 	}
 }
 
+func TestRenewalRequestsCarryOnlyTheirPurposeSpecificServerGuard(t *testing.T) {
+	t.Run("prepare next intent", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+		snapshot, transaction := approvedEmptyCampaign(t, &fixture)
+		control := &recordingRenewClient{service: fixture.control}
+		if _, _, err := PrepareNextIntent(context.Background(), snapshot, fixture.now, control); err != nil {
+			t.Fatal(err)
+		}
+		assertApprovalBoundRenewalRequest(t, control.onlyRequest(t), transaction.Approval.ID, snapshot.PlanDigest)
+	})
+
+	t.Run("pending intent", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+		snapshot, transaction := pendingFirstOperation(t, &fixture)
+		renewedAt := fixture.now.Add(time.Second)
+		*fixture.clock = renewedAt
+		control := &recordingRenewClient{service: fixture.control}
+		if _, err := RenewPendingIntent(context.Background(), snapshot, renewedAt, control); err != nil {
+			t.Fatal(err)
+		}
+		assertApprovalBoundRenewalRequest(t, control.onlyRequest(t), transaction.Approval.ID, snapshot.PlanDigest)
+	})
+
+	t.Run("ready campaign", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+		snapshot, transaction := approvedEmptyCampaign(t, &fixture)
+		renewedAt := fixture.now.Add(time.Second)
+		*fixture.clock = renewedAt
+		control := &recordingRenewClient{service: fixture.control}
+		if _, err := RenewReadyCampaign(context.Background(), snapshot, renewedAt, control); err != nil {
+			t.Fatal(err)
+		}
+		assertApprovalBoundRenewalRequest(t, control.onlyRequest(t), transaction.Approval.ID, snapshot.PlanDigest)
+	})
+
+	t.Run("target-bound campaign", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		fixture.input.ApprovalExpiresAt = fixture.now.Add(3 * time.Hour)
+		snapshot, _, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		renewedAt := fixture.now.Add(time.Second)
+		*fixture.clock = renewedAt
+		control := &recordingRenewClient{service: fixture.control}
+		if _, err := RenewTargetBoundCampaign(context.Background(), snapshot, renewedAt, control); err != nil {
+			t.Fatal(err)
+		}
+		request := control.onlyRequest(t)
+		if request.ApprovalID != "" || request.PlanDigest != "" || request.TargetBoundAuthorizationExpiresAt == nil ||
+			!request.TargetBoundAuthorizationExpiresAt.Equal(snapshot.ApprovalExpiresAt) {
+			t.Fatalf("target-bound renewal guard = %#v", request)
+		}
+	})
+
+	t.Run("pending evidence remains approval-free", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		snapshot, transaction := pendingFirstOperation(t, &fixture)
+		afterApproval := transaction.Approval.ExpiresAt.Add(time.Second)
+		if !transaction.ActiveClaim.ExpiresAt.After(afterApproval) {
+			t.Fatal("test claim did not outlive approval")
+		}
+		*fixture.clock = afterApproval
+		control := &recordingRenewClient{service: fixture.control}
+		if _, err := RenewPendingEvidence(context.Background(), snapshot, afterApproval, control); err != nil {
+			t.Fatal(err)
+		}
+		assertApprovalFreeRenewalRequest(t, control.onlyRequest(t))
+	})
+
+	t.Run("reconciliation remains approval-free", func(t *testing.T) {
+		fixture := newWorkflowFixture(t)
+		snapshot, _ := uncertainFirstOperation(t, &fixture)
+		if _, err := PrepareReconciliationClaim(context.Background(), snapshot, fixture.now, fixture.control); err != nil {
+			t.Fatal(err)
+		}
+		renewedAt := fixture.now.Add(time.Second)
+		*fixture.clock = renewedAt
+		control := &recordingRenewClient{service: fixture.control}
+		if _, err := RenewReconciliationClaim(context.Background(), snapshot, renewedAt, control); err != nil {
+			t.Fatal(err)
+		}
+		assertApprovalFreeRenewalRequest(t, control.onlyRequest(t))
+	})
+}
+
+func assertApprovalBoundRenewalRequest(t *testing.T, request controlplane.RenewClaimRequest, approvalID, planDigest string) {
+	t.Helper()
+	if request.SchemaVersion != controlplane.RenewClaimRequestSchemaVersion || request.ApprovalID != approvalID ||
+		request.PlanDigest != planDigest || request.TargetBoundAuthorizationExpiresAt != nil {
+		t.Fatalf("approval-bound renewal guard = %#v", request)
+	}
+}
+
+func assertApprovalFreeRenewalRequest(t *testing.T, request controlplane.RenewClaimRequest) {
+	t.Helper()
+	if request.SchemaVersion != controlplane.RenewClaimRequestSchemaVersion || request.ApprovalID != "" ||
+		request.PlanDigest != "" || request.TargetBoundAuthorizationExpiresAt != nil {
+		t.Fatalf("approval-free renewal guard = %#v", request)
+	}
+}
+
 func TestRenewReadyCampaignAcceptsOnlyExactSuccessfulPrefixes(t *testing.T) {
 	tests := map[string]struct {
 		prefix uint32
@@ -2066,6 +2171,28 @@ type recordingClaimRenewer struct {
 	transaction controlplane.Transaction
 	renewed     controlplane.Transaction
 	requests    []controlplane.RenewClaimRequest
+}
+
+type recordingRenewClient struct {
+	service  *controlplane.Service
+	requests []controlplane.RenewClaimRequest
+}
+
+func (control *recordingRenewClient) GetTransaction(ctx context.Context, transactionID string) (controlplane.Transaction, error) {
+	return control.service.GetTransaction(ctx, transactionID)
+}
+
+func (control *recordingRenewClient) RenewClaim(ctx context.Context, request controlplane.RenewClaimRequest) (controlplane.Transaction, error) {
+	control.requests = append(control.requests, request)
+	return control.service.RenewClaim(ctx, request)
+}
+
+func (control *recordingRenewClient) onlyRequest(t *testing.T) controlplane.RenewClaimRequest {
+	t.Helper()
+	if len(control.requests) != 1 {
+		t.Fatalf("renew calls = %d, want 1", len(control.requests))
+	}
+	return control.requests[0]
 }
 
 type recordingClaimReleaser struct {

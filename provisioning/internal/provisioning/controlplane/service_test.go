@@ -262,6 +262,7 @@ func TestCurrentClaimPreflightOptionallyRequiresTheExactCurrentApproval(t *testi
 		SchemaVersion: RenewClaimRequestSchemaVersion, IdempotencyKey: "renew-for-approval-preflight",
 		TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 		ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch, LeaseDurationSeconds: 3600,
+		ApprovalID: transaction.Approval.ID, PlanDigest: transaction.Approval.PlanDigest,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -358,6 +359,7 @@ func TestCurrentClaimPreflightEnforcesServerClockMinimumRemainingWindows(t *test
 			SchemaVersion: RenewClaimRequestSchemaVersion, IdempotencyKey: "renew-for-minimum-window",
 			TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
 			ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch, LeaseDurationSeconds: 3600,
+			ApprovalID: transaction.Approval.ID, PlanDigest: transaction.Approval.PlanDigest,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -392,6 +394,170 @@ func TestCurrentClaimPreflightEnforcesServerClockMinimumRemainingWindows(t *test
 			t.Fatalf("unbound approval window error = %v, want ErrInvalid", err)
 		}
 	})
+}
+
+func TestRenewClaimAuthorizationChecksAreAtomicAndUseServerTime(t *testing.T) {
+	t.Run("current approval", func(t *testing.T) {
+		store := &MemoryStore{}
+		fixture := newTestFixture(t, store)
+		transaction := fixture.createClaimBindApprove(developmentCampaignNames())
+		request := RenewClaimRequest{
+			SchemaVersion: RenewClaimRequestSchemaVersion, IdempotencyKey: "renew-approved-current",
+			TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+			ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch, LeaseDurationSeconds: 3600,
+			ApprovalID: transaction.Approval.ID, PlanDigest: transaction.Approval.PlanDigest,
+		}
+		renewed, err := fixture.service.RenewClaim(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.now = renewed.Approval.ExpiresAt
+		if !renewed.ActiveClaim.ExpiresAt.After(fixture.now) {
+			t.Fatal("test fixture claim did not outlive the approval")
+		}
+
+		before, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rejected := request
+		rejected.IdempotencyKey = "renew-approved-after-server-expiry"
+		rejected.ExpectedResourceVersion = renewed.ResourceVersion
+		if _, err := fixture.service.RenewClaim(context.Background(), rejected); !errors.Is(err, ErrIllegalTransition) {
+			t.Fatalf("renew after server-time approval expiry error = %v, want ErrIllegalTransition", err)
+		}
+		assertRejectedRenewalDidNotMutate(t, fixture.service, store, renewed, before)
+
+		replayed, err := fixture.service.RenewClaim(context.Background(), request)
+		if err != nil {
+			t.Fatalf("exact committed renewal replay after approval expiry: %v", err)
+		}
+		if replayed.ResourceVersion != renewed.ResourceVersion || replayed.ActiveClaim == nil ||
+			!replayed.ActiveClaim.ExpiresAt.Equal(renewed.ActiveClaim.ExpiresAt) {
+			t.Fatalf("post-expiry renewal replay = %#v, want committed renewal", replayed)
+		}
+		assertRejectedRenewalDidNotMutate(t, fixture.service, store, renewed, before)
+	})
+
+	t.Run("reviewed target-bound deadline", func(t *testing.T) {
+		store := &MemoryStore{}
+		fixture := newTestFixture(t, store)
+		transaction := fixture.createClaimBind(developmentCampaignNames())
+		deadline := fixture.now.Add(4 * time.Minute)
+		request := RenewClaimRequest{
+			SchemaVersion: RenewClaimRequestSchemaVersion, IdempotencyKey: "renew-target-bound-current",
+			TransactionID: transaction.ID, ExpectedResourceVersion: transaction.ResourceVersion,
+			ClaimID: transaction.ActiveClaim.ID, FenceEpoch: transaction.FenceEpoch, LeaseDurationSeconds: 3600,
+			TargetBoundAuthorizationExpiresAt: &deadline,
+		}
+		renewed, err := fixture.service.RenewClaim(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.now = deadline
+		if !renewed.ActiveClaim.ExpiresAt.After(fixture.now) {
+			t.Fatal("test fixture claim did not outlive the reviewed deadline")
+		}
+
+		before, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rejected := request
+		rejected.IdempotencyKey = "renew-target-bound-after-server-expiry"
+		rejected.ExpectedResourceVersion = renewed.ResourceVersion
+		if _, err := fixture.service.RenewClaim(context.Background(), rejected); !errors.Is(err, ErrIllegalTransition) {
+			t.Fatalf("renew after server-time target-bound expiry error = %v, want ErrIllegalTransition", err)
+		}
+		assertRejectedRenewalDidNotMutate(t, fixture.service, store, renewed, before)
+
+		replayed, err := fixture.service.RenewClaim(context.Background(), request)
+		if err != nil {
+			t.Fatalf("exact committed target-bound renewal replay after deadline: %v", err)
+		}
+		if replayed.ResourceVersion != renewed.ResourceVersion || replayed.ActiveClaim == nil ||
+			!replayed.ActiveClaim.ExpiresAt.Equal(renewed.ActiveClaim.ExpiresAt) {
+			t.Fatalf("post-deadline target-bound replay = %#v, want committed renewal", replayed)
+		}
+		assertRejectedRenewalDidNotMutate(t, fixture.service, store, renewed, before)
+	})
+}
+
+func TestRenewClaimAuthorizationRequestFieldsAreStrict(t *testing.T) {
+	deadline := time.Date(2026, 8, 15, 12, 4, 0, 0, time.UTC)
+	base := RenewClaimRequest{
+		SchemaVersion: RenewClaimRequestSchemaVersion, IdempotencyKey: "renew-field-test",
+		TransactionID: "transaction-1", ExpectedResourceVersion: 1,
+		ClaimID: "claim-1", FenceEpoch: 1, LeaseDurationSeconds: 300,
+	}
+	valid := map[string]RenewClaimRequest{
+		"approval-free": base,
+		"approval-bound": func() RenewClaimRequest {
+			request := base
+			request.ApprovalID = "approval-1"
+			request.PlanDigest = digest("1")
+			return request
+		}(),
+		"target-bound": func() RenewClaimRequest {
+			request := base
+			request.TargetBoundAuthorizationExpiresAt = &deadline
+			return request
+		}(),
+	}
+	for name, request := range valid {
+		t.Run("valid "+name, func(t *testing.T) {
+			if err := validateRenewClaimRequest(request); err != nil {
+				t.Fatalf("valid request rejected: %v", err)
+			}
+		})
+	}
+
+	zero := time.Time{}
+	invalid := map[string]func(*RenewClaimRequest){
+		"approval without plan": func(request *RenewClaimRequest) { request.ApprovalID = "approval-1" },
+		"plan without approval": func(request *RenewClaimRequest) { request.PlanDigest = digest("1") },
+		"invalid approval": func(request *RenewClaimRequest) {
+			request.ApprovalID, request.PlanDigest = "bad approval", digest("1")
+		},
+		"invalid plan": func(request *RenewClaimRequest) {
+			request.ApprovalID, request.PlanDigest = "approval-1", "not-a-digest"
+		},
+		"zero target-bound deadline": func(request *RenewClaimRequest) {
+			request.TargetBoundAuthorizationExpiresAt = &zero
+		},
+		"both authorization forms": func(request *RenewClaimRequest) {
+			request.ApprovalID, request.PlanDigest = "approval-1", digest("1")
+			request.TargetBoundAuthorizationExpiresAt = &deadline
+		},
+	}
+	for name, mutate := range invalid {
+		t.Run(name, func(t *testing.T) {
+			request := base
+			mutate(&request)
+			if err := validateRenewClaimRequest(request); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("invalid request error = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func assertRejectedRenewalDidNotMutate(t *testing.T, service *Service, store *MemoryStore, want Transaction, wantBytes []byte) {
+	t.Helper()
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(wantBytes) {
+		t.Fatal("rejected or replayed renewal changed durable bytes")
+	}
+	persisted, err := service.GetTransaction(context.Background(), want.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ResourceVersion != want.ResourceVersion || persisted.ActiveClaim == nil || want.ActiveClaim == nil ||
+		!persisted.ActiveClaim.ExpiresAt.Equal(want.ActiveClaim.ExpiresAt) || !persisted.UpdatedAt.Equal(want.UpdatedAt) {
+		t.Fatalf("renewal changed resource version, expiry, or update time: %#v", persisted)
+	}
 }
 
 func TestApprovalPreflightIsReadOnlyAndAcceptsOnlyExactStateOrReplay(t *testing.T) {
