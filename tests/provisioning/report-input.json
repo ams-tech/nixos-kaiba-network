@@ -29,14 +29,21 @@
         "id": "authenticated-authority-bridge",
         "system": "aarch64-linux",
         "status": "not-observed",
-        "description": "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, the v1alpha4 lane plan, and the v1alpha3 authority bridge fail closed against boot-mode or authority tampering. The digest-bound policy requires normal for cold_power_cycle and rpiboot for the other six operations without exposing physical paths, an operator-selected mode, or a generic mutation primitive. This is software-only contract evidence; it does not claim a manual BOOTSEL handshake, direct mode observation, or hardware enforcement.",
+        "description": "Independent approver mTLS identity, stable control/audit reads, typed server-time claim and approval preflights, strict Unix IPC, the v1alpha4 lane plan, and the v1alpha3 authority bridge fail closed against clock, boot-mode, or authority tampering before emitting a hardware request. After delayed physical pre-observation, the guard reacquires the exact binding and control requires operation-budget-plus-margin claim time and dispatch-margin approval time before AttemptStarted or hardware dispatch. The digest-bound policy requires normal for cold_power_cycle and rpiboot for the other six operations without exposing physical paths, an operator-selected mode, or a generic mutation primitive. The combined software contract reaches the authenticated, journal-backed physical-mode boundary, but every target interface remains simulated; this makes no live BOOTSEL, USB, UART, GPIO, mutation, or enforcement claim.",
+        "evidence": []
+      },
+      {
+        "id": "authenticated-physical-mode-workflow",
+        "system": "aarch64-linux",
+        "status": "not-observed",
+        "description": "Software tests cover the fixed seven-operation workflow and development terminalization; independent approver mTLS and typed approver-only preflight; server-time claim and approval checks before audited transitions and after delayed pre-observation with minimum remaining windows; approval- or reviewed-deadline-bound same-claim renewals authorized atomically without rebasing immutable proposal resource versions; exact committed approval replay after expiry while audit-only attempts fail; and selector-free terminal claim release that cannot retarget a later claim. They also cover role-separated control/audit clients and audit-before-control writes, durable trusted attempt receipts, exact existing-receipt and summary replay, publication-only retry for durable execute and non-uncertain reconciliation results, prompt-capable read-only re-observation of reconciliation AttemptUncertain with zero mutation redispatch, authenticated Unix-socket BOOTSEL acknowledgements, and the journal-backed Raspberry Pi 5 mode state machine. The native acknowledgement wrapper is tested compositionally, not as a live NixOS runtime setgid deployment. GPIO, USB, UART, power, timeout, cancellation, restart, and safe-off behavior use fakes or simulated OS interfaces; this row does not qualify live hardware or claim security enforcement.",
         "evidence": []
       },
       {
         "id": "authenticated-restart-reconciliation",
         "system": "aarch64-linux",
         "status": "not-observed",
-        "description": "Durable control, audit, and execute-once journals survive simulated process restarts while mTLS authority reads, strict Unix IPC, plan compilation, the lane guard, and the production Raspberry Pi 5 adapter implementation reconcile both applied and not-applied uncertain ownership outcomes by observation without redispatch. Target-facing OS interfaces are simulated; this makes no live-hardware or security-enforcement claim.",
+        "description": "The restart integration reopens durable control, audit, execute-once, and boot-transition stores, reacquires read-only reconciliation authority over mTLS and strict Unix IPC, and performs direct observation through the Raspberry Pi 5 adapter to resolve applied and not-applied outcomes without mutation redispatch. Separate command and guard tests prove exact durable terminal-receipt verification and publication replay without target I/O, plus repeated read-only observation for reconciliation AttemptUncertain. The restart integration uses deterministic simulated prompt acknowledgements rather than the Unix peer-authentication prompt server, and every target-facing OS interface is simulated; this makes no live-hardware or security-enforcement claim.",
         "evidence": []
       },
       {
@@ -141,14 +148,21 @@
         "id": "authenticated-authority-bridge",
         "system": "x86_64-linux",
         "status": "passed",
-        "description": "Independent approver mTLS identity, stable control/audit reads, strict Unix IPC, the v1alpha4 lane plan, and the v1alpha3 authority bridge fail closed against boot-mode or authority tampering. The digest-bound policy requires normal for cold_power_cycle and rpiboot for the other six operations without exposing physical paths, an operator-selected mode, or a generic mutation primitive. This is software-only contract evidence; it does not claim a manual BOOTSEL handshake, direct mode observation, or hardware enforcement.",
+        "description": "Independent approver mTLS identity, stable control/audit reads, typed server-time claim and approval preflights, strict Unix IPC, the v1alpha4 lane plan, and the v1alpha3 authority bridge fail closed against clock, boot-mode, or authority tampering before emitting a hardware request. After delayed physical pre-observation, the guard reacquires the exact binding and control requires operation-budget-plus-margin claim time and dispatch-margin approval time before AttemptStarted or hardware dispatch. The digest-bound policy requires normal for cold_power_cycle and rpiboot for the other six operations without exposing physical paths, an operator-selected mode, or a generic mutation primitive. The combined software contract reaches the authenticated, journal-backed physical-mode boundary, but every target interface remains simulated; this makes no live BOOTSEL, USB, UART, GPIO, mutation, or enforcement claim.",
+        "evidence": []
+      },
+      {
+        "id": "authenticated-physical-mode-workflow",
+        "system": "x86_64-linux",
+        "status": "passed",
+        "description": "Software tests cover the fixed seven-operation workflow and development terminalization; independent approver mTLS and typed approver-only preflight; server-time claim and approval checks before audited transitions and after delayed pre-observation with minimum remaining windows; approval- or reviewed-deadline-bound same-claim renewals authorized atomically without rebasing immutable proposal resource versions; exact committed approval replay after expiry while audit-only attempts fail; and selector-free terminal claim release that cannot retarget a later claim. They also cover role-separated control/audit clients and audit-before-control writes, durable trusted attempt receipts, exact existing-receipt and summary replay, publication-only retry for durable execute and non-uncertain reconciliation results, prompt-capable read-only re-observation of reconciliation AttemptUncertain with zero mutation redispatch, authenticated Unix-socket BOOTSEL acknowledgements, and the journal-backed Raspberry Pi 5 mode state machine. The native acknowledgement wrapper is tested compositionally, not as a live NixOS runtime setgid deployment. GPIO, USB, UART, power, timeout, cancellation, restart, and safe-off behavior use fakes or simulated OS interfaces; this row does not qualify live hardware or claim security enforcement.",
         "evidence": []
       },
       {
         "id": "authenticated-restart-reconciliation",
         "system": "x86_64-linux",
         "status": "passed",
-        "description": "Durable control, audit, and execute-once journals survive simulated process restarts while mTLS authority reads, strict Unix IPC, plan compilation, the lane guard, and the production Raspberry Pi 5 adapter implementation reconcile both applied and not-applied uncertain ownership outcomes by observation without redispatch. Target-facing OS interfaces are simulated; this makes no live-hardware or security-enforcement claim.",
+        "description": "The restart integration reopens durable control, audit, execute-once, and boot-transition stores, reacquires read-only reconciliation authority over mTLS and strict Unix IPC, and performs direct observation through the Raspberry Pi 5 adapter to resolve applied and not-applied outcomes without mutation redispatch. Separate command and guard tests prove exact durable terminal-receipt verification and publication replay without target I/O, plus repeated read-only observation for reconciliation AttemptUncertain. The restart integration uses deterministic simulated prompt acknowledgements rather than the Unix peer-authentication prompt server, and every target-facing OS interface is simulated; this makes no live-hardware or security-enforcement claim.",
         "evidence": []
       },
       {
