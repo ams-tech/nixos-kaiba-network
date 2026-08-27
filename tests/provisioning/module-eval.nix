@@ -294,21 +294,22 @@ let
     ];
   };
 
-  unsafeLaneOperatorPackage = pkgs.runCommand "kaiba-unsafe-lane-operator-fixture"
-    {
-      passthru.kaibaLaneOperator = {
-        authority = "acknowledgement_only";
-        directHardwareAccess = true;
-        mutationCapable = false;
-        operationSelectionCapable = false;
-        physicalPathSelectionCapable = false;
-      };
-    }
-    ''
-      mkdir -p "$out/bin"
-      touch "$out/bin/kaiba-provision-lane-operator"
-      chmod 0555 "$out/bin/kaiba-provision-lane-operator"
-    '';
+  unsafeLaneOperatorPackage =
+    pkgs.runCommand "kaiba-unsafe-lane-operator-fixture"
+      {
+        passthru.kaibaLaneOperator = {
+          authority = "acknowledgement_only";
+          directHardwareAccess = true;
+          mutationCapable = false;
+          operationSelectionCapable = false;
+          physicalPathSelectionCapable = false;
+        };
+      }
+      ''
+        mkdir -p "$out/bin"
+        touch "$out/bin/kaiba-provision-lane-operator"
+        chmod 0555 "$out/bin/kaiba-provision-lane-operator"
+      '';
 
   provisioningLaneGuardUnsafeOperator = lib.recursiveUpdate provisioningLaneGuard {
     services.kaiba-provisioning-lane-guard.operatorPackage = unsafeLaneOperatorPackage;
@@ -378,8 +379,7 @@ let
   };
 
   provisioningLaneGuardNestedDraft = lib.recursiveUpdate provisioningLaneGuard {
-    services.kaiba-provisioning-lane-guard.draftPath =
-      "/var/lib/kaiba-provision-lane-guard/reviewed/draft.json";
+    services.kaiba-provisioning-lane-guard.draftPath = "/var/lib/kaiba-provision-lane-guard/reviewed/draft.json";
   };
 
   provisioningSigningGate = {
@@ -635,10 +635,11 @@ let
       == [ "kaiba-provisioning-authority-bridge.service" ]
     && laneGuardService.User == "root"
     && laneGuardService.Group == "kaiba-provision-operator"
-    && laneGuardService.StateDirectory == [
-      "kaiba-provision-lane-guard"
-      "kaiba-provision-lane-guard/attempts"
-    ]
+    &&
+      laneGuardService.StateDirectory == [
+        "kaiba-provision-lane-guard"
+        "kaiba-provision-lane-guard/attempts"
+      ]
     && laneGuardService.StateDirectoryMode == "0700"
     && laneGuardService.RuntimeDirectory == "kaiba-provision-lane-guard"
     && laneGuardService.RuntimeDirectoryMode == "0750"
@@ -650,12 +651,8 @@ let
     && laneGuardOperatorSecurityWrapper.setgid == true
     && laneGuardOperatorSecurityWrapper.permissions == "u+rx,g+rx,o-rwx"
     && laneGuardOperatorSecurityWrapper.capabilities == ""
-    && builtins.elem
-      "d /var/lib/kaiba-provision-lane-guard 0700 root kaiba-provision-operator -"
-      laneGuardConfig.systemd.tmpfiles.rules
-    && builtins.elem
-      "d /var/lib/kaiba-provision-lane-guard/attempts 0700 root kaiba-provision-operator -"
-      laneGuardConfig.systemd.tmpfiles.rules
+    && builtins.elem "d /var/lib/kaiba-provision-lane-guard 0700 root kaiba-provision-operator -" laneGuardConfig.systemd.tmpfiles.rules
+    && builtins.elem "d /var/lib/kaiba-provision-lane-guard/attempts 0700 root kaiba-provision-operator -" laneGuardConfig.systemd.tmpfiles.rules
     && laneGuardService.TimeoutStartSec == "65min"
     && laneGuardService.TimeoutStopSec == "45s"
     && laneGuardService.DevicePolicy == "closed"
@@ -723,13 +720,14 @@ assert lib.assertMsg (
 assert lib.assertMsg (
   !assertionsPass provisioningAuthorityBridgeZeroPort
 ) "an authority-bridge endpoint using TCP port zero was accepted";
-assert lib.assertMsg (
-  builtins.all (
+assert lib.assertMsg (builtins.all
+  (
     module:
     !(builtins.tryEval (
       (evaluateConfig module).services.kaiba-provisioning-authority-bridge.leaseSafetyMarginSeconds
     )).success
-  ) provisioningAuthorityBridgeInvalidLeaseMargins
+  )
+  provisioningAuthorityBridgeInvalidLeaseMargins
 ) "an authority-bridge lease safety margin outside 1 through 300 seconds was accepted";
 assert lib.assertMsg (
   !assertionsPass provisioningAuthorityBridgeEquivalentOrigins

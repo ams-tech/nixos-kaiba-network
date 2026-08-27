@@ -58,18 +58,19 @@ let
         fprintf(stderr, "kaiba-provision-lane-acknowledge: %s\n", strerror(errno));
         return 1;
       }
-    '').overrideAttrs (old: {
-      passthru = (old.passthru or { }) // {
-        kaibaLaneOperatorWrapper = {
-          group = operatorGroup;
-          socketPath = operatorSocketPath;
-          acceptsArguments = false;
-          mutationCapable = false;
-          operationSelectionCapable = false;
-          physicalPathSelectionCapable = false;
+    '').overrideAttrs
+      (old: {
+        passthru = (old.passthru or { }) // {
+          kaibaLaneOperatorWrapper = {
+            group = operatorGroup;
+            socketPath = operatorSocketPath;
+            acceptsArguments = false;
+            mutationCapable = false;
+            operationSelectionCapable = false;
+            physicalPathSelectionCapable = false;
+          };
         };
-      };
-    });
+      });
   statePaths = [
     cfg.journalPath
     cfg.draftPath
@@ -348,7 +349,9 @@ in
           message = "lane-guard journal and draft paths must be distinct";
         }
         {
-          assertion = builtins.all (path: path != attemptDirectory && !hasPrefix "${attemptDirectory}/" path) statePaths;
+          assertion = builtins.all (
+            path: path != attemptDirectory && !hasPrefix "${attemptDirectory}/" path
+          ) statePaths;
           message = "lane-guard journal and draft paths must remain outside the immutable attempt-receipt directory";
         }
         {
