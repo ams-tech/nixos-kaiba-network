@@ -39,7 +39,8 @@ readonly -a SYSTEMD_DROPIN_NAMES=(
 )
 
 script_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
-readonly SOURCE_DIRECTORY="$(dirname -- "$script_path")"
+SOURCE_DIRECTORY="$(dirname -- "$script_path")"
+readonly SOURCE_DIRECTORY
 
 die() {
   printf 'error: %s\n' "$*" >&2

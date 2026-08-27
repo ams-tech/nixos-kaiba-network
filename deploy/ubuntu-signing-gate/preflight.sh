@@ -786,7 +786,7 @@ assert_credential_acl() {
     "mask::$expected_permission"
     'other::---'
   )
-  [[ ${#actual[@]} == ${#expected[@]} ]] || die "$path has a non-canonical credential ACL"
+  [[ ${#actual[@]} -eq ${#expected[@]} ]] || die "$path has a non-canonical credential ACL"
   for index in "${!expected[@]}"; do
     [[ "${actual[$index]}" == "${expected[$index]}" ]] ||
       die "$path has a non-canonical credential ACL"

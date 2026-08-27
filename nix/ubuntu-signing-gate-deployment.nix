@@ -8,11 +8,15 @@ pkgs.stdenvNoCC.mkDerivation {
   dontConfigure = true;
   dontBuild = true;
 
-  nativeCheckInputs = [ pkgs.bash ];
+  nativeCheckInputs = [
+    pkgs.bash
+    pkgs.shellcheck
+  ];
   doCheck = true;
   checkPhase = ''
     runHook preCheck
     ${pkgs.bash}/bin/bash -n install.sh preflight.sh provision-pin-source.sh
+    ${pkgs.shellcheck}/bin/shellcheck install.sh preflight.sh provision-pin-source.sh
     grep -Fxq 'LoadCredential=yubikey-pin:/run/kaiba-provision-signing-credentials/yubikey-pin' \
       kaiba-provision-signing-gate.service.in
     grep -Fxq 'LimitCORE=0' kaiba-provision-signing-gate.service.in
