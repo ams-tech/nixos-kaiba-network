@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -167,7 +168,20 @@ func newResolveFixtureWithBootPolicy(t *testing.T, bootOrderPolicy string, bootC
 	for index := 0; index < len(bootImage); index += 4096 {
 		bootImage[index] = byte(index / 4096)
 	}
-	rootData, rootHashImage := []byte("synthetic verified root data"), []byte("synthetic dm-verity hash tree")
+	// Opaque public release artifacts may legitimately contain parseable,
+	// publicly known private-key fixtures (for example, dependency self-tests).
+	// Place one across the old 64 KiB scanner boundary so neither substring
+	// matching nor PEM parsing can become a false secrecy oracle again.
+	publicFixtureKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	publicFixtureDER, err := x509.MarshalPKCS8PrivateKey(publicFixtureKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicFixturePEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: publicFixtureDER})
+	beginMarker := []byte("-----BEGIN PRIVATE KEY-----")
+	rootData := bytes.Repeat([]byte{'x'}, 64*1024-len(beginMarker)/2)
+	rootData = append(rootData, publicFixturePEM...)
+	rootHashImage := []byte("synthetic dm-verity hash tree")
 	originalEEPROM := bytes.Repeat([]byte{0x5a}, 4096)
 	originalRecovery := []byte("pinned unsigned synthetic recovery")
 	originalBootcode := []byte("pinned synthetic bootcode")

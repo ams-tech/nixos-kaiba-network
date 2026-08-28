@@ -135,9 +135,9 @@ pkgs.runCommand name
     readonly active_cmdline="$stage/${bootCommandLinePath}"
     mkdir -p "$stage" "$out/unsigned" "$out/nvme"
 
-    # The caller supplies only public boot inputs.  Private signing material is
-    # deliberately absent from this derivation and therefore from the Nix
-    # store and build logs.
+    # The caller supplies only public boot inputs. Kaiba release-signing
+    # private material is deliberately absent from this derivation and
+    # therefore from the Nix store and build logs.
     cp -R --no-preserve=ownership ${firmwareTree}/. "$stage/"
     if test -n "$(find "$stage" -type l -print -quit)"; then
       echo "firmware tree contains a symbolic link" >&2

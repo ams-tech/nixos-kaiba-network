@@ -152,11 +152,15 @@ does not ask the YubiKey to sign. Each authorized artifact completed on its
 first attempt causes two ordered private-key operations and, under the reviewed
 always-touch policy, two touches: the artifact signature followed by the
 gate-derived canonical receipt-attestation signature. If either operation or
-the durable completion fails, intent state remains and a later retry can repeat
-private-key work. Stop and review that state before retrying; two is a minimum
-successful-path count, not an upper bound. Follow the reviewed signing-plan workflow
-in `docs/ubuntu-rpi5-development-signing-ceremony.md`; this deployment bundle
-does not automate that ceremony.
+the durable completion fails, intent state remains and permanently blocks
+further private-key use for that grant. Stop, preserve the evidence, and begin
+only a new independently authorized ceremony attempt; there is no same-grant
+retry command. A new approval creates new grant identities, so all five inputs
+must be signed under that registry; never combine receipts across attempts. Two
+is a successful first-attempt minimum, not permission to repeat a request.
+Follow the reviewed signing-plan workflow in
+`docs/ubuntu-rpi5-development-signing-ceremony.md`; this deployment bundle does
+not automate that ceremony.
 
 ## Close the boundary
 

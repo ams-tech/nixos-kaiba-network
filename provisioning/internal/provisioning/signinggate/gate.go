@@ -86,18 +86,19 @@ func (g *Gate) Sign(ctx context.Context, artifact []byte) (Result, error) {
 			}
 			return nil
 		}
-		if !found {
-			state, err = g.store.RecordIntent(grant, g.now().UTC())
-			if err != nil {
-				return fmt.Errorf("record signing intent: %w", err)
+		if found {
+			if state.Status == StateIntent {
+				return errors.New("pre-existing signing intent is ambiguous; backend retry is disabled")
 			}
-		}
-		if state.Status != StateIntent {
 			return errors.New("signing state is neither replayable nor an intent")
+		}
+		state, err = g.store.RecordIntent(grant, g.now().UTC())
+		if err != nil {
+			return fmt.Errorf("record signing intent: %w", err)
 		}
 		signature, err := g.backend.Sign(ctx, signing.AlgorithmRSA2048SHA256, artifact)
 		if err != nil {
-			return fmt.Errorf("fixed artifact-signing backend (durable intent retained; stop and review before retry): %w", err)
+			return fmt.Errorf("fixed artifact-signing backend (durable intent retained; backend retry disabled): %w", err)
 		}
 		signatureHex, err := canonicalSignature(signature)
 		if err != nil {
@@ -126,7 +127,7 @@ func (g *Gate) Sign(ctx context.Context, artifact []byte) (Result, error) {
 		}
 		attestationSignature, err := g.backend.Sign(ctx, signing.AlgorithmRSA2048SHA256, attestation)
 		if err != nil {
-			return fmt.Errorf("fixed receipt-attestation backend (durable intent retained; stop and review before retry): %w", err)
+			return fmt.Errorf("fixed receipt-attestation backend (durable intent retained; backend retry disabled): %w", err)
 		}
 		receipt, err = receipt.WithAttestationSignature(attestationSignature)
 		if err != nil {
@@ -134,7 +135,7 @@ func (g *Gate) Sign(ctx context.Context, artifact []byte) (Result, error) {
 		}
 		complete, err := g.store.RecordComplete(grant, state, receipt)
 		if err != nil {
-			return fmt.Errorf("record signing completion (stop and inspect durable state before retry): %w", err)
+			return fmt.Errorf("record signing completion (durable intent may remain; backend retry disabled): %w", err)
 		}
 		receiptDigest, err := complete.Receipt.Digest()
 		if err != nil {

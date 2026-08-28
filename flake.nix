@@ -52,6 +52,19 @@
         else
           "uncommitted";
 
+      developmentCeremonySourceRevision =
+        if self ? rev then
+          self.rev
+        else
+          let
+            dirtyMatch = builtins.match "([0-9a-f]{40}|[0-9a-f]{64})-dirty" sourceRevision;
+          in
+          if dirtyMatch != null then
+            builtins.head dirtyMatch
+          else
+            throw "development signing ceremony package requires a Git revision";
+      developmentCeremonySourceTreeClean = self ? rev;
+
       defaultTargetSourceRevision =
         if
           builtins.isString sourceRevision
@@ -237,6 +250,14 @@
           pkgs = import nixpkgs { inherit system; };
         };
 
+      developmentSigningCeremonyFor =
+        system:
+        import ./nix/development-signing-ceremony.nix {
+          pkgs = import nixpkgs { inherit system; };
+          sourceRevision = developmentCeremonySourceRevision;
+          sourceTreeClean = developmentCeremonySourceTreeClean;
+        };
+
       rpi5PrototypeRelease =
         let
           system = "x86_64-linux";
@@ -387,6 +408,7 @@
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           development-signing = developmentSigning.signing;
+          kaiba-provision-signing-ceremony = developmentSigningCeremonyFor system;
           rpi5-prototype-eeprom-signing-inputs = rpi5PrototypeRelease.eepromSigningInputs;
           rpi5-prototype-eeprom-signing-plan = rpi5PrototypeRelease.eepromSigningPlan;
           rpi5-prototype-release-intent = rpi5PrototypeRelease.releaseIntent;
@@ -483,6 +505,10 @@
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           development-signing = developmentSigning.signing;
+          signing-ceremony = import ./tests/signing-ceremony.nix {
+            ceremony = developmentSigningCeremonyFor system;
+            inherit pkgs;
+          };
           report-unit = dns.checks.${system}.report-unit;
           dns-schema = dns.checks.${system}.dns-schema;
           dns-topology = dns.checks.${system}.dns-topology;

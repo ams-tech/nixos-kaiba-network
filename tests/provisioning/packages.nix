@@ -62,6 +62,15 @@ let
   secureBootFixtureRootB = mkSecureBootFixtureRoot "kaiba-secure-boot-fixture-root-b.img";
   canonicalSourceRevision40 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   canonicalSourceRevision64 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  signingCeremonyPackage = import ../../nix/development-signing-ceremony.nix {
+    inherit pkgs;
+    sourceRevision = canonicalSourceRevision40;
+    sourceTreeClean = true;
+  };
+  signingCeremonyAutomationCheck = import ../signing-ceremony.nix {
+    ceremony = signingCeremonyPackage;
+    inherit pkgs;
+  };
   secureBootRootDataPartitionGUID = "bdd5be20-f7ea-56e7-ae90-4465ae950596";
   secureBootRootHashPartitionGUID = "62616022-71fb-5036-8cc4-b7949cc6e52c";
   mkSecureBootFixture =
@@ -2227,6 +2236,10 @@ let
     {
       id = "ubuntu-signing-gate-deployment";
       description = "Software-only Ubuntu 24.04 deployment tests validate the inert installer, fixed service identity and authority, restrictive systemd, polkit, tmpfiles, state, socket, registry, and root-only tmpfs PIN-source boundaries, plus fail-closed static preflight behavior. They do not install or start a live service, read a PIN, enumerate or use a token, access hardware, or sign an artifact; this deployment remains limited to the non-production sacrificial-development ceremony.";
+    }
+    {
+      id = "development-signing-ceremony-automation";
+      description = "Software-only tests cover the exact-release, public-only ceremony orchestrator, including stable direct annotated-tag checks, immutable phase evidence, fixed-output resume, terminal no-retry assembly failure, authenticated handoff snapshot binding, and exclusion of live signing, token, gate-control, sudo, and hardware authority from its closure. The helper never authors approval, installs authority, handles a PIN, starts a service, signs, transfers evidence, or mutates hardware; human role boundaries remain mandatory and this is not a production ceremony.";
     }
     {
       id = "authenticated-authority-bridge";
@@ -5306,7 +5319,7 @@ let
         test '${developmentYubiKeySigning.kaibaSigning.operationCountSemantics}' = \
           'minimum_successful_path'
         test '${developmentYubiKeySigning.kaibaSigning.incompleteGrantRetryPolicy}' = \
-          'stop_and_review'
+          'deny_same_grant_require_new_approval'
         test '${builtins.toJSON developmentYubiKeySigning.kaibaSigning.privateKeyOperationUpperBoundDeclared}' = \
           'false'
         test -x \
@@ -5426,6 +5439,9 @@ let
         ];
       }
       ''
+        ${lib.optionalString (pkgs.stdenv.hostPlatform.system == "x86_64-linux") ''
+          test -f ${signingCeremonyAutomationCheck}/passed
+        ''}
         test -x ${built.suite}/bin/kaiba-provision
         test -x ${built.serviceSuite}/bin/kaiba-provision-audit
         test -x ${built.serviceSuite}/bin/kaiba-provision-authority-bridge

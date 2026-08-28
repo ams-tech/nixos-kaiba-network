@@ -86,15 +86,24 @@ func TestVerifyPublicationRejectsTamperingAndAdditions(t *testing.T) {
 	}
 }
 
-func TestNoFollowAndSecretBoundaries(t *testing.T) {
+func TestNoFollowAndOpaquePublicPayloads(t *testing.T) {
 	root := t.TempDir()
 	t.Cleanup(func() { removeTemporaryTree(root) })
-	secret := filepath.Join(root, "secret")
-	if err := os.WriteFile(secret, []byte("prefix -----BEGIN PRIVATE KEY----- suffix"), 0600); err != nil {
+	opaque := filepath.Join(root, "opaque")
+	payload := bytes.Repeat([]byte{'x'}, 64*1024-10)
+	payload = append(payload, []byte("-----BEGIN PRIVATE KEY-----")...)
+	payload = append(payload, []byte("-----BEGIN RSA PRIVATE KEY-----")...)
+	payload = append(payload, []byte("-----BEGIN EC PRIVATE KEY-----")...)
+	payload = append(payload, []byte("-----BEGIN OPENSSH PRIVATE KEY-----")...)
+	if err := os.WriteFile(opaque, payload, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inspectRegular(secret, 1024, true); err == nil || !strings.Contains(err.Error(), "private-key") {
-		t.Fatalf("inspectRegular(secret) error=%v", err)
+	inspected, err := inspectRegular(opaque, int64(len(payload)), true)
+	if err != nil {
+		t.Fatalf("inspectRegular(opaque) error=%v", err)
+	}
+	if !bytes.Equal(inspected.contents, payload) || inspected.digest != bundle.Sum(payload) {
+		t.Fatal("inspectRegular() changed an opaque public payload")
 	}
 	regular := filepath.Join(root, "regular")
 	if err := os.WriteFile(regular, []byte("public"), 0600); err != nil {
