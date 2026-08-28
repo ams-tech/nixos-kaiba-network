@@ -1,5 +1,5 @@
 // Package signedrelease verifies and atomically publishes the complete,
-// secret-free Raspberry Pi 5 signed-release closure.
+// public, no-signing-authority Raspberry Pi 5 signed-release closure.
 package signedrelease
 
 import (

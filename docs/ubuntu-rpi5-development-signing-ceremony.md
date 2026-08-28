@@ -65,16 +65,53 @@ authentication. The independently communicated approval and registry hashes
 required below are therefore part of the authorization check, not an optional
 transport convenience.
 
-Every output directory named below must be absent before its command runs.
-Never retry a completed signing operation merely because its terminal output
-was lost. On an error or ambiguous result, stop the gate, preserve its durable
+Every live signing output directory named below must be absent before its
+authority-bearing command runs. The public-only helper may reopen an exact
+completed phase only after re-evaluating its fixed Nix output and immutable
+evidence; that is not permission to replay a signing request. Never retry a
+completed signing operation merely because its terminal output was lost. On an
+error or ambiguous result, stop the gate, preserve its durable
 state and all outputs, remove the PIN source, and review the evidence before
-deciding how to proceed. The durable intent does not preserve an intermediate
-artifact signature or attestation signature. A reviewed retry of an incomplete
-grant therefore repeats the artifact operation and then the attestation
-operation; a failure after either can raise the ceremony total above ten. The
-documented operation and touch counts are successful-path minima, never an
-upper bound or permission for a blind retry.
+deciding how to proceed. A retained incomplete intent permanently blocks that
+grant from invoking the backend again; the gate has no same-grant retry path.
+Recovery requires a new independently reviewed authorization and ceremony
+attempt rather than an operator retry command. That authorization has new
+approval and grant identities: sign all five release inputs again and never mix
+old completed receipts with the new registry. The documented operation and
+touch counts are successful-path minima, never an upper bound or permission to
+repeat a request.
+
+## Public-only ceremony automation
+
+The root flake packages `kaiba-provision-signing-ceremony`, a resumable helper
+for the deterministic transcript plumbing in this runbook. After pinning the
+release in step 1, choose either the automated or manual branch in step 2; do
+not mix their directory-initialization commands. `prepare-public` builds and
+checks the public inputs without fetching, switching, or inferring the expected
+commit. Later subcommands validate transferred authorization, derive the public
+owned-recovery plan, authenticate the handoff and receipts, and assemble the
+release. Each phase publishes fixed, private-mode evidence atomically without
+replacing a different prior result. Assembly re-authenticates the exact handoff
+against the previously verified immutable Nix-store snapshot before importing
+the five factory inputs. An assembly failure records
+`failed_preserve_evidence` and explicitly forbids repeating any signing
+request.
+
+Each account or host must run `prepare-public` into its own role-local 0700
+ceremony directory. Do not copy or share a helper session: it binds the current
+UID-owned directory, absolute checkout path, exact commit, and `git+file:`
+reference. Transfer only the approval packet, live-result handoff, and
+independently communicated digests called out below. The helper's versioned JSON
+files are private orchestration state, not new cross-host interchange formats.
+Keep the ceremony directory intact through final publication: indirect Nix GC
+roots beneath `gc-roots/` retain the exact authorization and handoff snapshots
+across human pauses and are revalidated on resume.
+
+The helper deliberately has no approval-authoring, registry-installation,
+`sudo`, service-control, PIN, PC/SC, PKCS#11, YubiKey, signing, transfer, retry,
+or hardware operation. It always stops at the human boundaries in the role
+model above. The detailed commands below remain the auditable reference and
+the required path for those manual boundaries.
 
 ## 1. Pin the new release everywhere
 
@@ -111,14 +148,13 @@ Revision-sensitive builds below deliberately use `git+file:`, not `path:.`.
 Keep the checkout clean and use the same `KAIBA_FLAKE_REF` throughout.
 
 Choose a private evidence directory outside the repository and replace this
-example path before continuing:
+example path before continuing. Leave it absent until selecting the automated
+or manual branch in step 2:
 
 ```console
 CEREMONY_DIR="/absolute/private/path/$RELEASE_TAG-signing-ceremony"
 case "$CEREMONY_DIR" in /*) ;; *) exit 1 ;; esac
 test ! -e "$CEREMONY_DIR"
-install -d -m 0700 "$CEREMONY_DIR"
-install -d -m 0700 "$CEREMONY_DIR/public"
 ```
 
 ## 2. Build and review the public inputs
@@ -126,6 +162,48 @@ install -d -m 0700 "$CEREMONY_DIR/public"
 These builds do not access a token, PIN, smartcard reader, block device, or
 target hardware. An x86_64 host needs an AArch64 builder or emulation for the
 unsigned target artifacts.
+
+Choose exactly one branch.
+
+### 2A. Automated public preparation
+
+Build the helper from the exact pinned flake, not from ambient `PATH`, and let
+it create the still-absent ceremony directory:
+
+```console
+CEREMONY_TOOL="$(
+  nix --accept-flake-config build \
+    "$KAIBA_FLAKE_REF#kaiba-provision-signing-ceremony" \
+    --no-link --print-out-paths
+)"
+test -x "$CEREMONY_TOOL/bin/kaiba-provision-signing-ceremony"
+
+"$CEREMONY_TOOL/bin/kaiba-provision-signing-ceremony" prepare-public \
+  --repository "$REPOSITORY_ROOT" \
+  --release-tag "$RELEASE_TAG" \
+  --expected-commit "$EXPECTED_COMMIT" \
+  --main-ref upstream/main \
+  --ceremony-dir "$CEREMONY_DIR"
+```
+
+Review the emitted immutable inventory and the files named by it. Then skip the
+manual build block below and continue at “Resolve every result link.” Keep
+`CEREMONY_TOOL` for the later automated phase commands shown at the applicable
+boundaries. Repeat steps 1 and 2A separately under every reviewer, signing, or
+offline-verifier account that will use a later helper phase.
+
+### 2B. Manual public preparation
+
+Create the directory only when taking the manual branch:
+
+```console
+install -d -m 0700 "$CEREMONY_DIR"
+install -d -m 0700 "$CEREMONY_DIR/public"
+```
+
+A manual session has no helper inventory or phase state. Continue with the
+manual alternative at every later boundary; do not invoke a later helper phase
+against this directory.
 
 ```console
 nix --accept-flake-config build -L \
@@ -323,6 +401,35 @@ test "$(sha256sum "$RECEIVED_AUTHORIZATION/signing-grants.json" \
   --release-intent "$RELEASE_INTENT/release-intent.json" \
   --approval "$RECEIVED_AUTHORIZATION/approval.json" \
   --registry "$RECEIVED_AUTHORIZATION/signing-grants.json"
+
+VALIDATED_AUTHORIZATION="$RECEIVED_AUTHORIZATION"
+VALIDATED_APPROVAL="$VALIDATED_AUTHORIZATION/approval.json"
+VALIDATED_REGISTRY="$VALIDATED_AUTHORIZATION/signing-grants.json"
+```
+
+When this signing-host account used automated preparation, replace the manual
+verification block above with this phase. It snapshots the exact three-file
+packet into the Nix store before validating it, so later root installation must
+use the recorded snapshot rather than the mutable transfer directory:
+
+```console
+"$CEREMONY_TOOL/bin/kaiba-provision-signing-ceremony" verify-authorization \
+  --ceremony-dir "$CEREMONY_DIR" \
+  --received-authorization "$RECEIVED_AUTHORIZATION" \
+  --expected-approval-sha256 "$EXPECTED_APPROVAL_SHA256" \
+  --expected-registry-sha256 "$EXPECTED_REGISTRY_SHA256"
+
+AUTHORIZATION_EVIDENCE="$CEREMONY_DIR/authorization-verification.json"
+VALIDATED_AUTHORIZATION="$(jq --exit-status --raw-output \
+  '.authorization_store' "$AUTHORIZATION_EVIDENCE")"
+test "$(readlink -e "$(jq --exit-status --raw-output \
+  '.authorization_gc_root' "$AUTHORIZATION_EVIDENCE")")" = \
+  "$VALIDATED_AUTHORIZATION"
+test "$(nix-store --query --hash "$VALIDATED_AUTHORIZATION")" = \
+  "$(jq --exit-status --raw-output \
+    '.authorization_store_nar_hash' "$AUTHORIZATION_EVIDENCE")"
+VALIDATED_APPROVAL="$VALIDATED_AUTHORIZATION/approval.json"
+VALIDATED_REGISTRY="$VALIDATED_AUTHORIZATION/signing-grants.json"
 ```
 
 Do not proceed unless enough of the single approval window remains to finish
@@ -342,9 +449,9 @@ test "$(systemctl show \
   --value kaiba-provision-signing-gate.service)" = inactive
 
 RECEIVED_APPROVED_AT="$(jq --exit-status --raw-output \
-  '.approved_at' "$RECEIVED_AUTHORIZATION/approval.json")"
+  '.approved_at' "$VALIDATED_APPROVAL")"
 RECEIVED_EXPIRES_AT="$(jq --exit-status --raw-output \
-  '.expires_at' "$RECEIVED_AUTHORIZATION/approval.json")"
+  '.expires_at' "$VALIDATED_APPROVAL")"
 SIGNING_HOST_NOW="$(date --utc +%s)"
 test "$SIGNING_HOST_NOW" -ge \
   "$(date --utc --date="$RECEIVED_APPROVED_AT" +%s)"
@@ -354,12 +461,12 @@ test "$SIGNING_HOST_NOW" -lt \
 sudo test ! -e /etc/kaiba-provisioning/signing-grants.json
 
 sudo install -o root -g kaiba-signing -m 0440 \
-  "$RECEIVED_AUTHORIZATION/signing-grants.json" \
+  "$VALIDATED_REGISTRY" \
   /etc/kaiba-provisioning/signing-grants.json
 sudo setfacl --remove-all -- \
   /etc/kaiba-provisioning/signing-grants.json
 sudo cmp \
-  "$RECEIVED_AUTHORIZATION/signing-grants.json" \
+  "$VALIDATED_REGISTRY" \
   /etc/kaiba-provisioning/signing-grants.json
 sudo stat --format='%U:%G:%a %n' \
   /etc/kaiba-provisioning/signing-grants.json
@@ -465,6 +572,22 @@ EEPROM_SIGNED_STORE="$(
     "$LIVE_ROOT/eeprom-signed"
 )"
 test -n "$EEPROM_SIGNED_STORE"
+```
+
+For an automated session, derive and review the exact public phase transition
+with:
+
+```console
+"$CEREMONY_TOOL/bin/kaiba-provision-signing-ceremony" derive-owned-recovery \
+  --ceremony-dir "$CEREMONY_DIR" \
+  --eeprom-signed-store "$EEPROM_SIGNED_STORE"
+OWNED_RECOVERY_PLAN="$(readlink -e \
+  "$CEREMONY_DIR/public/owned-recovery-plan")"
+```
+
+Otherwise, use the manual factory call:
+
+```console
 
 OWNED_RECOVERY_PLAN="$(
   nix --accept-flake-config build -L \
@@ -506,8 +629,9 @@ already verified fresh-EEPROM signatures when replaying the pinned `-fr`
 updater. The reused artifacts are not submitted as new gate requests, so this
 phase does not intentionally create three additional artifact signatures or
 three additional receipt attestations. The one new grant still has a minimum
-of two touches on a successful first attempt, and its fail-stop retry rule can
-raise that count.
+of two touches on a successful first attempt. An incomplete intent blocks that
+grant; only a new independently approved ceremony attempt may add more token
+operations.
 
 ## 8. Capture and export all five authenticated receipts
 
@@ -616,7 +740,7 @@ sudo tar --create --file=- \
 sudo cat /etc/kaiba-provisioning/signing-grants.json \
   > "$HANDOFF_DIR/signing-grants.json"
 install -m 0600 \
-  "$RECEIVED_AUTHORIZATION/approval.json" \
+  "$VALIDATED_APPROVAL" \
   "$HANDOFF_DIR/approval.json"
 install -m 0600 \
   "$RESULT_RECEIPT_DIGESTS" \
@@ -645,6 +769,44 @@ host, verify the packet, independently rebuild the exact new tag, and set
 absolute paths:
 
 ```console
+EXPECTED_HANDOFF_MANIFEST_SHA256='REPLACE_WITH_INDEPENDENTLY_RECEIVED_64_HEX_DIGEST'
+EXPECTED_APPROVAL_SHA256='REPLACE_WITH_REVIEWER_AUTHENTICATED_64_HEX_DIGEST'
+EXPECTED_REGISTRY_SHA256='REPLACE_WITH_REVIEWER_AUTHENTICATED_64_HEX_DIGEST'
+test "${#EXPECTED_HANDOFF_MANIFEST_SHA256}" -eq 64
+test -z "${EXPECTED_HANDOFF_MANIFEST_SHA256//[0-9a-f]/}"
+test "${#EXPECTED_APPROVAL_SHA256}" -eq 64
+test -z "${EXPECTED_APPROVAL_SHA256//[0-9a-f]/}"
+test "${#EXPECTED_REGISTRY_SHA256}" -eq 64
+test -z "${EXPECTED_REGISTRY_SHA256//[0-9a-f]/}"
+```
+
+Obtain the approval and registry values directly from the reviewer-authenticated
+channel used in step 4, not from the signing operator or handoff packet. The
+handoff-manifest digest separately authenticates the signing operator's packet.
+
+For an offline-verifier account with its own automated session, run this and
+skip the two manual verification blocks below:
+
+```console
+"$CEREMONY_TOOL/bin/kaiba-provision-signing-ceremony" verify-handoff \
+  --ceremony-dir "$CEREMONY_DIR" \
+  --handoff-dir "$HANDOFF_DIR" \
+  --checksum-manifest /absolute/path/live-output-handoff.sha256 \
+  --expected-manifest-sha256 "$EXPECTED_HANDOFF_MANIFEST_SHA256" \
+  --expected-approval-sha256 "$EXPECTED_APPROVAL_SHA256" \
+  --expected-registry-sha256 "$EXPECTED_REGISTRY_SHA256"
+```
+
+For manual verification, authenticate the manifest itself before trusting any
+entry in it:
+
+```console
+test "$(sha256sum /absolute/path/live-output-handoff.sha256 \
+  | cut -d ' ' -f 1)" = "$EXPECTED_HANDOFF_MANIFEST_SHA256"
+test "$(sha256sum "$HANDOFF_DIR/approval.json" \
+  | cut -d ' ' -f 1)" = "$EXPECTED_APPROVAL_SHA256"
+test "$(sha256sum "$HANDOFF_DIR/signing-grants.json" \
+  | cut -d ' ' -f 1)" = "$EXPECTED_REGISTRY_SHA256"
 (
   cd "$HANDOFF_DIR"
   sha256sum --check /absolute/path/live-output-handoff.sha256
@@ -713,6 +875,21 @@ trusted gate clock, not proof from an external timestamp authority.
 Import all three live signed-output directories, the exact reviewed registry,
 and the authenticated receipt export into the Nix store. `nix store add-path`
 copies public evidence; it does not contact the signing gate or hardware.
+
+For an automated offline-verifier session, run the assembly phase and then skip
+to the final publication inspection below:
+
+```console
+"$CEREMONY_TOOL/bin/kaiba-provision-signing-ceremony" assemble \
+  --ceremony-dir "$CEREMONY_DIR" \
+  --handoff-dir "$HANDOFF_DIR"
+SIGNED_RELEASE="$(readlink -e "$CEREMONY_DIR/public/signed-release")"
+
+"$CEREMONY_TOOL/bin/kaiba-provision-signing-ceremony" status \
+  --ceremony-dir "$CEREMONY_DIR"
+```
+
+Otherwise, import and assemble manually:
 
 ```console
 BOOT_SIGNED_STORE="$(nix store add-path "$HANDOFF_DIR/boot-signed")"
@@ -790,6 +967,8 @@ cat "$SIGNED_RELEASE/publication-digest"
 At this point the software-only ceremony is complete. Preserve the approval,
 registry, live results, receipt digests, authenticated receipt export, offline
 verification, publication digest, exact tag, and exact commit as the release
-evidence set. The resulting release is ready for a separately authorized
+evidence set. Keep the automated ceremony directory, including its indirect GC
+roots, until those records and the final release have been retained under the
+reviewed evidence policy. The resulting release is ready for a separately authorized
 sacrificial-board test plan; it is not authority to write NVMe, program EEPROM,
 change OTP/JTAG posture, or promote the development signer to production.

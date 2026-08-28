@@ -1344,7 +1344,7 @@ let
         minimumReceiptAttestationOperationsPerCompletedGrant = 1;
         minimumPrivateKeyOperationsPerCompletedGrant = 2;
         operationCountSemantics = "minimum_successful_path";
-        incompleteGrantRetryPolicy = "stop_and_review";
+        incompleteGrantRetryPolicy = "deny_same_grant_require_new_approval";
         privateKeyOperationUpperBoundDeclared = false;
       };
       meta = {

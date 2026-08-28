@@ -72,6 +72,7 @@ jobs:
             .#checks.x86_64-linux.rpi5-secure-boot-target-eval \
             .#checks.x86_64-linux.unit \
             .#checks.x86_64-linux.signing-approval \
+            .#checks.x86_64-linux.signing-ceremony \
             .#checks.x86_64-linux.signing-receipts \
             .#checks.x86_64-linux.signing-receipts-integration \
             .#checks.x86_64-linux.ubuntu-signing-gate-deployment \

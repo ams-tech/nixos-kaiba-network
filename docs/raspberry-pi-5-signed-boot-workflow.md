@@ -141,6 +141,15 @@ approval-gate endpoint. Each replayed directory must match its selected
 verified directory exactly. The assembler has no signer, hardware,
 block-device, EEPROM-programming, or OTP authority.
 
+Release artifacts are opaque bytes authenticated by exact provenance, size,
+digest, signature, and cross-bundle lineage. The finalizer does not classify
+their confidentiality by searching for PEM vocabulary: ordinary public system
+closures contain key-format databases, parser constants, and public self-test
+keys, while raw byte searching cannot prove that other encodings or fragmented
+material are absent. The absence of Kaiba release-signing authority instead
+comes from the non-exportable token key never entering the build graph and from
+the finalizer's fixed no-signer capability boundary.
+
 The result is an exact no-replace publication with these root entries:
 
 ```text

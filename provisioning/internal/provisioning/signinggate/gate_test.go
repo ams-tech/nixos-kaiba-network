@@ -290,7 +290,7 @@ func TestGateRejectsSameBytesAuthorizedForDifferentReleaseIntents(t *testing.T) 
 	}
 }
 
-func TestGateRetainsIntentAcrossBackendFailureAndRecovers(t *testing.T) {
+func TestGateRetainsIntentAcrossBackendFailureAndRefusesRetry(t *testing.T) {
 	artifact := []byte("approved boot image")
 	grant := testGrant(artifact, "01", fixedNow.Add(time.Hour))
 	store := testStore(t)
@@ -304,15 +304,15 @@ func TestGateRetainsIntentAcrossBackendFailureAndRecovers(t *testing.T) {
 		t.Fatalf("persisted intent = %#v/%v/%v", state, found, err)
 	}
 	backend.err = nil
-	if _, err := gate.Sign(context.Background(), artifact); err != nil {
-		t.Fatal(err)
+	if _, err := gate.Sign(context.Background(), artifact); err == nil || !strings.Contains(err.Error(), "backend retry is disabled") {
+		t.Fatalf("pre-existing intent retry = %v", err)
 	}
-	if backend.calls != 3 {
-		t.Fatalf("backend calls = %d, want 3", backend.calls)
+	if backend.calls != 1 {
+		t.Fatalf("pre-existing intent caused %d backend calls, want 1 from the failed first attempt", backend.calls)
 	}
 }
 
-func TestGateDoesNotCompleteUntilReceiptAttestationExistsAndReviewedRetryCompletes(t *testing.T) {
+func TestGateDoesNotCompleteUntilReceiptAttestationExistsAndRefusesRetry(t *testing.T) {
 	artifact := []byte("approved boot image")
 	grant := testGrant(artifact, "attestation-retry", fixedNow.Add(time.Hour))
 	store := testStore(t)
@@ -334,32 +334,16 @@ func TestGateDoesNotCompleteUntilReceiptAttestationExistsAndReviewedRetryComplet
 		t.Fatalf("failed-attempt backend inputs = %d/%d", backend.calls, len(backend.inputs))
 	}
 
-	// Production policy requires an operator to stop and review the retained
-	// intent before this retry. The repeated calls below prove that two is a
-	// successful-path minimum, not an upper bound on private-key operations.
 	backend.err = nil
-	completed, err := gate.Sign(context.Background(), artifact)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := gate.Sign(context.Background(), artifact); err == nil || !strings.Contains(err.Error(), "backend retry is disabled") {
+		t.Fatalf("pre-existing attestation intent retry = %v", err)
 	}
-	if backend.calls != 4 || !bytes.Equal(backend.inputs[0], backend.inputs[2]) ||
-		!bytes.Equal(backend.inputs[1], backend.inputs[3]) {
-		t.Fatal("retry did not deterministically repeat the artifact and derived attestation operations")
+	if backend.calls != 2 || len(backend.inputs) != 2 {
+		t.Fatalf("pre-existing intent caused additional backend use: %d/%d", backend.calls, len(backend.inputs))
 	}
 	state, found, err = store.Load(grant)
-	if err != nil || !found || state.Status != StateComplete || state.Receipt == nil {
-		t.Fatalf("state after retry = %#v/%v/%v", state, found, err)
-	}
-	if state.Receipt.AttestationSignatureHex == "" || state.Receipt.AttestationSignatureDigest == "" {
-		t.Fatal("complete receipt is missing its attestation signature")
-	}
-	replayed, err := gate.Sign(context.Background(), artifact)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !replayed.Replayed || replayed.SignatureHex != completed.SignatureHex ||
-		replayed.ReceiptDigest != completed.ReceiptDigest || backend.calls != 4 {
-		t.Fatalf("completed receipt did not replay without key use: %#v / %#v", completed, replayed)
+	if err != nil || !found || state.Status != StateIntent || state.Receipt != nil {
+		t.Fatalf("ambiguous state changed after denied retry = %#v/%v/%v", state, found, err)
 	}
 }
 

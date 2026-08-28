@@ -20,13 +20,6 @@ import (
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/bundle"
 )
 
-var privateKeyMarkers = [][]byte{
-	[]byte("-----BEGIN PRIVATE KEY-----"),
-	[]byte("-----BEGIN RSA PRIVATE KEY-----"),
-	[]byte("-----BEGIN EC PRIVATE KEY-----"),
-	[]byte("-----BEGIN OPENSSH PRIVATE KEY-----"),
-}
-
 type fileIdentity struct {
 	device uint64
 	inode  uint64
@@ -161,7 +154,7 @@ func inspectRegular(path string, maximum int64, retain bool) (regularSource, err
 	if retain {
 		destination = io.MultiWriter(hash, &buffer)
 	}
-	written, err := copyAndScan(destination, file)
+	written, err := copyExact(destination, file)
 	if err != nil {
 		return regularSource{}, err
 	}
@@ -181,40 +174,8 @@ func inspectRegular(path string, maximum int64, retain bool) (regularSource, err
 	return result, nil
 }
 
-func copyAndScan(destination io.Writer, source io.Reader) (int64, error) {
-	const overlap = 64
-	buffer := make([]byte, 64*1024)
-	tail := make([]byte, 0, overlap)
-	var total int64
-	for {
-		count, readErr := source.Read(buffer)
-		if count > 0 {
-			chunk := buffer[:count]
-			scan := make([]byte, 0, len(tail)+len(chunk))
-			scan = append(scan, tail...)
-			scan = append(scan, chunk...)
-			for _, marker := range privateKeyMarkers {
-				if bytes.Contains(scan, marker) {
-					return total, errors.New("private-key material marker found in public release input")
-				}
-			}
-			if _, err := destination.Write(chunk); err != nil {
-				return total, err
-			}
-			total += int64(count)
-			keep := overlap
-			if len(scan) < keep {
-				keep = len(scan)
-			}
-			tail = append(tail[:0], scan[len(scan)-keep:]...)
-		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				return total, nil
-			}
-			return total, readErr
-		}
-	}
+func copyExact(destination io.Writer, source io.Reader) (int64, error) {
+	return io.CopyBuffer(destination, source, make([]byte, 64*1024))
 }
 
 func readExactDirectory(path string, limits map[string]int64) (map[string]regularSource, error) {
@@ -256,7 +217,7 @@ func readExactDirectory(path string, limits map[string]int64) (map[string]regula
 		}
 		var contents bytes.Buffer
 		hash := sha256.New()
-		written, readErr := copyAndScan(io.MultiWriter(&contents, hash), file)
+		written, readErr := copyExact(io.MultiWriter(&contents, hash), file)
 		after, afterErr := statIdentity(fd)
 		file.Close()
 		if readErr != nil || afterErr != nil || written != identity.size || !sameIdentity(identity, after) {

@@ -213,7 +213,7 @@ func materializeRegular(source regularSource, destination string, expectedDigest
 		reader = opened
 	}
 	hash := sha256.New()
-	written, err := copyAndScan(io.MultiWriter(file, hash), reader)
+	written, err := copyExact(io.MultiWriter(file, hash), reader)
 	if err != nil {
 		return closeWithError(err)
 	}
