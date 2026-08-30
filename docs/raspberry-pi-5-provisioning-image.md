@@ -10,8 +10,10 @@ and SD-image modules from commit
 `24b786fc4750abcce26eb8fc5e9e58632e358ad2` on the `kaiba` branch of the
 [`ams-tech/nixos-raspberrypi` fork]. It deliberately does not use that fork's
 generic installer module, because the installer includes EEPROM and OTP
-programming utilities that this read-only qualification station must not place
-in the operator environment.
+programming utilities that this target-read-only qualification station must not
+place in the operator environment. The development image does expose the Pi 5
+RP1 header controller for relay bench qualification; that exception can change
+station GPIO state, but it does not add a target OTP or EEPROM mutation path.
 
 ## Image boundary
 
@@ -20,6 +22,11 @@ The image provides:
 - the repository's tested AArch64 `kaiba-provision` package and Raspberry Pi 5
   profile;
 - access to exactly USB `0a5c:2712` for the `kaiba-provision` operator group;
+- `gpiodetect`, `gpioinfo`, and `gpioset`, plus
+  `kaiba-relay-gpio-inventory`, for the development relay bench;
+- access to only the gpiochip whose kernel label is exactly `pinctrl-rp1`, via
+  the `kaiba-relay-gpio` operator group and stable
+  `/dev/gpiochip-kaiba-rp1` alias;
 - the `provisioner` physical-console account, with no `sudo`, Nix daemon, or
   runtime configuration-switching or first-boot Nix-store registration
   authority;
@@ -45,11 +52,37 @@ ceremony, transfer the final redacted record before shutdown, and restart from
 probe 1 after any station restart. Power cycling the separate sacrificial
 target does not affect this volume.
 
-The operator's raw USB group remains a privileged role. This image removes the
-known installer mutation tools and makes the supported command path
+The operator's raw USB and RP1 GPIO groups remain privileged roles. Libgpiod
+opens a gpiochip read/write even for inventory, so group membership necessarily
+permits `gpioset` to request any otherwise-free RP1 line; the inventory helper
+is a validation and convenience command, not an authority boundary. The image
+keeps `provisioner` out of the broader inherited `gpio` group and grants no
+access to the other SoC gpiochips, `gpiomem`, or PWM devices. It also removes
+the known target installer mutation tools and keeps the supported target probe
 metadata-only, but it cannot make a shell user with raw device access
-cryptographically incapable of misusing another program. Use this appliance
-only for the controlled sacrificial-device ceremony.
+cryptographically incapable of misuse. Use this appliance only for the
+controlled sacrificial-device and relay-qualification work. Remove this raw
+operator GPIO role in the later live mutation deployment; the root lane guard
+must exclusively own its reviewed chip and line there.
+
+## Relay GPIO inventory
+
+The relay HAT belongs on the station Pi, never on the sacrificial target. Power
+the station completely off before fitting the HAT, and leave all relay screw
+terminals disconnected for the first boot. Then run:
+
+```console
+kaiba-relay-gpio-inventory
+```
+
+The command resolves the kernel-numbered gpiochip through the stable alias,
+requires the exact `pinctrl-rp1` label and operator access, prints the resolved
+`/dev/gpiochipN`, and reports only candidate relay lines 4, 6, 22, and 26. Bare
+`gpiodetect` may also inspect unrelated SoC gpiochips for which `provisioner`
+deliberately has no access, so use the fixed inventory command for this image.
+Do not connect a target load until the selected active-high line has passed
+power-up, process-exit, reboot, and station-power-loss release tests with the
+normally-open contact.
 
 ## Build from the frozen revision
 
@@ -77,6 +110,11 @@ nix --accept-flake-config build --no-link -L \
 nix --accept-flake-config build -L \
   .#packages.aarch64-linux.rpi5-provisioning-sd-image
 ```
+
+The appliance disables the Nix daemon and configuration switching, so an
+existing station cannot be upgraded in place. Flash the newly built image to
+the station SD card and boot that card to obtain the GPIO tools and group
+membership.
 
 The final command needs native AArch64, an AArch64 remote builder, or configured
 emulation. CI builds it on the native `ubuntu-24.04-arm` runner. Its output is:

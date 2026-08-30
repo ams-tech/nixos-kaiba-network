@@ -8,10 +8,12 @@
 
 let
   privateDirectory = "/var/lib/kaiba-hardware-qual/private";
+  relayGPIOGroup = "kaiba-relay-gpio";
+  relayGPIOUdevRule = ''ACTION!="remove", SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", ATTR{label}=="pinctrl-rp1", OWNER:="root", GROUP:="${relayGPIOGroup}", MODE:="0660", SYMLINK+="gpiochip-kaiba-rp1"'';
   expectedProfilePath = "${kaibaProvisionPackage}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json";
   expectedQualificationSchemaPath = "${kaibaProvisionPackage}/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json";
   systemPackageNames = map lib.getName imageConfig.environment.systemPackages;
-  forbiddenMutationPackages = [
+  forbiddenTargetMutationPackages = [
     "cryptsetup"
     "ddrescue"
     "gptfdisk"
@@ -50,6 +52,15 @@ let
     && builtins.elem "kaiba-provision" imageConfig.users.users.provisioner.extraGroups
     && lib.hasInfix ''SUBSYSTEM=="usb", ATTR{idVendor}=="0a5c", ATTR{idProduct}=="2712", MODE="0660", GROUP="kaiba-provision"'' imageConfig.services.udev.extraRules
     && !(lib.hasInfix ''ATTR{idVendor}=="0a5c", MODE="0660"'' imageConfig.services.udev.extraRules);
+
+  relayGPIOBoundary =
+    builtins.elem "libgpiod" systemPackageNames
+    && builtins.elem "kaiba-relay-gpio-inventory" systemPackageNames
+    && builtins.hasAttr relayGPIOGroup imageConfig.users.groups
+    && builtins.elem relayGPIOGroup imageConfig.users.users.provisioner.extraGroups
+    && !(builtins.elem "gpio" imageConfig.users.users.provisioner.extraGroups)
+    && lib.hasInfix relayGPIOUdevRule imageConfig.services.udev.extraRules
+    && lib.hasInfix "Relay GPIO inventory: kaiba-relay-gpio-inventory" imageConfig.environment.etc.issue.text;
 
   accessContract =
     imageConfig.users.allowNoPasswordLogin
@@ -130,11 +141,13 @@ let
     && imageConfig.system.disableInstallerTools
     && !imageConfig.system.switch.enable
     && !imageConfig.systemd.services.register-nix-paths.enable
-    && !(builtins.any (name: builtins.elem name forbiddenMutationPackages) systemPackageNames);
+    && !(builtins.any (name: builtins.elem name forbiddenTargetMutationPackages) systemPackageNames);
 in
 assert lib.assertMsg hardwareContract
   "the RPi 5 provisioning image hardware or SD-image contract changed";
 assert lib.assertMsg probeBoundary "the RPi 5 provisioning image USB probe boundary changed";
+assert lib.assertMsg relayGPIOBoundary
+  "the RPi 5 provisioning image relay GPIO tool or access boundary changed";
 assert lib.assertMsg accessContract
   "the RPi 5 provisioning image local or remote access contract changed";
 assert lib.assertMsg networkContract "the RPi 5 provisioning image wired-network contract changed";
@@ -164,10 +177,15 @@ pkgs.runCommand "kaiba-rpi5-provisioning-image-evaluation" { } ''
   READY_ENV="$(readiness_success)" && eval "$READY_ENV" && unset READY_ENV
   test "$SOURCE_REVISION" = 0123456789012345678901234567890123456789
 
+  test -x ${pkgs.libgpiod}/bin/gpiodetect
+  test -x ${pkgs.libgpiod}/bin/gpioinfo
+  test -x ${pkgs.libgpiod}/bin/gpioset
+
   mkdir -p "$out"
   printf '%s\n' \
     'rpi5-hardware-and-sd-image: pass' \
     'probe-usb-boundary: pass' \
+    'relay-rp1-gpio-boundary: pass' \
     'console-and-key-only-ssh: pass' \
     'wired-networkd-dhcp: pass' \
     'volatile-private-evidence: pass' \
@@ -175,6 +193,6 @@ pkgs.runCommand "kaiba-rpi5-provisioning-image-evaluation" { } ''
     'guided-qualification-ceremony: pass' \
     'immutable-qualification-data: pass' \
     'fail-closed-readiness-evaluation: pass' \
-    'no-installer-mutation-tools: pass' \
+    'no-installer-target-mutation-tools: pass' \
     > "$out/results.txt"
 ''

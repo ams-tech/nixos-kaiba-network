@@ -14,6 +14,8 @@
 let
   operatorName = "provisioner";
   privateDirectory = "/var/lib/kaiba-hardware-qual/private";
+  relayGPIOGroup = "kaiba-relay-gpio";
+  relayGPIOPath = "/dev/gpiochip-kaiba-rp1";
   # Custom share trees are not guaranteed to appear in the NixOS system path.
   # Keep qualification inputs bound to the same immutable package as the tool.
   profilePath = "${kaibaProvisionPackage}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json";
@@ -38,6 +40,7 @@ let
       readonly profile=${lib.escapeShellArg profilePath}
       readonly qualification_schema=${lib.escapeShellArg qualificationSchemaPath}
       readonly provision=/run/current-system/sw/bin/kaiba-provision
+      readonly relay_gpio_inventory=/run/current-system/sw/bin/kaiba-relay-gpio-inventory
 
       [[ -f "$source_revision_file" ]] || fail "source revision record is absent"
       source_revision="$(tr -d '\n' < "$source_revision_file")"
@@ -52,6 +55,11 @@ let
 
       [[ "$(uname -m)" == aarch64 ]] || fail "machine architecture is not aarch64"
       [[ -x "$provision" ]] || fail "kaiba-provision is absent from the system closure"
+      [[ -x "$relay_gpio_inventory" ]] || fail "relay GPIO inventory command is absent"
+      for tool in gpiodetect gpioinfo gpioset; do
+        [[ -x "/run/current-system/sw/bin/$tool" ]] || \
+          fail "$tool is absent from the system closure"
+      done
       [[ -r "$profile" ]] || fail "Raspberry Pi 5 device profile is absent"
       [[ -r "$qualification_schema" ]] || fail "qualification schema is absent"
       [[ -d "$private_directory" ]] || fail "private evidence directory is absent"
@@ -65,6 +73,8 @@ let
         fail "swap is active and could persist private evidence"
       id -nG | tr ' ' '\n' | grep -qx kaiba-provision || \
         fail "current operator is not in the kaiba-provision group"
+      id -nG | tr ' ' '\n' | grep -qx ${lib.escapeShellArg relayGPIOGroup} || \
+        fail "current operator is not in the relay GPIO group"
 
       printf 'Kaiba Pi 5 qualification station ready at revision %s.\n' \
         "$source_revision" >&2
@@ -96,6 +106,39 @@ let
         [[ "$usb_path" =~ ^[0-9]+-[0-9]+(\.[0-9]+)*$ ]] || exit 1
         printf '%s\n' "$usb_path"
       done
+    '';
+  };
+  relayGPIOInventory = pkgs.writeShellApplication {
+    name = "kaiba-relay-gpio-inventory";
+    runtimeInputs = with pkgs; [
+      coreutils
+      libgpiod
+    ];
+    text = ''
+      fail() {
+        printf 'relay-gpio-inventory: %s\n' "$1" >&2
+        exit 1
+      }
+
+      readonly gpio_link=${lib.escapeShellArg relayGPIOPath}
+      [[ -L "$gpio_link" ]] || fail "$gpio_link is absent"
+
+      gpio_chip="$(readlink -f -- "$gpio_link")"
+      [[ "$gpio_chip" =~ ^/dev/gpiochip[0-9]+$ ]] || \
+        fail "$gpio_link did not resolve to one canonical gpiochip device"
+      [[ -c "$gpio_chip" ]] || fail "$gpio_chip is not a character device"
+
+      sysfs_chip="/sys/class/gpio/''${gpio_chip##*/}"
+      [[ -r "$sysfs_chip/label" ]] || fail "GPIO controller label is unreadable"
+      IFS= read -r gpio_label < "$sysfs_chip/label"
+      [[ "$gpio_label" == pinctrl-rp1 ]] || \
+        fail "GPIO controller label is not pinctrl-rp1"
+      [[ -r "$gpio_chip" && -w "$gpio_chip" ]] || \
+        fail "$gpio_chip is not accessible to the current operator"
+
+      printf 'KAIBA_RP1_GPIO_CHIP=%s\n' "$gpio_chip"
+      gpiodetect "$gpio_link"
+      gpioinfo --chip "$gpio_link" 4 6 22 26
     '';
   };
   qualificationCeremony = import ./rpi5-qualification-ceremony.nix {
@@ -190,13 +233,17 @@ in
     # replaces a baked password, and no user receives wheel membership.
     allowNoPasswordLogin = true;
     mutableUsers = false;
-    groups.${operatorName}.gid = 1000;
+    groups = {
+      ${operatorName}.gid = 1000;
+      ${relayGPIOGroup} = { };
+    };
     users = {
       root.hashedPassword = "!";
       ${operatorName} = {
         isNormalUser = true;
         uid = 1000;
         group = operatorName;
+        extraGroups = [ relayGPIOGroup ];
         hashedPassword = "!";
         homeMode = "0700";
       };
@@ -231,6 +278,15 @@ in
     journald.extraConfig = ''
       Storage=volatile
     '';
+
+    udev.extraRules = ''
+      # Development bench access to the Pi 5 RP1 header controller only. The
+      # standard Raspberry Pi rules grant every gpiochip to group gpio; keep
+      # provisioner out of that group and replace the matching RP1 device's
+      # group with this narrower role. GPIO character-device access includes
+      # line-control authority even when the immediate task is inspection.
+      ACTION!="remove", SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", ATTR{label}=="pinctrl-rp1", OWNER:="root", GROUP:="${relayGPIOGroup}", MODE:="0660", SYMLINK+="gpiochip-kaiba-rp1"
+    '';
   };
 
   systemd = {
@@ -263,9 +319,11 @@ in
         jq
         kaibaProvisionPackage
         less
+        libgpiod
         openssh
         qualificationCeremony
         qualificationReady
+        relayGPIOInventory
         usbutils
       ])
     );
@@ -288,6 +346,7 @@ in
         Kaiba Raspberry Pi 5 hardware-qualification station
         Run: kaiba-qualification-ceremony --lane-id lane-1
         Diagnostic readiness: READY_ENV="$(kaiba-qualification-ready)" && eval "$READY_ENV" && unset READY_ENV
+        Relay GPIO inventory: kaiba-relay-gpio-inventory
         Runbook: /etc/kaiba-provisioning/operator-runbook.md
 
       '';
