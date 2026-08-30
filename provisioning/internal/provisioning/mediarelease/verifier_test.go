@@ -52,6 +52,36 @@ func TestRootIntegrityParsingRejectsEveryAmbiguousOrMismatchedBoundary(t *testin
 	}
 }
 
+func TestCommandLineUsesSealedInitrdFstabWithoutDuplicateRootMount(t *testing.T) {
+	plan := mediacontract.Plan{Layout: mediacontract.Layout{Verity: mediacontract.VerityContract{
+		RootHash:          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		DataPartitionGUID: "33333333-3333-4333-8333-333333333333",
+		HashPartitionGUID: "44444444-4444-4444-8444-444444444444",
+	}}}
+	valid := []byte(fmt.Sprintf(
+		"console=ttyAMA10,115200 ro root=fstab rd.systemd.verity=1 roothash=%s systemd.verity_root_data=PARTUUID=%s systemd.verity_root_hash=PARTUUID=%s\n",
+		strings.TrimPrefix(string(plan.Layout.Verity.RootHash), "sha256:"),
+		plan.Layout.Verity.DataPartitionGUID,
+		plan.Layout.Verity.HashPartitionGUID,
+	))
+	if err := validateCommandLine(valid, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := map[string][]byte{
+		"direct root mount": []byte(strings.Replace(string(valid), "root=fstab", "root=/dev/mapper/root", 1)),
+		"filesystem type":   []byte(strings.Replace(string(valid), "root=fstab", "root=fstab rootfstype=ext4", 1)),
+		"duplicate root":    []byte(strings.Replace(string(valid), "root=fstab", "root=fstab root=fstab", 1)),
+	}
+	for name, encoded := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := validateCommandLine(encoded, plan); err == nil {
+				t.Fatalf("accepted command line with %s", name)
+			}
+		})
+	}
+}
+
 func TestFixedVerifierFailsClosedWithoutLinkerFixedStorePaths(t *testing.T) {
 	for _, verifier := range []FixedVerifier{
 		{},

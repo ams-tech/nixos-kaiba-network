@@ -75,15 +75,24 @@
           throw "mkRpi5SecureBootTarget requires a clean Git source or an explicit canonical sourceRevision";
 
       # Keep this list deliberately small and literal.  The target module
-      # filters the kernel DTBs to the single supported Pi 5 Model B file, and
-      # the firmware-tree derivation fails if the pinned upstream population
-      # command ever adds, removes, or renames a file.
+      # filters the kernel DTBs to the single supported Pi 5 Model B base file.
+      # The three kernel-matched overlay-directory files let current Pi 5
+      # firmware apply the BCM2712 D0 correction. README is the documented
+      # os_prefix viability sentinel, bcm2712d0.dtbo carries the correction,
+      # and overlay_map.dtb is the matching firmware overlay-name map. The
+      # target module disables inherited optional overlay requests. The
+      # firmware-tree derivation fails if the pinned upstream population
+      # command or this explicit revision-file copy ever adds, removes, or
+      # renames a file.
       rpi5SecureBootFirmwareAllowlist = [
         "config.txt"
         "nixos/default/bcm2712-rpi-5-b.dtb"
         "nixos/default/cmdline.txt"
         "nixos/default/initrd"
         "nixos/default/kernel.img"
+        "nixos/default/overlays/README"
+        "nixos/default/overlays/bcm2712d0.dtbo"
+        "nixos/default/overlays/overlay_map.dtb"
       ];
 
       rpi5ProvisioningSystem = nixos-raspberrypi.lib.nixosSystem {
@@ -167,6 +176,24 @@
                   firmware/start_x.elf \
                   firmware/nixos/default/kernel-link \
                   firmware/nixos/default/system-link
+
+                # Pi 5 firmware selects this overlay automatically on D0
+                # silicon.  hardware.deviceTree.filter intentionally keeps the
+                # generated base-DTB set narrow, so copy only the required
+                # overlay-directory files from the exact kernel that supplied
+                # the base DTB. They remain inside os_prefix and therefore
+                # inside the signed boot image.
+                mkdir -p firmware/nixos/default/overlays
+                for revision_file in README bcm2712d0.dtbo overlay_map.dtb; do
+                  source_file=${targetConfig.hardware.deviceTree.dtbSource}/overlays/"$revision_file"
+                  if ! test -f "$source_file"; then
+                    echo "Raspberry Pi kernel DTBs are missing $revision_file" >&2
+                    exit 1
+                  fi
+                  cp --no-preserve=mode,ownership -- \
+                    "$source_file" \
+                    firmware/nixos/default/overlays/"$revision_file"
+                done
 
                 if test -n "$(find firmware -type l -print -quit)"; then
                   echo "Raspberry Pi firmware population produced a symbolic link" >&2

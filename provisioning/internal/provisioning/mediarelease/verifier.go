@@ -396,8 +396,7 @@ func validateCommandLine(encoded []byte, plan mediacontract.Plan) error {
 	}
 	rootHash := strings.TrimPrefix(string(plan.Layout.Verity.RootHash), "sha256:")
 	wanted := map[string]string{
-		"root":                     "root=/dev/mapper/root",
-		"rootfstype":               "rootfstype=ext4",
+		"root":                     "root=fstab",
 		"roothash":                 "roothash=" + rootHash,
 		"rd.systemd.verity":        "rd.systemd.verity=1",
 		"systemd.verity_root_data": "systemd.verity_root_data=PARTUUID=" + plan.Layout.Verity.DataPartitionGUID,
@@ -425,6 +424,9 @@ func validateCommandLine(encoded []byte, plan mediacontract.Plan) error {
 			}
 			seen[key] = true
 			continue
+		}
+		if key == "rootfstype" {
+			return errors.New("signed boot command line bypasses the sealed initrd fstab filesystem type")
 		}
 		if key == "systemd.verity" || strings.HasPrefix(key, "systemd.verity_root_") || strings.HasPrefix(key, "rd.systemd.verity_root_") {
 			return fmt.Errorf("signed boot command line contains unsupported verity selector %q", key)

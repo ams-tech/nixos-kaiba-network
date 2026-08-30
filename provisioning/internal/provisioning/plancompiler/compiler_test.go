@@ -26,11 +26,17 @@ func TestHappyPathBuildsExactPlanAndBindsCurrentRequest(t *testing.T) {
 	if plan.ApprovalID != fixture.authority.Transaction.Approval.ID || plan.IntentReceipt != fixture.authority.IntentReceipt.ReceiptID {
 		t.Fatalf("authority envelope = %q/%q", plan.ApprovalID, plan.IntentReceipt)
 	}
-	wantOwnedState := laneguard.DirectState{
-		CustomerKeyHash: plan.Release.ExpectedCustomerKeyHash,
-		EEPROMHash:      plan.Release.ExpectedEEPROMDigest,
-		SecurityState:   "owned",
-		PowerState:      "powered_off",
+	wantCommitAttestedState := laneguard.DirectState{
+		CustomerKeyHash:  plan.Release.ExpectedCustomerKeyHash,
+		EEPROMHash:       plan.Release.ExpectedEEPROMDigest,
+		EEPROMHashStatus: laneguard.EEPROMHashCommitAttested,
+		SecurityState:    "owned",
+		PowerState:       "powered_off",
+	}
+	wantObservedState := wantCommitAttestedState
+	wantObservedState.EEPROMHashStatus = laneguard.EEPROMHashObserved
+	if plan.InitialObservationDigest != fixture.authority.Transaction.Target.ObservationDigest {
+		t.Fatalf("plan initial observation = %q, want control target observation %q", plan.InitialObservationDigest, fixture.authority.Transaction.Target.ObservationDigest)
 	}
 	request, err := bound.ExecuteRequest()
 	if err != nil {
@@ -61,8 +67,12 @@ func TestHappyPathBuildsExactPlanAndBindsCurrentRequest(t *testing.T) {
 		if plan.Operations[index].Operation != wantOperations[index] {
 			t.Fatalf("plan operation %d is out of order", index+1)
 		}
-		if plan.Operations[index].ExpectedPoststate != wantOwnedState {
-			t.Fatalf("operation %d poststate = %#v, want release-bound powered-off state", index+1, plan.Operations[index].ExpectedPoststate)
+		wantPoststate := wantObservedState
+		if index < 2 {
+			wantPoststate = wantCommitAttestedState
+		}
+		if plan.Operations[index].ExpectedPoststate != wantPoststate {
+			t.Fatalf("operation %d poststate = %#v, want %#v", index+1, plan.Operations[index].ExpectedPoststate, wantPoststate)
 		}
 		wantBootMode := laneguard.BootModeRPIBoot
 		if plan.Operations[index].Operation == laneguard.OperationColdPowerCycle {
@@ -256,18 +266,19 @@ func TestBindRejectsPriorEvidenceAfterNextIntent(t *testing.T) {
 func TestBuildDraftRejectsMalformedInputs(t *testing.T) {
 	base := testDraftInput(testNow())
 	tests := map[string]func(*DraftInput){
-		"identity":       func(value *DraftInput) { value.StationID = "bad id" },
-		"target":         func(value *DraftInput) { value.TargetFingerprint = "bad" },
-		"fence":          func(value *DraftInput) { value.FenceEpoch = 0 },
-		"release":        func(value *DraftInput) { value.Release.ExpectedEEPROMDigest = "bad" },
-		"expiry":         func(value *DraftInput) { value.ApprovalExpiresAt = time.Time{} },
-		"initial state":  func(value *DraftInput) { value.InitialState.PowerState = "" },
-		"initial mode":   func(value *DraftInput) { value.InitialState.PowerState = "rpiboot" },
-		"initial digest": func(value *DraftInput) { value.InitialState.EEPROMHash = "not-a-digest" },
-		"initial key":    func(value *DraftInput) { value.InitialState.CustomerKeyHash = digest("d") },
-		"zero owned key": func(value *DraftInput) { value.Release.ExpectedCustomerKeyHash = ZeroCustomerKeyHash },
-		"authorization":  func(value *DraftInput) { value.AuthorizationIDs[3] = "bad id" },
-		"duration":       func(value *DraftInput) { value.MaximumDurations[5] = 0 },
+		"identity":            func(value *DraftInput) { value.StationID = "bad id" },
+		"target":              func(value *DraftInput) { value.TargetFingerprint = "bad" },
+		"initial observation": func(value *DraftInput) { value.InitialObservationDigest = "bad" },
+		"fence":               func(value *DraftInput) { value.FenceEpoch = 0 },
+		"release":             func(value *DraftInput) { value.Release.ExpectedEEPROMDigest = "bad" },
+		"expiry":              func(value *DraftInput) { value.ApprovalExpiresAt = time.Time{} },
+		"initial state":       func(value *DraftInput) { value.InitialState.PowerState = "" },
+		"initial mode":        func(value *DraftInput) { value.InitialState.PowerState = "rpiboot" },
+		"initial digest":      func(value *DraftInput) { value.InitialState.EEPROMHash = "not-a-digest" },
+		"initial key":         func(value *DraftInput) { value.InitialState.CustomerKeyHash = digest("d") },
+		"zero owned key":      func(value *DraftInput) { value.Release.ExpectedCustomerKeyHash = ZeroCustomerKeyHash },
+		"authorization":       func(value *DraftInput) { value.AuthorizationIDs[3] = "bad id" },
+		"duration":            func(value *DraftInput) { value.MaximumDurations[5] = 0 },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -277,6 +288,103 @@ func TestBuildDraftRejectsMalformedInputs(t *testing.T) {
 				t.Fatalf("BuildDraft() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestBuildDraftAcceptsObservedAndUnavailableFreshEEPROMPrestates(t *testing.T) {
+	base := testDraftInput(testNow())
+	tests := map[string]laneguard.DirectState{
+		"observed": base.InitialState,
+		"unavailable": {
+			CustomerKeyHash:  ZeroCustomerKeyHash,
+			EEPROMHashStatus: laneguard.EEPROMHashUnavailable,
+			SecurityState:    "fresh",
+			PowerState:       "powered_off",
+		},
+	}
+	for name, initial := range tests {
+		t.Run(name, func(t *testing.T) {
+			input := base
+			input.InitialState = initial
+			draft, err := BuildDraft(input)
+			if err != nil {
+				t.Fatalf("BuildDraft() error = %v", err)
+			}
+			if got := draft.Snapshot().Operations[0].ExpectedPrestate; got != initial {
+				t.Fatalf("initial prestate = %#v, want %#v", got, initial)
+			}
+			operations := draft.Snapshot().Operations
+			if operations[0].ExpectedPoststate.EEPROMHashStatus != laneguard.EEPROMHashCommitAttested ||
+				operations[1].ExpectedPrestate.EEPROMHashStatus != laneguard.EEPROMHashCommitAttested ||
+				operations[1].ExpectedPoststate.EEPROMHashStatus != laneguard.EEPROMHashCommitAttested ||
+				operations[2].ExpectedPrestate.EEPROMHashStatus != laneguard.EEPROMHashCommitAttested ||
+				operations[2].ExpectedPoststate.EEPROMHashStatus != laneguard.EEPROMHashObserved {
+				t.Fatalf("compiled EEPROM proof sequence = %#v", operations[:3])
+			}
+			for index := 3; index < len(operations); index++ {
+				if operations[index].ExpectedPrestate.EEPROMHashStatus != laneguard.EEPROMHashObserved ||
+					operations[index].ExpectedPoststate.EEPROMHashStatus != laneguard.EEPROMHashObserved {
+					t.Fatalf("operation %d did not retain observed EEPROM proof: %#v", index+1, operations[index])
+				}
+			}
+		})
+	}
+}
+
+func TestBuildDraftRejectsInconsistentEEPROMAvailabilityAndNonFreshInitialState(t *testing.T) {
+	base := testDraftInput(testNow())
+	tests := map[string]laneguard.DirectState{
+		"observed without hash": {
+			CustomerKeyHash:  ZeroCustomerKeyHash,
+			EEPROMHashStatus: laneguard.EEPROMHashObserved,
+			SecurityState:    "fresh",
+			PowerState:       "powered_off",
+		},
+		"unavailable with hash": {
+			CustomerKeyHash:  ZeroCustomerKeyHash,
+			EEPROMHash:       digest("6"),
+			EEPROMHashStatus: laneguard.EEPROMHashUnavailable,
+			SecurityState:    "fresh",
+			PowerState:       "powered_off",
+		},
+		"unavailable owned": {
+			CustomerKeyHash:  digest("d"),
+			EEPROMHashStatus: laneguard.EEPROMHashUnavailable,
+			SecurityState:    "owned",
+			PowerState:       "powered_off",
+		},
+	}
+	for name, initial := range tests {
+		t.Run(name, func(t *testing.T) {
+			input := base
+			input.InitialState = initial
+			if _, err := BuildDraft(input); !errors.Is(err, ErrInvalidDraft) {
+				t.Fatalf("BuildDraft() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestInitialObservationDigestIsPlanDigestBound(t *testing.T) {
+	base := testDraftInput(testNow())
+	first, err := BuildDraft(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := base
+	changed.InitialObservationDigest = digest("d")
+	second, err := BuildDraft(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PlanDigest() == second.PlanDigest() {
+		t.Fatal("changing the initial observation did not change the plan digest")
+	}
+
+	tampered := first.Snapshot()
+	tampered.InitialObservationDigest = changed.InitialObservationDigest
+	if _, err := DraftFromSnapshot(tampered); !errors.Is(err, ErrInvalidDraft) {
+		t.Fatalf("DraftFromSnapshot() accepted a tampered initial observation: %v", err)
 	}
 }
 
@@ -298,8 +406,11 @@ func TestDraftFromSnapshotReconstructsOnlyAuthorityFreePolicyPlan(t *testing.T) 
 		"approval":        func(value *laneguard.Plan) { value.ApprovalID = "approval-forbidden" },
 		"intent receipt":  func(value *laneguard.Plan) { value.IntentReceipt = digest("f") },
 		"intent sequence": func(value *laneguard.Plan) { value.IntentSequence = 1 },
-		"operation":       func(value *laneguard.Plan) { value.Operations[2].Operation = laneguard.OperationColdPowerCycle },
-		"classification":  func(value *laneguard.Plan) { value.Operations[0].Classification = laneguard.ClassReadOnly },
+		"initial observation": func(value *laneguard.Plan) {
+			value.InitialObservationDigest = digest("d")
+		},
+		"operation":      func(value *laneguard.Plan) { value.Operations[2].Operation = laneguard.OperationColdPowerCycle },
+		"classification": func(value *laneguard.Plan) { value.Operations[0].Classification = laneguard.ClassReadOnly },
 		"required boot mode": func(value *laneguard.Plan) {
 			value.Operations[0].RequiredBootMode = laneguard.BootModeNormal
 		},
@@ -348,6 +459,7 @@ func TestBindRejectsMutatedControlAuthorityFields(t *testing.T) {
 		"target fingerprint":   func(value *Authority) { value.Transaction.Target.Fingerprint = digest("f") },
 		"target fence":         func(value *Authority) { value.Transaction.Target.FenceEpoch++ },
 		"target key":           func(value *Authority) { value.Transaction.Target.CustomerKeyHash = digest("f") },
+		"target observation":   func(value *Authority) { value.Transaction.Target.ObservationDigest = digest("f") },
 		"approval missing":     func(value *Authority) { value.Transaction.Approval = nil },
 		"approval transaction": func(value *Authority) { value.Transaction.Approval.TransactionDigest = digest("f") },
 		"approval plan":        func(value *Authority) { value.Transaction.Approval.PlanDigest = digest("f") },
@@ -741,7 +853,13 @@ func (hardware *boundPlanTestHardware) Execute(_ context.Context, config lanegua
 	outcome, err := recordBoundPlanBootTransition(hardware.journal, config, action, hardware.transitions)
 	hardware.observation.State = hardware.poststate
 	return laneguard.OperationResult{
-		OutputDigest: digest("f"), Detail: "compiler public API test", BootTransition: outcome,
+		OutputDigest: digest("f"), Detail: "compiler public API test",
+		CommitAttestation: laneguard.CommitAttestation{
+			SchemaVersion: laneguard.CommitAttestationSchemaVersion, TargetFingerprint: action.TargetFingerprint,
+			CustomerKeyHash: hardware.poststate.CustomerKeyHash, EEPROMHash: hardware.poststate.EEPROMHash,
+			EEPROMUpdateResult: "success", SecureBootProvisionResult: "success",
+		},
+		BootTransition: outcome,
 	}, err
 }
 
@@ -947,11 +1065,12 @@ func newFixtureWithDraftInput(t *testing.T, draftInput DraftInput) fixture {
 func testDraftInput(now time.Time) DraftInput {
 	release := testRelease()
 	fresh := laneguard.DirectState{
-		CustomerKeyHash: digest("0"), EEPROMHash: digest("6"), SecurityState: "fresh", PowerState: "powered_off",
+		CustomerKeyHash: ZeroCustomerKeyHash, EEPROMHash: digest("6"), EEPROMHashStatus: laneguard.EEPROMHashObserved,
+		SecurityState: "fresh", PowerState: "powered_off",
 	}
 	return DraftInput{
 		StationID: "station-fixture", LaneID: "lane-fixture", TransactionID: "transaction-fixture",
-		Release: release, TargetFingerprint: digest("4"), FenceEpoch: 1,
+		Release: release, TargetFingerprint: digest("4"), InitialObservationDigest: digest("5"), FenceEpoch: 1,
 		ApprovalExpiresAt: now.Add(30 * time.Minute), InitialState: fresh,
 		AuthorizationIDs: [7]string{
 			"authorization-1", "authorization-2", "authorization-3", "authorization-4",

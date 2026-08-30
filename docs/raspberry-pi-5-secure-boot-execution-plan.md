@@ -134,11 +134,14 @@ exact-board checks:
 Boot-media hardware identity is not part of this posture. NVMe model, serial,
 WWID, and `/dev/disk/by-id` are neither boot-trust inputs nor persistent plan or
 evidence fields. A versioned, typed hardware configuration supplies the
-station-local selector; the checked-in sacrificial-development configuration
-selects `/dev/nvme0n1`, but neither that selector nor its configuration ID enters
-canonical plans, receipts, or evidence. The media writer retains only runtime
-overwrite-safety and layout-compatibility checks. Offline signature and
-release-lineage verification remain software foundations; observing and
+station-local selector. The `malak` configuration is hostname-bound to its
+fixed USB-reader by-path and protects malak's `/dev/nvme0n1`; a separate
+Pi-local configuration selects `/dev/nvme0n1` only on
+`kaiba-rpi5-provisioner`. The mandatory operational preflight binds that
+configuration and current attachment before any writable open; those fields
+remain outside canonical plans and the receipt chain. The media writer retains
+only runtime overwrite-safety and layout-compatibility checks. Offline signature
+and release-lineage verification remain software foundations; observing and
 enforcing a live signed-system boot is a later hardware gate.
 
 The development boot order and unlocked VideoCore JTAG posture are **not
@@ -224,10 +227,10 @@ four-file FAT containing `boot.img`, `boot.sig`, `config.txt`, and
 `kaiba-media-binding.json`, root-data and root-hash partitions, zero padding and
 tail, and both GPT copies. A station-local raw whole-device or
 `/dev/disk/by-path` selector comes from the typed hardware configuration and is
-absent from the canonical plan, receipts, and evidence; model, serial, WWID,
-`/dev/disk/by-id`, physical sector size, and initial contents are not bound. The
-factory emits a
-plan-specialized device writer, a separate read-only verifier, and canonical
+recorded in the operational preflight but absent from the canonical plan and
+receipt chain; model, serial, WWID, `/dev/disk/by-id`, physical sector size, and
+initial contents are not bound. The factory emits a plan-specialized device
+writer, a separate read-only verifier, and canonical
 stage, verification, manual cold-power, and final receipt contracts. The
 software check independently validates GPT, FAT, offline release/signature
 lineage, full-media digests, and dm-verity using a regular file; it does not
@@ -574,8 +577,9 @@ physical gates below are completed.
   device.
 - [x] Source the station-local selector from a versioned, typed hardware
   configuration while keeping its selector and configuration ID out of the
-  canonical plan, receipts, and evidence. Permit only a configured immediate
-  raw whole-device node or `/dev/disk/by-path` selector; reject
+  canonical plan and receipt chain while recording them in the mandatory
+  operational preflight. Permit only a configured immediate raw whole-device
+  node or `/dev/disk/by-path` selector; reject
   `/dev/disk/by-id` and never collect or reconcile model, serial, or WWID.
 - [x] Implement a staging tool or frozen procedure that requires explicit
   destructive authorization; rejects a partition, mounted, root, system, or
@@ -659,26 +663,40 @@ shortened campaign from producing `security_applied`.
   compiler and lane both validate that pair; a root-edited draft cannot replace
   the independently approved digest or durable intent receipt.
 
-The release-bound `v1alpha4` plan and digest contract serializes fixed-order JSON
+The release-bound `v1alpha5` plan and digest contract serializes fixed-order JSON
 structs without whitespace. It deliberately supersedes the earlier pre-release
 contracts rather than changing canonical material under an existing version.
 Operation material contains `sequence`, `operation`,
 `classification`, `required_boot_mode`, `authorization_id`, then
-`customer_key_hash`, `eeprom_hash`, `security_state`, and `power_state` within
-`expected_prestate` and `expected_poststate`, followed by
+`customer_key_hash`, `eeprom_hash`, `eeprom_hash_status`, `security_state`, and
+`power_state` within `expected_prestate` and `expected_poststate`, followed by
 `maximum_duration_nanoseconds`; it excludes `operation_digest`.
+`observed` requires a canonical EEPROM digest. `unavailable` requires an empty
+digest and is accepted as the first fresh, all-zero-key prestate.
+`commit_attested` requires the release EEPROM digest and owned key hash, but it
+can be resolved only from a structured `fresh-commit-attestation/v1alpha1`
+whose target, key, EEPROM digest, `EEPROM_UPDATE=success`, and
+`SECURE_BOOT_PROVISION=success` fields match the plan exactly. The complete
+attestation is included in the operation-result binding digest. Operation 1
+ends in this state, operation 2 carries it through the signed cold boot, and
+operation 3 must replace it with a current `observed` EEPROM digest before the
+remaining campaign can proceed. An interrupted irreversible operation with no
+durable exact attestation can therefore never be classified as applied; when
+its original EEPROM was unavailable it also cannot be classified as
+confirmed-not-applied or retried.
 `required_boot_mode` is not caller policy: the closed compiler and guard policy
 requires `normal` for `cold_power_cycle` and `rpiboot` for each of the other six
 development operations. Plan material contains `schema_version`, `station_id`,
 `lane_id`, `transaction_id`, the six-field `release` binding,
-`target_fingerprint`, `fence_epoch`, canonical UTC `approval_expires_at`, and
-the ordered operation digests freshly derived from their bodies; it excludes
+`target_fingerprint`, `initial_observation_digest`, `fence_epoch`, canonical
+UTC `approval_expires_at`, and the ordered operation digests freshly derived
+from their bodies; it excludes
 `plan_digest`, `approval_id`, `intent_receipt`, and `intent_sequence`. Every
 release-binding field is a canonical lowercase SHA-256 value. The lowercase
 plan SHA-256 value is computed over the ASCII domain, one NUL byte, and the
 JSON bytes. The domains are
-`kaiba.provisioning.lane-guard.operation-digest.v1alpha4` and
-`kaiba.provisioning.lane-guard.plan-digest.v1alpha4`. `LoadPlan` snapshots the
+`kaiba.provisioning.lane-guard.operation-digest.v1alpha5` and
+`kaiba.provisioning.lane-guard.plan-digest.v1alpha5`. `LoadPlan` snapshots the
 caller-owned operation slice, validates this contract and every claimed plan
 and operation digest, and restores durable journal lockout state. It is a
 validation-only boundary and performs no target-facing I/O; `Execute` or
@@ -692,16 +710,16 @@ reconciliation cannot erase it, and persisted approvals fail closed if their
 lifetime exceeds 24 hours.
 
 The execute-once journal now uses the dedicated
-`lane-guard-attempt-store/v1alpha3` envelope,
-`lane-guard-attempt/v1alpha2` records, and current durable boot-transition
+`lane-guard-attempt-store/v1alpha4` envelope,
+`lane-guard-attempt/v1alpha3` records, and current durable boot-transition
 records. Every attempt persists the approval ID, current intent receipt,
 current intent sequence, phase-specific transition evidence, and a terminal
 distinction between verified-applied, confirmed-not-applied, and quarantined
 outcomes. Each terminal attempt is also published at a new digest-derived path
 as a root-owned, mode-0444 trusted receipt; caller-owned copies cannot enter
-the evidence workflow. The `v1alpha4` mode field changes every operation and
-plan digest, so older drafts, approvals, intents, requests, and attempts are
-not reusable.
+the evidence workflow. The `v1alpha5` EEPROM-hash availability and initial
+observation bindings change every operation and plan digest, so older drafts,
+approvals, intents, requests, and attempts are not reusable.
 
 There is deliberately no in-place journal migration. The current decoder
 rejects an older envelope. Before replacement, stop the lane and preserve its
@@ -905,7 +923,7 @@ terminal classification.
 - one fixed GPIO chip and line for that relay; and
 - a deterministic, directly observed way to select RPIBOOT versus normal boot.
 
-The `v1alpha4` lane contract carries a digest-bound `required_boot_mode`, and
+The `v1alpha5` lane contract carries a digest-bound `required_boot_mode`, and
 the sacrificial-development implementation now uses an explicit, durable,
 authenticated manual operator handshake. The guard proves relay release and
 USB absence, persists the requested transition and exact prompt, waits the

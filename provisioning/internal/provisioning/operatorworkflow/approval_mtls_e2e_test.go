@@ -240,10 +240,11 @@ func approvalMTLSDraftInput(now time.Time) DraftInput {
 		},
 		TargetFingerprint: approvalMTLSDigest("8"), ObservationDigest: approvalMTLSDigest("9"),
 		InitialState: laneguard.DirectState{
-			CustomerKeyHash: controlplane.UnownedCustomerKeyHash,
-			EEPROMHash:      approvalMTLSDigest("a"),
-			SecurityState:   "fresh",
-			PowerState:      "powered_off",
+			CustomerKeyHash:  controlplane.UnownedCustomerKeyHash,
+			EEPROMHashStatus: laneguard.EEPROMHashObserved,
+			EEPROMHash:       approvalMTLSDigest("a"),
+			SecurityState:    "fresh",
+			PowerState:       "powered_off",
 		},
 		ApprovalExpiresAt: now.Add(30 * time.Minute),
 		AuthorizationIDs: []string{

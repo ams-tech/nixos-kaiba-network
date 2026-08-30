@@ -23,19 +23,19 @@ import (
 )
 
 const (
-	DraftInputSchemaVersion              = "provisioning.kaiba.network/operator-draft-input/v1alpha1"
-	ApprovalProposalSchemaVersion        = "provisioning.kaiba.network/operator-approval-proposal/v1alpha1"
-	IntentProposalSchemaVersion          = "provisioning.kaiba.network/operator-intent-proposal/v1alpha1"
-	EvidenceProposalSchemaVersion        = "provisioning.kaiba.network/operator-evidence-proposal/v1alpha1"
-	SecurityAppliedProposalSchemaVersion = "provisioning.kaiba.network/operator-security-applied-proposal/v1alpha1"
-	ReconciliationProposalSchemaVersion  = "provisioning.kaiba.network/operator-reconciliation-proposal/v1alpha1"
+	DraftInputSchemaVersion              = "provisioning.kaiba.network/operator-draft-input/v1alpha2"
+	ApprovalProposalSchemaVersion        = "provisioning.kaiba.network/operator-approval-proposal/v1alpha2"
+	IntentProposalSchemaVersion          = "provisioning.kaiba.network/operator-intent-proposal/v1alpha2"
+	EvidenceProposalSchemaVersion        = "provisioning.kaiba.network/operator-evidence-proposal/v1alpha2"
+	SecurityAppliedProposalSchemaVersion = "provisioning.kaiba.network/operator-security-applied-proposal/v1alpha2"
+	ReconciliationProposalSchemaVersion  = "provisioning.kaiba.network/operator-reconciliation-proposal/v1alpha2"
 
 	claimLeaseSeconds = uint32(3600)
 	// Leave at least five minutes between the largest operation plus the
 	// largest configured safety margin and the fixed one-hour claim lease.
 	maximumOperationSeconds          = uint32(3000)
 	maximumApproval                  = 24 * time.Hour
-	digestDomain                     = "kaiba.provisioning.operator-workflow.v1alpha1"
+	digestDomain                     = "kaiba.provisioning.operator-workflow.v1alpha2"
 	developmentRollbackStatus        = "rollback_unimplemented"
 	developmentReleaseClassification = "development_asset"
 )
@@ -318,7 +318,8 @@ func buildDraft(input DraftInput, fenceEpoch uint64) (plancompiler.Draft, error)
 	draft, err := plancompiler.BuildDraft(plancompiler.DraftInput{
 		StationID: input.StationID, LaneID: input.LaneID, TransactionID: input.TransactionID,
 		Release: input.Release, TargetFingerprint: input.TargetFingerprint, FenceEpoch: fenceEpoch,
-		ApprovalExpiresAt: input.ApprovalExpiresAt, InitialState: input.InitialState,
+		InitialObservationDigest: input.ObservationDigest,
+		ApprovalExpiresAt:        input.ApprovalExpiresAt, InitialState: input.InitialState,
 		AuthorizationIDs: authorizationIDs, MaximumDurations: maximum,
 	})
 	if err != nil {
@@ -1628,6 +1629,7 @@ func unresolvedSequence(snapshot laneguard.Plan, transaction controlplane.Transa
 		!digestPattern.MatchString(transaction.TransactionDigest) || transaction.Target == nil ||
 		transaction.Target.Fingerprint != snapshot.TargetFingerprint || transaction.Target.FenceEpoch != snapshot.FenceEpoch ||
 		transaction.Target.CustomerKeyHash != snapshot.Operations[0].ExpectedPrestate.CustomerKeyHash ||
+		transaction.Target.ObservationDigest != snapshot.InitialObservationDigest ||
 		!digestPattern.MatchString(transaction.Target.ObservationDigest) || transaction.Quarantine != nil ||
 		transaction.SecurityApplied != nil || transaction.Abort != nil || len(transaction.Operations) == 0 ||
 		len(transaction.Operations) > len(snapshot.Operations) {
@@ -2315,6 +2317,7 @@ func matchDraftTransaction(snapshot laneguard.Plan, transaction controlplane.Tra
 		!equalStrings(transaction.ActiveClaim.AllowedStages, planOperations(snapshot)) || transaction.Target == nil ||
 		transaction.Target.Fingerprint != snapshot.TargetFingerprint || transaction.Target.FenceEpoch != snapshot.FenceEpoch ||
 		transaction.Target.CustomerKeyHash != snapshot.Operations[0].ExpectedPrestate.CustomerKeyHash ||
+		transaction.Target.ObservationDigest != snapshot.InitialObservationDigest ||
 		!digestPattern.MatchString(transaction.Target.ObservationDigest) {
 		return fmt.Errorf("%w: control transaction does not match the authority-free draft", ErrStateMismatch)
 	}
@@ -2364,6 +2367,7 @@ func matchTerminalTransaction(snapshot laneguard.Plan, transaction controlplane.
 		!digestPattern.MatchString(transaction.TransactionDigest) || transaction.Target == nil ||
 		transaction.Target.Fingerprint != snapshot.TargetFingerprint || transaction.Target.FenceEpoch != snapshot.FenceEpoch ||
 		transaction.Target.CustomerKeyHash != snapshot.Operations[0].ExpectedPrestate.CustomerKeyHash ||
+		transaction.Target.ObservationDigest != snapshot.InitialObservationDigest ||
 		!digestPattern.MatchString(transaction.Target.ObservationDigest) {
 		return fmt.Errorf("%w: terminal control transaction differs from the authority-free draft", ErrStateMismatch)
 	}

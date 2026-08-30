@@ -170,7 +170,7 @@ func TestClientRejectsMalformedOversizedOrMismatchedSuccess(t *testing.T) {
 	}{
 		{name: "previous response schema", body: func() []byte {
 			changed := valid
-			changed.SchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha2"
+			changed.SchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha3"
 			encoded, _ := json.Marshal(changed)
 			return encoded
 		}},

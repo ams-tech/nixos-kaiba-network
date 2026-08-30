@@ -56,6 +56,32 @@ domain-separated tree digest. The builder reopens and verifies the complete
 set before an atomic no-replace publication. The standalone verifier repeats
 the filesystem snapshots and public boot-signature and EEPROM-metadata checks.
 
+### v0.1.5 development hardware observation
+
+On 2026-08-29, a development-only diagnostic ran a byte-identical copy of the
+two-file v0.1.5 `fresh-readback` payload from source revision
+`f8f0885f2cc9beea147933cdf76dc3af8d7b988d` on an unfused sacrificial Pi 5.
+The release manifest identifies the canonical source tree with digest
+`sha256:24175fb5c03198d8c3de9c5d1d200eb4b7e13f3c84b1733acce9d065f34617da`;
+the diagnostic independently verified `bootcode5.bin` as
+`sha256:73dab9a01c139b7d995ac9a4055ee0d15551d7f8dbf1c2605bae584ef7126e0c`
+and `config.txt` as
+`sha256:7456c79433bd06e1923ea93e7db7f40a14402c442dcb031419d6edd1ab1ef180`.
+The private diagnostic copy used more restrictive local modes, so the tree
+digest identifies the canonical source artifact rather than the copied
+directory metadata.
+
+`rpiboot` exited `0`. The returned metadata contained an all-zero
+`CUSTOMER_KEY_HASH`; `EEPROM_HASH`, `EEPROM_UPDATE`, and
+`SECURE_BOOT_PROVISION` were absent. After complete power removal, manual
+normal boot from the same known-good media passed.
+
+This is a development observation, not qualification, authorization, or
+ceremony evidence. It confirms only that this exact metadata-only payload can
+complete successfully without emitting an EEPROM hash or mutation-result
+fields; it does not establish the installed EEPROM contents or authorize
+target mutation.
+
 The two rejection fixtures set `hardware_observed` to `false`. They are
 deterministic test inputs, not evidence that all required boot-source,
 signature, recovery, and dm-verity failure modes have run on a board. In

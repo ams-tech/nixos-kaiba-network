@@ -1294,11 +1294,10 @@ let
     logicalSectorSizeBytes = 512;
     sizeBytes = 268435456;
   };
-  productionMediaHardwareConfiguration = hardwareConfigurations.raspberryPi5SacrificialDevelopment;
-  productionMediaAlternateHardwareConfiguration = productionMediaHardwareConfiguration // {
-    configurationID = "hardware-configuration:rpi5-alternate-selector-fixture:1";
-    targetMedia.devicePath = "/dev/disk/by-path/platform-kaiba-fixture";
-  };
+  productionMediaHardwareConfiguration =
+    hardwareConfigurations.malakRaspberryPi5SacrificialDevelopmentUsbSd;
+  productionMediaAlternateHardwareConfiguration =
+    hardwareConfigurations.raspberryPi5SacrificialDevelopmentPiLocalNvme;
   productionMediaFixture = built.mkRpi5ProductionMedia {
     name = "kaiba-rpi5-production-media-fixture";
     verifiedSignedRelease = productionMediaSignedReleaseFixture;
@@ -1610,6 +1609,7 @@ let
           ${built.goSource}/schemas/rpi5-media-cold-power-observation-v1alpha2.schema.json \
           ${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha2.schema.json \
+          ${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha3.schema.json \
           ${built.goSource}/schemas/rpi5-media-fixture-result-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-media-stage-receipt-v1alpha1.schema.json \
           ${built.goSource}/schemas/rpi5-media-stage-receipt-v1alpha2.schema.json \
@@ -1724,11 +1724,11 @@ let
           exit 1
         fi
 
-        readonly media_preflight_schema=${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha2.schema.json
+        readonly media_preflight_schema=${built.goSource}/schemas/rpi5-media-device-preflight-v1alpha3.schema.json
         readonly media_preflight_valid="$TMPDIR/rpi5-media-device-preflight-valid.json"
         readonly media_preflight_invalid="$TMPDIR/rpi5-media-device-preflight-invalid.json"
         jq -cn '{
-          schema_version: "kaiba.provisioning.rpi5-media-device-preflight/v1alpha2",
+          schema_version: "kaiba.provisioning.rpi5-media-device-preflight/v1alpha3",
           status: "validated_no_write",
           evidence_mode: "device_preflight",
           plan_digest: ("sha256:" + ("a" * 64)),
@@ -1736,6 +1736,10 @@ let
             size_bytes: 8388608,
             logical_sector_size_bytes: 512
           },
+          hardware_configuration_id: "hardware-configuration:malak-rpi5-sacrificial-development-usb-sd:1",
+          execution_hostname: "malak",
+          requested_device_selector: "/dev/disk/by-path/platform-kaiba-fixture",
+          resolved_device_path: "/dev/sda",
           attachment_boot_id: "11111111-1111-4111-8111-111111111111",
           attachment_sequence: 1,
           target_whole_device: true,
@@ -1750,7 +1754,11 @@ let
           "$media_preflight_valid"
         for mutation in \
           '.unexpected_property = true' \
-          '.hardware_configuration_id = "hardware-configuration:prohibited:1"' \
+          '.hardware_configuration_id = "NOT-CANONICAL"' \
+          '.execution_hostname = "Malak"' \
+          '.requested_device_selector = "/dev/disk/by-id/prohibited"' \
+          '.resolved_device_path = "/dev/disk/by-path/prohibited"' \
+          'del(.hardware_configuration_id)' \
           '.target.device_path = "/dev/nvme0n1"' \
           '.write_performed = true' \
           '.target_whole_device = false' \
@@ -3844,7 +3852,7 @@ let
           ${secureBootFixtureA}/nvme/root-hash.img \
           "$root_hash"
         mtype -i ${secureBootFixtureA}/unsigned/boot.img ::cmdline.txt \
-          | grep -F "root=/dev/mapper/root rootfstype=ext4 rd.systemd.verity=1 roothash=$root_hash"
+          | grep -F "root=fstab rd.systemd.verity=1 roothash=$root_hash"
         mtype -i ${secureBootFixtureA}/unsigned/boot.img ::cmdline.txt \
           > "$TMPDIR/secure-boot-cmdline.txt"
         grep -F \
@@ -3855,6 +3863,10 @@ let
           "$TMPDIR/secure-boot-cmdline.txt"
         if grep -F '/dev/nvme' "$TMPDIR/secure-boot-cmdline.txt"; then
           echo 'secure-boot command line contains an enumeration-dependent NVMe path' >&2
+          exit 1
+        fi
+        if grep -Eq '(^|[[:space:]])rootfstype=' "$TMPDIR/secure-boot-cmdline.txt"; then
+          echo 'secure-boot command line bypasses the sealed initrd fstab filesystem type' >&2
           exit 1
         fi
         mtype -i ${secureBootFixtureA}/unsigned/boot.img ::kaiba-root-integrity.json \
@@ -4987,26 +4999,48 @@ let
             devicePath:
             productionMediaHardwareConfiguration
             // {
-              targetMedia = { inherit devicePath; };
+              targetMedia = productionMediaHardwareConfiguration.targetMedia // {
+                inherit devicePath;
+              };
             };
         in
         productionMediaInputAccepted productionMediaSignedReleaseFixture
         && !(productionMediaInputAccepted spoofedSignedRelease)
-        && builtins.attrNames hardwareConfigurations == [ "raspberryPi5SacrificialDevelopment" ]
+        &&
+          builtins.attrNames hardwareConfigurations == [
+            "malakRaspberryPi5SacrificialDevelopmentUsbSd"
+            "raspberryPi5SacrificialDevelopmentPiLocalNvme"
+          ]
         &&
           builtins.attrNames productionMediaHardwareConfiguration == [
             "configurationID"
+            "executionHost"
             "schemaVersion"
             "targetMedia"
           ]
-        && builtins.attrNames productionMediaHardwareConfiguration.targetMedia == [ "devicePath" ]
+        && builtins.attrNames productionMediaHardwareConfiguration.executionHost == [ "hostname" ]
+        &&
+          builtins.attrNames productionMediaHardwareConfiguration.targetMedia == [
+            "devicePath"
+            "protectedDevicePaths"
+          ]
         &&
           productionMediaHardwareConfiguration.schemaVersion
-          == "kaiba.provisioning.hardware-configuration/v1alpha1"
+          == "kaiba.provisioning.hardware-configuration/v1alpha2"
         &&
           productionMediaHardwareConfiguration.configurationID
-          == "hardware-configuration:rpi5-sacrificial-development:1"
-        && productionMediaHardwareConfiguration.targetMedia.devicePath == "/dev/nvme0n1"
+          == "hardware-configuration:malak-rpi5-sacrificial-development-usb-sd:1"
+        && productionMediaHardwareConfiguration.executionHost.hostname == "malak"
+        &&
+          productionMediaHardwareConfiguration.targetMedia.devicePath
+          == "/dev/disk/by-path/pci-0000:0e:00.3-usb-0:4:1.0-scsi-0:0:0:0"
+        && productionMediaHardwareConfiguration.targetMedia.protectedDevicePaths == [ "/dev/nvme0n1" ]
+        &&
+          productionMediaAlternateHardwareConfiguration.configurationID
+          == "hardware-configuration:rpi5-sacrificial-development-pi-local-nvme:1"
+        && productionMediaAlternateHardwareConfiguration.executionHost.hostname == "kaiba-rpi5-provisioner"
+        && productionMediaAlternateHardwareConfiguration.targetMedia.devicePath == "/dev/nvme0n1"
+        && productionMediaAlternateHardwareConfiguration.targetMedia.protectedDevicePaths == [ ]
         && productionMediaTargetInputAccepted { }
         && !(productionMediaTargetInputAccepted { model = "must-not-bind-media-model"; })
         && !(productionMediaTargetInputAccepted { devicePath = "/dev/nvme0n1"; })
@@ -5023,6 +5057,9 @@ let
         ))
         && !(productionMediaHardwareConfigurationInputAccepted (
           productionMediaHardwareConfiguration // { model = "must-not-bind-media-model"; }
+        ))
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          productionMediaHardwareConfiguration // { executionHost.hostname = "Malak"; }
         ))
         && !(productionMediaHardwareConfigurationInputAccepted (
           productionMediaHardwareConfiguration
@@ -5042,6 +5079,18 @@ let
           hardwareWithDevicePath "/dev/mapper/forbidden"
         ))
         && !(productionMediaHardwareConfigurationInputAccepted (hardwareWithDevicePath "nvme0n1"))
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          productionMediaHardwareConfiguration
+          // {
+            targetMedia.protectedDevicePaths = [ ];
+          }
+        ))
+        && !(productionMediaHardwareConfigurationInputAccepted (
+          productionMediaAlternateHardwareConfiguration
+          // {
+            targetMedia.protectedDevicePaths = [ "/dev/nvme0n1" ];
+          }
+        ))
         && !(builtins.functionArgs built.mkRpi5ProductionMedia ? targetDevicePath)
         && contract.verifiedSignedRelease == productionMediaSignedReleaseFixture
         && contract.targetGeometry == productionMediaTarget
@@ -5060,14 +5109,17 @@ let
         && contract.verificationMode == "pure_offline_plan_derivation"
         && stager.blockDeviceWriteCapable
         && stager.configuredSelectorMode == "operational_path_not_media_identity"
+        && stager.executionHostBound
         && stager.fixtureModeAvailable == false
         && stager.hardwareConfigurationID == productionMediaHardwareConfiguration.configurationID
         && !(stager ? targetDevicePath)
         && !(stager ? hardwareConfiguration)
         && stager.mutationScope == "one_linker_fixed_operational_device_path"
+        && stager.protectedDeviceCount == 1
         && verifier.blockDeviceReadCapable
         && verifier.blockDeviceWriteCapable == false
         && verifier.configuredSelectorMode == "operational_path_not_media_identity"
+        && verifier.executionHostBound
         && verifier.hardwareConfigurationID == productionMediaHardwareConfiguration.configurationID
         && !(verifier ? targetDevicePath)
         && !(verifier ? hardwareConfiguration)
@@ -5213,6 +5265,18 @@ let
         test -x ${productionMediaFixture.kaibaRpi5ProductionMedia.deviceVerifier}/bin/kaiba-provision-media-device-verifier
         test -x ${productionMediaFixture.kaibaRpi5ProductionMedia.fixtureStager}/bin/kaiba-provision-media-fixture-stager
         test -x ${productionMediaFixture.kaibaRpi5ProductionMedia.regularVerifier}/bin/kaiba-provision-media-verifier
+        for station_binary in \
+          ${productionMediaFixture.kaibaRpi5ProductionMedia.deviceStager}/bin/kaiba-provision-media-device-stager \
+          ${productionMediaFixture.kaibaRpi5ProductionMedia.deviceVerifier}/bin/kaiba-provision-media-device-verifier
+        do
+          grep -aF ${lib.escapeShellArg productionMediaHardwareConfiguration.configurationID} \
+            "$station_binary" > /dev/null
+          grep -aF ${lib.escapeShellArg productionMediaHardwareConfiguration.executionHost.hostname} \
+            "$station_binary" > /dev/null
+          grep -aF ${lib.escapeShellArg productionMediaHardwareConfiguration.targetMedia.devicePath} \
+            "$station_binary" > /dev/null
+          grep -aF /dev/nvme0n1 "$station_binary" > /dev/null
+        done
 
         # This alternate plan is canonical and self-consistent, but the
         # primary fixture binaries are linker-authorized for exactly the

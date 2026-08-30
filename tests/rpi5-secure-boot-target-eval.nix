@@ -30,6 +30,13 @@ assert lib.assertMsg (
   cfg.hardware.deviceTree.filter == "bcm2712-rpi-5-b.dtb"
 ) "the secure-boot target DTB set is not restricted to Pi 5 Model B";
 assert lib.assertMsg (
+  !cfg.hardware.raspberry-pi.config.all.options.camera_auto_detect.enable
+  && !cfg.hardware.raspberry-pi.config.all.options.display_auto_detect.enable
+  && !cfg.hardware.raspberry-pi.config.all.options.max_framebuffers.enable
+  && !cfg.hardware.raspberry-pi.config.all.base-dt-params.audio.enable
+  && !cfg.hardware.raspberry-pi.config.all.dt-overlays.vc4-kms-v3d.enable
+) "the headless secure-boot target still requests an optional firmware overlay";
+assert lib.assertMsg (
   !cfg.sdImage.compressImage
 ) "the secure-boot root image is compressed instead of raw ext4";
 assert lib.assertMsg (
@@ -54,6 +61,17 @@ assert lib.assertMsg (
   cfg.systemd.sysusers.enable && !cfg.system.switch.enable
 ) "the immutable target still depends on classic mutable activation or switching";
 assert lib.assertMsg (
+  cfg.environment.etc."machine-id".text == "" && cfg.environment.etc."machine-id".mode == "0444"
+) "the immutable /etc layer does not seed an empty transient machine-id file";
+assert lib.assertMsg (
+  !cfg.networking.resolvconf.enable
+  && !cfg.systemd.services.register-nix-paths.enable
+  && !cfg.systemd.services.systemd-update-done.enable
+) "the immutable target still enables a service that mutates sealed state";
+assert lib.assertMsg (
+  cfg.services.dbus.enable && cfg.services.dbus.implementation == "dbus"
+) "the immutable target does not use the compatible reference D-Bus daemon";
+assert lib.assertMsg (
   !cfg.nix.enable && cfg.system.disableInstallerTools && !cfg.documentation.enable
 ) "the immutable target still contains Nix, installer tooling, or generated documentation";
 assert lib.assertMsg (
@@ -64,7 +82,11 @@ assert lib.assertMsg (
   && cfg.systemd.services.kaiba-secure-boot-evidence.serviceConfig.StandardError == "journal+console"
 ) "secure-boot evidence is not routed to the UART-backed kernel console";
 assert lib.assertMsg (
-  lib.hasInfix "./files/etc" cfg.sdImage.populateRootCommands
+  lib.hasInfix "./files/dev" cfg.sdImage.populateRootCommands
+  && lib.hasInfix "./files/etc" cfg.sdImage.populateRootCommands
+  && lib.hasInfix "./files/proc" cfg.sdImage.populateRootCommands
+  && lib.hasInfix "./files/run" cfg.sdImage.populateRootCommands
+  && lib.hasInfix "./files/sys" cfg.sdImage.populateRootCommands
   && lib.hasInfix "./files/var" cfg.sdImage.populateRootCommands
 ) "the raw root image is missing immutable-root mountpoints";
 assert lib.assertMsg (lib.isDerivation target.system)
@@ -76,9 +98,17 @@ assert lib.assertMsg (lib.isDerivation target.firmwareTree)
 assert lib.assertMsg (lib.isDerivation target.unsignedArtifacts)
   "the unsigned secure-boot artifact set is not exposed as a derivation";
 assert lib.assertMsg (
-  builtins.length target.firmwareAllowlist == 5
-  && builtins.length target.firmwareAllowlist == builtins.length (lib.unique target.firmwareAllowlist)
-) "the target firmware allowlist is incomplete or contains duplicates";
+  target.firmwareAllowlist == [
+    "config.txt"
+    "nixos/default/bcm2712-rpi-5-b.dtb"
+    "nixos/default/cmdline.txt"
+    "nixos/default/initrd"
+    "nixos/default/kernel.img"
+    "nixos/default/overlays/README"
+    "nixos/default/overlays/bcm2712d0.dtbo"
+    "nixos/default/overlays/overlay_map.dtb"
+  ]
+) "the target firmware allowlist does not contain the exact Pi 5 base and D0 revision files";
 assert lib.assertMsg (
   target.bootCommandLinePath == "nixos/default/cmdline.txt"
   && lib.elem target.bootCommandLinePath target.firmwareAllowlist
@@ -96,14 +126,78 @@ assert lib.assertMsg (
   && targetPolicy.videocore_jtag == developmentPosture.videocore_jtag.policy
   && targetPolicy.eeprom_write_protection == developmentPosture.eeprom_write_protection.policy
 ) "the target runtime policy is not bound to the canonical development posture";
-pkgs.runCommand "kaiba-rpi5-secure-boot-target-evaluation" { } ''
-  mkdir -p "$out"
-  printf '%s\n' \
-    'rpi5-secure-boot-target-system: pass' \
-    'rpi5-secure-boot-root-image: pass' \
-    'rpi5-secure-boot-immutable-etc: pass' \
-    'rpi5-secure-boot-firmware-allowlist: pass' \
-    'rpi5-secure-boot-no-self-hash-cycle: pass' \
-    'rpi5-secure-boot-development-posture-binding: pass' \
-    > "$out/results.txt"
-''
+pkgs.runCommand "kaiba-rpi5-secure-boot-target-evaluation"
+  {
+    nativeBuildInputs = [
+      pkgs.diffutils
+      pkgs.dtc
+      pkgs.e2fsprogs
+      pkgs.erofs-utils
+      pkgs.gnugrep
+    ];
+  }
+  ''
+    readonly firmware=${target.firmwareTree}
+    readonly kernel_dtbs=${cfg.hardware.deviceTree.dtbSource}
+    readonly root_image=${target.rootImage}
+    readonly dbus_unit="$(readlink -f ${target.system}/etc/systemd/system/dbus.service)"
+
+    grep -F '${cfg.services.dbus.dbusPackage}/bin/dbus-daemon' "$dbus_unit" > /dev/null
+    if grep -F 'dbus-broker-launch' "$dbus_unit" > /dev/null; then
+      echo "stage 2 still resolves dbus.service to dbus-broker" >&2
+      exit 1
+    fi
+
+    fsck.erofs --extract="$TMPDIR/etc" ${cfg.system.build.etcMetadataImage}
+    test -f "$TMPDIR/etc/machine-id"
+    test ! -L "$TMPDIR/etc/machine-id"
+    test ! -s "$TMPDIR/etc/machine-id"
+    test "$(stat --format=%a "$TMPDIR/etc/machine-id")" = 444
+
+    for stage1_mountpoint in dev proc run sys; do
+      debugfs -R "stat /$stage1_mountpoint" "$root_image" 2>&1 \
+        | grep -F 'Type: directory' > /dev/null
+    done
+
+    grep -Fx 'os_prefix=nixos/default/' "$firmware/config.txt" > /dev/null
+    if grep -Eq \
+      '^(camera_auto_detect|display_auto_detect|dtparam=audio=|dtoverlay=vc4-kms-v3d)' \
+      "$firmware/config.txt"; then
+      echo "headless firmware config requests an optional overlay" >&2
+      exit 1
+    fi
+
+    for revision_file in README bcm2712d0.dtbo overlay_map.dtb; do
+      cmp \
+        "$kernel_dtbs/overlays/$revision_file" \
+        "$firmware/nixos/default/overlays/$revision_file"
+    done
+
+    fdtoverlay \
+      -i "$firmware/nixos/default/bcm2712-rpi-5-b.dtb" \
+      -o "$TMPDIR/bcm2712d0-rpi-5-b.dtb" \
+      "$firmware/nixos/default/overlays/bcm2712d0.dtbo"
+    dtc \
+      -I dtb \
+      -O dts \
+      -o "$TMPDIR/bcm2712d0-rpi-5-b.dts" \
+      "$TMPDIR/bcm2712d0-rpi-5-b.dtb"
+    grep -F 'compatible = "brcm,bcm2712d0-pinctrl";' \
+      "$TMPDIR/bcm2712d0-rpi-5-b.dts" > /dev/null
+    grep -F 'reg = <0x7d504100 0x20>;' \
+      "$TMPDIR/bcm2712d0-rpi-5-b.dts" > /dev/null
+    grep -F 'compatible = "brcm,bcm2712d0-aon-pinctrl";' \
+      "$TMPDIR/bcm2712d0-rpi-5-b.dts" > /dev/null
+    grep -F 'reg = <0x7d510700 0x1c>;' \
+      "$TMPDIR/bcm2712d0-rpi-5-b.dts" > /dev/null
+
+    mkdir -p "$out"
+    printf '%s\n' \
+      'rpi5-secure-boot-target-system: pass' \
+      'rpi5-secure-boot-root-image: pass' \
+      'rpi5-secure-boot-immutable-etc: pass' \
+      'rpi5-secure-boot-firmware-allowlist: pass' \
+      'rpi5-secure-boot-no-self-hash-cycle: pass' \
+      'rpi5-secure-boot-development-posture-binding: pass' \
+      > "$out/results.txt"
+  ''

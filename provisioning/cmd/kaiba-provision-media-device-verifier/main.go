@@ -37,9 +37,13 @@ var approvedPlanPath string
 var signedReleasePath string
 var mtypePath string
 var targetDevicePath string
+var hardwareConfigurationID string
+var expectedHostname string
+var protectedDevicePathsCSV string
 
 var (
 	effectiveUID        = os.Geteuid
+	hostname            = os.Hostname
 	loadPlan            = mediacontract.LoadPlan
 	requireApprovedPlan = func(plan mediacontract.Plan) error { return planapproval.Require(plan, approvedPlanPath) }
 	readStageReceipt    = func(path string) ([]byte, error) {
@@ -50,6 +54,10 @@ var (
 	validateEvidence      = evidencefile.ValidateTrustedNewPath
 	writeEvidence         = evidencefile.WriteCanonicalNewTrusted
 )
+
+type configuredStation struct {
+	Policy mediadevice.StationPolicy
+}
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -77,6 +85,11 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		fmt.Fprintln(stderr, "verify device media: production block-device verification requires root")
 		return exitInvalid
 	}
+	station, err := loadConfiguredStation()
+	if err != nil {
+		fmt.Fprintf(stderr, "verify device media: validate execution station: %v\n", err)
+		return exitInvalid
+	}
 	plan, err := loadPlan(*planPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "verify device media: load plan: %v\n", err)
@@ -100,7 +113,7 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "verify device media: validate receipt output: %v\n", err)
 		return exitInvalid
 	}
-	canonical, err := verifyAndEncodeDevice(ctx, plan, stage)
+	canonical, err := verifyAndEncodeDevice(ctx, plan, stage, station)
 	if err != nil {
 		fmt.Fprintf(stderr, "verify device media: %v\n", err)
 		return exitInvalid
@@ -113,7 +126,25 @@ func run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	return exitOK
 }
 
-func productionVerifyAndEncode(ctx context.Context, plan mediacontract.Plan, stage mediacontract.StageReceipt) ([]byte, error) {
+func loadConfiguredStation() (configuredStation, error) {
+	if hardwareConfigurationID == "" || targetDevicePath == "" {
+		return configuredStation{}, errors.New("generic build has no linker-fixed hardware configuration")
+	}
+	policy, err := mediadevice.NewStationPolicy(expectedHostname, protectedDevicePathsCSV)
+	if err != nil {
+		return configuredStation{}, err
+	}
+	actualHostname, err := hostname()
+	if err != nil {
+		return configuredStation{}, fmt.Errorf("read execution hostname: %w", err)
+	}
+	if err := policy.ValidateHost(actualHostname); err != nil {
+		return configuredStation{}, err
+	}
+	return configuredStation{Policy: policy}, nil
+}
+
+func productionVerifyAndEncode(ctx context.Context, plan mediacontract.Plan, stage mediacontract.StageReceipt, station configuredStation) ([]byte, error) {
 	if err := stage.ValidateAgainst(plan); err != nil {
 		return nil, err
 	}
@@ -124,6 +155,9 @@ func productionVerifyAndEncode(ctx context.Context, plan mediacontract.Plan, sta
 	inspector := mediadevice.Inspector{}
 	facts, err := inspector.InspectSelected(ctx, plan, targetDevicePath)
 	if err != nil {
+		return nil, err
+	}
+	if err := station.Policy.ValidateTarget(facts); err != nil {
 		return nil, err
 	}
 	if facts.BootID == stage.AttachmentBootID && facts.DiskSequence == stage.AttachmentSequence {
@@ -139,6 +173,9 @@ func productionVerifyAndEncode(ctx context.Context, plan mediacontract.Plan, sta
 		return nil, err
 	}
 	if err := mediadevice.ValidateOpened(target, current); err != nil {
+		return nil, err
+	}
+	if err := station.Policy.ValidateTarget(current); err != nil {
 		return nil, err
 	}
 	verity := mediadevice.PartitionVerityVerifier{Path: veritysetupPath, Whole: current}

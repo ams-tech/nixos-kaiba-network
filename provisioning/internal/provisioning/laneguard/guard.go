@@ -203,6 +203,7 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 			return existing, ErrReconciliationRequired
 		}
 	}
+	var carriedCommitAttestation CommitAttestation
 	if operation.Sequence > 1 {
 		previous, found, err := guard.store.Get(attemptKey(plan, operation.Sequence-1))
 		if err != nil {
@@ -210,6 +211,12 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 		}
 		if !found || previous.Status != AttemptVerified || previous.ObservedState != operation.ExpectedPrestate {
 			return Attempt{}, ErrOutOfOrder
+		}
+		if operation.ExpectedPrestate.EEPROMHashStatus == EEPROMHashCommitAttested {
+			carriedCommitAttestation, err = guard.loadCommitAttestation(plan)
+			if err != nil {
+				return Attempt{}, err
+			}
 		}
 	}
 	preAction, err := makeHardwareAction(plan, operation, HardwarePhasePreObservation, nil)
@@ -234,9 +241,13 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	if !LeaseCoversOperation(current, request.ClaimExpiresAt, operation.MaximumDuration, guard.config.LeaseSafetyMargin) {
 		return Attempt{}, ErrLeaseInvalid
 	}
-	if observation.State != operation.ExpectedPrestate {
+	resolvedPrestate, prestateMatches, _ := resolveEEPROMProof(
+		operation.ExpectedPrestate, observation.State, carriedCommitAttestation,
+	)
+	if !prestateMatches {
 		return Attempt{}, ErrPrestateMismatch
 	}
+	observation.State = resolvedPrestate
 	executionAction, err := makeHardwareAction(plan, operation, HardwarePhaseExecute, nil)
 	if err != nil {
 		return Attempt{}, err
@@ -295,6 +306,15 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 	}
 	attempt.ExecutionTransition = result.BootTransition
 	attempt.Result = bindOperationResult(plan, operation, result)
+	if err := validateResultCommitAttestation(plan, operation, attempt.Result); err != nil {
+		attempt.Status = AttemptUncertain
+		attempt.UpdatedAt = guard.clock.Now().UTC()
+		attempt.Detail = "completed hardware response lacks the exact required fresh-commit attestation"
+		if storeErr := guard.store.Put(attempt); storeErr != nil {
+			return attempt, errors.Join(ErrReconciliationRequired, err, fmt.Errorf("record invalid commit attestation: %w", storeErr))
+		}
+		return attempt, errors.Join(ErrReconciliationRequired, err)
+	}
 	postAction, err := makeHardwareAction(plan, operation, HardwarePhasePostObservation, nil)
 	if err != nil {
 		return attempt, err
@@ -322,7 +342,13 @@ func (guard *Guard) Execute(ctx context.Context, request ExecuteRequest) (Attemp
 		}
 		return attempt, errors.Join(ErrReconciliationRequired, observeErr)
 	}
-	return guard.finishObserved(attempt, operation, postObservation)
+	postAttestation := carriedCommitAttestation
+	if operation.Operation == OperationProgramCustomerKeyAndEEPROM {
+		if validateResultCommitAttestation(plan, operation, attempt.Result) == nil {
+			postAttestation = attempt.Result.CommitAttestation
+		}
+	}
+	return guard.finishObserved(attempt, operation, postObservation, postAttestation)
 }
 
 // Reconcile directly observes an already-started operation. It never calls
@@ -410,9 +436,30 @@ func (guard *Guard) reconcileLocked(ctx context.Context, request ReconcileReques
 		}
 		return attempt, errors.Join(ErrReconciliationRequired, err)
 	}
-	if operation.ExpectedPrestate == operation.ExpectedPoststate && observation.State == operation.ExpectedPoststate {
+	var carriedCommitAttestation CommitAttestation
+	if operation.Sequence > 1 &&
+		(operation.ExpectedPrestate.EEPROMHashStatus == EEPROMHashCommitAttested ||
+			operation.ExpectedPoststate.EEPROMHashStatus == EEPROMHashCommitAttested) {
+		carriedCommitAttestation, err = guard.loadCommitAttestation(plan)
+		if err != nil {
+			return attempt, err
+		}
+	}
+	postAttestation := carriedCommitAttestation
+	if operation.Operation == OperationProgramCustomerKeyAndEEPROM {
+		if validateResultCommitAttestation(plan, operation, attempt.Result) == nil {
+			postAttestation = attempt.Result.CommitAttestation
+		}
+	}
+	_, poststateMatches, poststateInconclusive := resolveEEPROMProof(
+		operation.ExpectedPoststate, observation.State, postAttestation,
+	)
+	resolvedPrestate, prestateMatches, prestateInconclusive := resolveEEPROMProof(
+		operation.ExpectedPrestate, observation.State, carriedCommitAttestation,
+	)
+	if operation.ExpectedPrestate == operation.ExpectedPoststate && (prestateMatches || poststateMatches) {
 		attempt.Status = AttemptUncertain
-		attempt.ObservedState = observation.State
+		attempt.ObservedState = resolvedPrestate
 		attempt.UpdatedAt = guard.clock.Now().UTC()
 		attempt.Detail = "direct state cannot distinguish whether the interrupted operation executed"
 		if err := guard.store.Put(attempt); err != nil {
@@ -420,9 +467,32 @@ func (guard *Guard) reconcileLocked(ctx context.Context, request ReconcileReques
 		}
 		return attempt, ErrReconciliationRequired
 	}
-	if observation.State == operation.ExpectedPrestate {
+	if poststateMatches {
+		return guard.finishObserved(attempt, operation, observation, postAttestation)
+	}
+	if prestateMatches && operation.ExpectedPrestate.EEPROMHashStatus == EEPROMHashUnavailable {
+		attempt.Status = AttemptUncertain
+		attempt.ObservedState = resolvedPrestate
+		attempt.UpdatedAt = guard.clock.Now().UTC()
+		attempt.Detail = "unavailable initial EEPROM hash cannot prove that the interrupted operation did not change EEPROM"
+		if err := guard.store.Put(attempt); err != nil {
+			return attempt, errors.Join(ErrReconciliationRequired, fmt.Errorf("record unavailable-prestate outcome: %w", err))
+		}
+		return attempt, ErrReconciliationRequired
+	}
+	if prestateMatches {
+		if !attempt.Result.CommitAttestation.IsZero() {
+			attempt.Status = AttemptUncertain
+			attempt.ObservedState = resolvedPrestate
+			attempt.UpdatedAt = guard.clock.Now().UTC()
+			attempt.Detail = "direct original prestate conflicts with the durable fresh-commit attestation"
+			if err := guard.store.Put(attempt); err != nil {
+				return attempt, errors.Join(ErrReconciliationRequired, fmt.Errorf("record conflicting commit evidence: %w", err))
+			}
+			return attempt, ErrReconciliationRequired
+		}
 		attempt.Status = AttemptConfirmedNotApplied
-		attempt.ObservedState = observation.State
+		attempt.ObservedState = resolvedPrestate
 		attempt.UpdatedAt = guard.clock.Now().UTC()
 		attempt.Detail = "direct original prestate confirms that the interrupted operation did not apply"
 		if err := guard.store.Put(attempt); err != nil {
@@ -430,7 +500,17 @@ func (guard *Guard) reconcileLocked(ctx context.Context, request ReconcileReques
 		}
 		return attempt, nil
 	}
-	return guard.finishObserved(attempt, operation, observation)
+	if prestateInconclusive || poststateInconclusive {
+		attempt.Status = AttemptUncertain
+		attempt.ObservedState = observation.State
+		attempt.UpdatedAt = guard.clock.Now().UTC()
+		attempt.Detail = "unavailable EEPROM readback has no exact durable commit attestation"
+		if err := guard.store.Put(attempt); err != nil {
+			return attempt, errors.Join(ErrReconciliationRequired, fmt.Errorf("record inconclusive EEPROM proof: %w", err))
+		}
+		return attempt, ErrReconciliationRequired
+	}
+	return guard.finishObserved(attempt, operation, observation, postAttestation)
 }
 
 // bindOperationResult makes otherwise repeatable device output unique to the
@@ -454,6 +534,12 @@ func bindOperationResult(plan Plan, operation OperationSpec, result OperationRes
 		operation.OperationDigest,
 		operation.AuthorizationID,
 		result.OutputDigest,
+		result.CommitAttestation.SchemaVersion,
+		result.CommitAttestation.TargetFingerprint,
+		result.CommitAttestation.CustomerKeyHash,
+		result.CommitAttestation.EEPROMHash,
+		result.CommitAttestation.EEPROMUpdateResult,
+		result.CommitAttestation.SecureBootProvisionResult,
 		result.BootTransition.Reference.TransitionKey,
 		result.BootTransition.Reference.EvidenceDigest,
 	} {
@@ -464,16 +550,142 @@ func bindOperationResult(plan Plan, operation OperationSpec, result OperationRes
 	return result
 }
 
-func (guard *Guard) finishObserved(attempt Attempt, operation OperationSpec, observation Observation) (Attempt, error) {
-	attempt.ObservedState = observation.State
+func expectedCommitAttestation(plan Plan) CommitAttestation {
+	return CommitAttestation{
+		SchemaVersion: CommitAttestationSchemaVersion, TargetFingerprint: plan.TargetFingerprint,
+		CustomerKeyHash: plan.Release.ExpectedCustomerKeyHash, EEPROMHash: plan.Release.ExpectedEEPROMDigest,
+		EEPROMUpdateResult: "success", SecureBootProvisionResult: "success",
+	}
+}
+
+// ValidateAttemptForPlan checks the plan-dependent meaning of a durable
+// attempt. Store validation can establish record shape and local bindings,
+// but only the approved plan can establish the exact terminal state and
+// fresh-commit attestation values.
+func ValidateAttemptForPlan(plan Plan, attempt Attempt) error {
+	if attempt.Sequence == 0 || int(attempt.Sequence) > len(plan.Operations) {
+		return ErrPlanMismatch
+	}
+	operation := plan.Operations[attempt.Sequence-1]
+	if attempt.Key != attemptKey(plan, operation.Sequence) ||
+		attempt.TransactionID != plan.TransactionID || attempt.PlanDigest != plan.PlanDigest ||
+		attempt.TargetFingerprint != plan.TargetFingerprint || attempt.FenceEpoch != plan.FenceEpoch ||
+		attempt.ApprovalID != plan.ApprovalID || attempt.Sequence != operation.Sequence ||
+		attempt.Operation != operation.Operation || attempt.OperationDigest != operation.OperationDigest {
+		return ErrPlanMismatch
+	}
+	switch attempt.Status {
+	case AttemptVerified:
+		if attempt.ObservedState != operation.ExpectedPoststate {
+			return errors.New("verified attempt does not contain the approved poststate")
+		}
+		if err := validateResultCommitAttestation(plan, operation, attempt.Result); err != nil {
+			return fmt.Errorf("verified attempt result: %w", err)
+		}
+	case AttemptConfirmedNotApplied:
+		if attempt.ObservedState != operation.ExpectedPrestate {
+			return errors.New("confirmed-not-applied attempt does not contain the approved prestate")
+		}
+		if !attempt.Result.CommitAttestation.IsZero() {
+			return errors.New("confirmed-not-applied attempt carries a fresh-commit attestation")
+		}
+	}
+	return nil
+}
+
+func validateResultCommitAttestation(plan Plan, operation OperationSpec, result OperationResult) error {
+	if operation.Operation != OperationProgramCustomerKeyAndEEPROM {
+		if !result.CommitAttestation.IsZero() {
+			return errors.New("a non-commit operation returned a fresh-commit attestation")
+		}
+		return nil
+	}
+	if err := result.CommitAttestation.Validate(); err != nil {
+		return err
+	}
+	if result.CommitAttestation != expectedCommitAttestation(plan) ||
+		operation.ExpectedPoststate.EEPROMHashStatus != EEPROMHashCommitAttested ||
+		operation.ExpectedPoststate.CustomerKeyHash != result.CommitAttestation.CustomerKeyHash ||
+		operation.ExpectedPoststate.EEPROMHash != result.CommitAttestation.EEPROMHash {
+		return errors.New("fresh-commit attestation differs from the approved release poststate")
+	}
+	return nil
+}
+
+func (guard *Guard) loadCommitAttestation(plan Plan) (CommitAttestation, error) {
+	commitOperation := plan.Operations[0]
+	attempt, found, err := guard.store.Get(attemptKey(plan, commitOperation.Sequence))
+	if err != nil {
+		return CommitAttestation{}, fmt.Errorf("read durable fresh-commit attestation: %w", err)
+	}
+	if !found || attempt.Status != AttemptVerified || attempt.ObservedState != commitOperation.ExpectedPoststate ||
+		validateResultCommitAttestation(plan, commitOperation, attempt.Result) != nil {
+		return CommitAttestation{}, ErrOutOfOrder
+	}
+	return attempt.Result.CommitAttestation, nil
+}
+
+// resolveEEPROMProof compares a raw observation to an approved state without
+// treating an unavailable digest as a wildcard. A commit-attested state may
+// be reconstructed only from the exact durable fresh-commit attestation. A
+// current exact byte observation is stronger evidence of the EEPROM bytes,
+// but it cannot recreate the commit response's two success fields.
+func resolveEEPROMProof(expected, observed DirectState, attestation CommitAttestation) (DirectState, bool, bool) {
+	if expected.EEPROMHashStatus != EEPROMHashCommitAttested {
+		return observed, observed == expected, false
+	}
+	if observed.CustomerKeyHash != expected.CustomerKeyHash ||
+		observed.SecurityState != expected.SecurityState || observed.PowerState != expected.PowerState {
+		return observed, false, false
+	}
+	attestationMatches := !attestation.IsZero() && attestation.CustomerKeyHash == expected.CustomerKeyHash &&
+		attestation.EEPROMHash == expected.EEPROMHash && attestation.Validate() == nil
+	switch observed.EEPROMHashStatus {
+	case EEPROMHashObserved:
+		if observed.EEPROMHash == expected.EEPROMHash {
+			if attestationMatches {
+				return expected, true, false
+			}
+			return observed, false, true
+		}
+	case EEPROMHashUnavailable:
+		if observed.EEPROMHash == "" {
+			if attestationMatches {
+				return expected, true, false
+			}
+			return observed, false, true
+		}
+	case EEPROMHashCommitAttested:
+		if observed.EEPROMHash == expected.EEPROMHash {
+			if attestationMatches {
+				return expected, true, false
+			}
+			return observed, false, true
+		}
+	}
+	return observed, false, false
+}
+
+func (guard *Guard) finishObserved(attempt Attempt, operation OperationSpec, observation Observation, attestation CommitAttestation) (Attempt, error) {
+	resolved, matches, inconclusive := resolveEEPROMProof(operation.ExpectedPoststate, observation.State, attestation)
+	attempt.ObservedState = resolved
 	attempt.UpdatedAt = guard.clock.Now().UTC()
-	if observation.State == operation.ExpectedPoststate {
+	if matches {
 		attempt.Status = AttemptVerified
-		attempt.Detail = "direct postcondition verified"
+		attempt.Detail = "evidence-backed postcondition verified"
 		if err := guard.store.Put(attempt); err != nil {
 			return attempt, fmt.Errorf("record verified postcondition: %w", err)
 		}
 		return attempt, nil
+	}
+	if inconclusive {
+		attempt.Status = AttemptUncertain
+		attempt.ObservedState = observation.State
+		attempt.Detail = "unavailable EEPROM readback has no exact durable commit attestation"
+		if err := guard.store.Put(attempt); err != nil {
+			return attempt, errors.Join(ErrReconciliationRequired, fmt.Errorf("record inconclusive postcondition: %w", err))
+		}
+		return attempt, ErrReconciliationRequired
 	}
 	attempt.Status = AttemptQuarantined
 	attempt.Detail = "direct postcondition did not match the approved plan"
@@ -521,7 +733,8 @@ func matchPlanRequest(plan Plan, request ExecuteRequest) (OperationSpec, error) 
 		request.StationID != plan.StationID || request.LaneID != plan.LaneID ||
 		request.TransactionID != plan.TransactionID || request.PlanDigest != plan.PlanDigest ||
 		request.Release != plan.Release ||
-		request.TargetFingerprint != plan.TargetFingerprint || request.FenceEpoch != plan.FenceEpoch ||
+		request.TargetFingerprint != plan.TargetFingerprint || request.InitialObservationDigest != plan.InitialObservationDigest ||
+		request.FenceEpoch != plan.FenceEpoch ||
 		request.ApprovalID != plan.ApprovalID || !request.ApprovalExpiresAt.Equal(plan.ApprovalExpiresAt) ||
 		request.IntentReceipt != plan.IntentReceipt ||
 		request.Sequence == 0 || request.Sequence != plan.IntentSequence || int(request.Sequence) > len(plan.Operations) {
@@ -579,12 +792,8 @@ func (guard *Guard) restartStates(plan Plan) ([]DirectState, bool, error) {
 		if operation.Sequence > plan.IntentSequence {
 			return nil, false, ErrPlanMismatch
 		}
-		if attempt.TransactionID != plan.TransactionID || attempt.PlanDigest != plan.PlanDigest ||
-			attempt.TargetFingerprint != plan.TargetFingerprint || attempt.FenceEpoch != plan.FenceEpoch ||
-			attempt.ApprovalID != plan.ApprovalID ||
-			attempt.Sequence != operation.Sequence || attempt.Operation != operation.Operation ||
-			attempt.OperationDigest != operation.OperationDigest {
-			return nil, false, ErrPlanMismatch
+		if err := ValidateAttemptForPlan(plan, attempt); err != nil {
+			return nil, false, err
 		}
 		if operation.Sequence == plan.IntentSequence && !attemptMatchesIntent(attempt, plan, operation) {
 			return nil, false, ErrPlanMismatch
@@ -723,7 +932,7 @@ func clonePlan(plan Plan) Plan {
 }
 
 func samePlan(left, right Plan) bool {
-	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID || left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release || left.TargetFingerprint != right.TargetFingerprint || left.FenceEpoch != right.FenceEpoch || left.ApprovalID != right.ApprovalID || !left.ApprovalExpiresAt.Equal(right.ApprovalExpiresAt) || left.IntentReceipt != right.IntentReceipt || left.IntentSequence != right.IntentSequence || len(left.Operations) != len(right.Operations) {
+	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID || left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release || left.TargetFingerprint != right.TargetFingerprint || left.InitialObservationDigest != right.InitialObservationDigest || left.FenceEpoch != right.FenceEpoch || left.ApprovalID != right.ApprovalID || !left.ApprovalExpiresAt.Equal(right.ApprovalExpiresAt) || left.IntentReceipt != right.IntentReceipt || left.IntentSequence != right.IntentSequence || len(left.Operations) != len(right.Operations) {
 		return false
 	}
 	for index := range left.Operations {

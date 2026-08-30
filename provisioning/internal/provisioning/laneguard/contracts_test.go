@@ -8,8 +8,80 @@ import (
 )
 
 func TestReconcileSchemaTracksBootModeBoundRequest(t *testing.T) {
-	if ReconcileRequestSchemaVersion != "provisioning.kaiba.network/lane-guard-reconcile-request/v1alpha2" {
+	if ReconcileRequestSchemaVersion != "provisioning.kaiba.network/lane-guard-reconcile-request/v1alpha3" {
 		t.Fatalf("reconcile request schema = %q", ReconcileRequestSchemaVersion)
+	}
+}
+
+func TestDirectStateValidateDistinguishesObservedAndUnavailableEEPROM(t *testing.T) {
+	observed := DirectState{
+		CustomerKeyHash: unownedCustomerKeyHash, EEPROMHash: digest("a"), EEPROMHashStatus: EEPROMHashObserved,
+		SecurityState: "fresh", PowerState: "powered_off",
+	}
+	if err := observed.Validate(); err != nil {
+		t.Fatalf("valid observed state: %v", err)
+	}
+	unavailable := observed
+	unavailable.EEPROMHash = ""
+	unavailable.EEPROMHashStatus = EEPROMHashUnavailable
+	if err := unavailable.Validate(); err != nil {
+		t.Fatalf("valid unavailable state: %v", err)
+	}
+	ownedUnavailable := unavailable
+	ownedUnavailable.CustomerKeyHash = digest("b")
+	ownedUnavailable.SecurityState = "owned"
+	if err := ownedUnavailable.Validate(); err != nil {
+		t.Fatalf("valid owned state with unavailable EEPROM hash: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*DirectState)
+	}{
+		{"missing status", func(state *DirectState) { state.EEPROMHashStatus = "" }},
+		{"observed empty hash", func(state *DirectState) { state.EEPROMHash = "" }},
+		{"observed noncanonical hash", func(state *DirectState) { state.EEPROMHash = "sha256:factory" }},
+		{"unavailable populated hash", func(state *DirectState) { state.EEPROMHashStatus = EEPROMHashUnavailable }},
+		{"fresh owned key", func(state *DirectState) { state.CustomerKeyHash = digest("b") }},
+		{"unowned key marked owned", func(state *DirectState) { state.SecurityState = "owned" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := observed
+			test.mutate(&state)
+			if err := state.Validate(); err == nil {
+				t.Fatalf("invalid direct state was accepted: %#v", state)
+			}
+		})
+	}
+}
+
+func TestPlanValidateRequiresCommitAttestedThenObservedEEPROMProof(t *testing.T) {
+	initialUnavailable := testPlanBody()
+	initialUnavailable.Operations[0].ExpectedPrestate.EEPROMHash = ""
+	initialUnavailable.Operations[0].ExpectedPrestate.EEPROMHashStatus = EEPROMHashUnavailable
+	initialUnavailable = deriveTestPlan(initialUnavailable)
+	if err := initialUnavailable.Validate(testConfig()); err != nil {
+		t.Fatalf("unavailable initial EEPROM state was rejected: %v", err)
+	}
+
+	poststateUnavailable := testPlanBody()
+	poststateUnavailable.Operations[0].ExpectedPoststate.EEPROMHash = ""
+	poststateUnavailable.Operations[0].ExpectedPoststate.EEPROMHashStatus = EEPROMHashUnavailable
+	poststateUnavailable = deriveTestPlan(poststateUnavailable)
+	if err := poststateUnavailable.Validate(testConfig()); err == nil || !strings.Contains(err.Error(), "commit-attested-to-observed") {
+		t.Fatalf("unavailable poststate error = %v", err)
+	}
+
+	missingObservedReadback := testPlanBody()
+	missingObservedReadback.Operations[2].ExpectedPoststate = missingObservedReadback.Operations[2].ExpectedPrestate
+	for index := 3; index < len(missingObservedReadback.Operations); index++ {
+		missingObservedReadback.Operations[index].ExpectedPrestate = missingObservedReadback.Operations[2].ExpectedPoststate
+		missingObservedReadback.Operations[index].ExpectedPoststate = missingObservedReadback.Operations[2].ExpectedPoststate
+	}
+	missingObservedReadback = deriveTestPlan(missingObservedReadback)
+	if err := missingObservedReadback.Validate(testConfig()); err == nil || !strings.Contains(err.Error(), "commit-attested-to-observed") {
+		t.Fatalf("missing observed readback error = %v", err)
 	}
 }
 

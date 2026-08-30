@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const AdapterVersion = "provisioning.kaiba.network/physical-rpi5/v1alpha1"
+const AdapterVersion = "provisioning.kaiba.network/physical-rpi5/v1alpha2"
 
 const (
 	ModeFresh = "fresh"

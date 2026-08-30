@@ -42,9 +42,12 @@ Boot-media hardware identity is deliberately outside this policy. NVMe model,
 serial, WWID, and `/dev/disk/by-id` are neither boot-trust inputs nor persistent
 plan or evidence fields. The station's versioned, typed hardware configuration
 supplies one linker-fixed raw whole-device or `/dev/disk/by-path` selector only
-as local operational configuration. The checked-in sacrificial-development
-configuration selects `/dev/nvme0n1`; neither that selector nor its
-configuration ID enters canonical plans, receipts, or evidence. The media tools
+as local operational configuration. The hostname-bound `malak` configuration
+selects its fixed USB-reader by-path and protects malak's `/dev/nvme0n1`; the
+separate Pi-local configuration selects `/dev/nvme0n1` only on
+`kaiba-rpi5-provisioner`. A mandatory operational preflight binds that choice
+and the current attachment before writable open; those fields do not enter
+canonical plans or the stage, verification, and final receipts. The media tools
 still reject partitions, mounts, root/system/swap devices, holders, and slaves;
 check exact per-run capacity and a 512-byte logical sector for layout
 compatibility; and pin the opened attachment within each operation. They do not
@@ -190,12 +193,12 @@ commit.
 The production-media factory derives a plan-specialized device stager and an
 independent verifier from that verified release and exact per-run layout
 geometry. It consumes the selector through the typed hardware configuration
-and fixes it outside its canonical plan, receipts, and evidence. The tools can
-write and cold-read the manifest-bound boot, root-data, and root-hash bytes, but
-that cold readback proves expected contents on a fresh attachment, not
-continuity of one physical medium. The repository has not recorded that
-physical campaign or a live signed boot. The lane guard and loopback UI still
-do not stage media themselves.
+and fixes it outside its canonical plan and receipt chain while recording it in
+the mandatory operational preflight. The tools can write and cold-read the
+manifest-bound boot, root-data, and root-hash bytes, but that cold readback
+proves expected contents on a fresh attachment, not continuity of one physical
+medium. The repository has not recorded that physical campaign or a live signed
+boot. The lane guard and loopback UI still do not stage media themselves.
 
 ## Nix entry points
 
@@ -238,11 +241,12 @@ That exception contains no credential or signing authority and is not approved
 for production. A separate checked-in public-only hardware configuration under
 [`provisioning/config/hardware`](../provisioning/config/hardware/) selects the
 sacrificial station's target-media path; that path is operational wiring and is
-not copied into plans, receipts, or evidence. Production target-media hardware
-configurations, signer metadata, EEPROM digests, physical USB/UART/GPIO
-selectors, TLS credentials, approvals, grants, and recovery bundles remain
-external deployment inputs. Generic signer and lane-guard packages still fail
-closed until constructed through their factories.
+copied only into the station-local operational preflight, not canonical plans or
+the receipt chain. Production target-media hardware configurations, signer
+metadata, EEPROM digests, physical USB/UART/GPIO selectors, TLS credentials,
+approvals, grants, and recovery bundles remain external deployment inputs.
+Generic signer and lane-guard packages still fail closed until constructed
+through their factories.
 
 ## Station and control-plane state
 
@@ -312,7 +316,7 @@ private Unix socket. The bridge authenticates the control and audit services
 with TLS 1.3, a fixed station/lane client certificate, and separate exclusive
 server trust roots. It double-reads control around the audit read and rejects a
 changed snapshot before binding the current operation. The lane guard then
-recomputes the `v1alpha4` domain-separated digest of every operation and of the
+recomputes the `v1alpha5` domain-separated digest of every operation and of the
 ordered plan, reopens and hashes the actual guard executable and eight
 immutable artifact paths, and requires the plan's six-field release binding to
 match the derived result before constructing the hardware adapter. Each
@@ -339,16 +343,22 @@ original approval snapshot, and reconciliation reconstructs the exact original
 plan and attempt from that snapshot plus its durable approval and intent audit
 receipts. A fresh, short-lived reconciliation claim authorizes observation
 only; it cannot be converted into an execute request and the lane guard never
-redispatches the operation. Exact owned state becomes confirmed-applied; the
-exact original fresh prestate becomes confirmed-not-applied. Both are terminal
-stops in the current development workflow: neither authorizes replay of the old
-request, another mutation claim, or campaign finalization. The combined
-authenticated restart test exercises both outcomes
-through reopened control, audit, and current
-`lane-guard-attempt-store/v1alpha3` journals containing
-`lane-guard-attempt/v1alpha2` attempts and durable boot-transition records. It
+redispatches the operation. An owned observation, whether it includes the
+exact EEPROM digest or omits `EEPROM_HASH`, becomes confirmed-applied only when
+the journal already contains the exact structured fresh-commit attestation
+bound to this plan and target. The exact original fresh prestate becomes
+confirmed-not-applied only when its EEPROM hash was directly observed. If the
+approved fresh prestate recorded
+`eeprom_hash_status: unavailable`, observing the same zero-key state cannot
+prove that an interrupted commit left EEPROM unchanged: reconciliation remains
+uncertain and the commit is never retried. Every conclusive and uncertain
+result is a terminal stop for the old execute request. The combined
+authenticated restart test exercises all three outcomes through reopened
+control, audit, and current
+`lane-guard-attempt-store/v1alpha4` journals containing
+`lane-guard-attempt/v1alpha3` attempts and durable boot-transition records. It
 uses the real physical adapter with only target-facing I/O simulated. The
-current plan contract is `lane-guard/v1alpha4`; old plans, approvals, intents,
+current plan contract is `lane-guard/v1alpha5`; old plans, approvals, intents,
 requests, and attempts bound to older digests are not reusable. This remains
 software-only evidence: uncertain live mutation recovery still requires the
 documented sacrificial-hardware qualification and makes no live enforcement
@@ -575,10 +585,16 @@ values:
 - `station_id` and `lane_id` from the deployed, fixed lane configuration;
 - the unique transaction, inventory asset, and intended logical IDs from the
   ceremony package;
-- `profile_id`, `policy_digest`, `target_fingerprint`, `observation_digest`,
-  and the fresh EEPROM digest from the current accepted qualification record
-  and its checked-in profile and policy—not from the historical example
-  record;
+- `profile_id`, `policy_digest`, and `target_fingerprint` from the current
+  accepted qualification record and its checked-in profile and policy—not
+  from the historical example record; set the draft `observation_digest` to
+  the accepted probe's `evidence_digest` (for the accepted v0.1.5 probe,
+  `sha256:0ae79e6106c84acae606fc2808c54d2e147667f0db3254eceb470ae05d668780`);
+- the fresh EEPROM status and digest from that same observation: use
+  `observed` plus its canonical digest when present, or `unavailable` plus an
+  empty digest when the accepted probe legitimately omitted `EEPROM_HASH`;
+  never substitute the desired signed EEPROM digest for an unobserved
+  prestate;
 - the six release digests from the independently verified signed-release
   manifest and the deployed lane-guard release-binding output;
 - a canonical UTC approval deadline no more than 24 hours away and long enough
@@ -588,9 +604,12 @@ values:
 
 The current fresh target must report the all-zero customer-key hash and be
 directly observed powered off. This template produces the complete strict
-`operator-draft-input/v1alpha1` object without exposing operation or boot-mode
-fields. Set every placeholder variable from the reviewed sources above; do not
-copy the example digests from tests or an older evidence record:
+`operator-draft-input/v1alpha2` object without exposing operation or boot-mode
+fields. The initial observation digest is copied into the lane plan and its
+canonical digest, so an approval cannot be detached from the observation that
+justified an unavailable EEPROM hash. Set every placeholder variable from the
+reviewed sources above; do not copy the example digests from tests or an older
+evidence record:
 
 ```bash
 STATION_ID=development-station
@@ -609,8 +628,12 @@ EXPECTED_EEPROM_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
 EXPECTED_BOOT_IMAGE_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
 
 TARGET_FINGERPRINT=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+# Copy probes[].evidence_digest from the accepted qualification record.
 OBSERVATION_DIGEST=sha256:REPLACE_WITH_64_LOWERCASE_HEX
-FRESH_EEPROM_HASH=sha256:REPLACE_WITH_64_LOWERCASE_HEX
+# Use observed + sha256:<64 lowercase hex> only when EEPROM_HASH was present.
+# For the accepted v0.1.5 null observation, use unavailable + an empty value.
+FRESH_EEPROM_HASH_STATUS=unavailable
+FRESH_EEPROM_HASH=
 APPROVAL_EXPIRES_AT=REPLACE_WITH_CANONICAL_UTC_WITHIN_24_HOURS
 
 AUTHORIZATION_ID_1=transaction-id-program
@@ -623,6 +646,19 @@ AUTHORIZATION_ID_7=transaction-id-root-integrity
 
 # Replace these examples with the seven reviewed, qualified bounds.
 MAXIMUM_DURATION_SECONDS='[60,90,60,120,60,120,120]'
+
+case "$FRESH_EEPROM_HASH_STATUS" in
+  observed)
+    [[ "$FRESH_EEPROM_HASH" =~ ^sha256:[0-9a-f]{64}$ ]]
+    ;;
+  unavailable)
+    test -z "$FRESH_EEPROM_HASH"
+    ;;
+  *)
+    printf 'invalid FRESH_EEPROM_HASH_STATUS: %s\n' "$FRESH_EEPROM_HASH_STATUS" >&2
+    exit 1
+    ;;
+esac
 
 test ! -e "$DRAFT_INPUT"
 set -o noclobber
@@ -642,6 +678,7 @@ jq -n \
   --arg expected_boot_image_digest "$EXPECTED_BOOT_IMAGE_DIGEST" \
   --arg target_fingerprint "$TARGET_FINGERPRINT" \
   --arg observation_digest "$OBSERVATION_DIGEST" \
+  --arg fresh_eeprom_hash_status "$FRESH_EEPROM_HASH_STATUS" \
   --arg fresh_eeprom_hash "$FRESH_EEPROM_HASH" \
   --arg approval_expires_at "$APPROVAL_EXPIRES_AT" \
   --arg authorization_id_1 "$AUTHORIZATION_ID_1" \
@@ -653,7 +690,7 @@ jq -n \
   --arg authorization_id_7 "$AUTHORIZATION_ID_7" \
   --argjson maximum_duration_seconds "$MAXIMUM_DURATION_SECONDS" \
   '{
-    schema_version: "provisioning.kaiba.network/operator-draft-input/v1alpha1",
+    schema_version: "provisioning.kaiba.network/operator-draft-input/v1alpha2",
     station_id: $station_id,
     lane_id: $lane_id,
     transaction_id: $transaction_id,
@@ -674,6 +711,7 @@ jq -n \
     initial_state: {
       customer_key_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       eeprom_hash: $fresh_eeprom_hash,
+      eeprom_hash_status: $fresh_eeprom_hash_status,
       security_state: "fresh",
       power_state: "powered_off"
     },
@@ -696,8 +734,11 @@ sha256sum -- "$DRAFT_INPUT"
 ```
 
 The `sha256:` placeholder strings are intentionally invalid until replaced;
-`prepare-draft` rejects them. Review the complete JSON and its digest before
-continuing. In the station session, create/resume the fixed
+`prepare-draft` rejects them. In draft input, an empty EEPROM hash is valid
+only with the explicit `unavailable` status and only for the initial fresh,
+unowned state.
+Review the complete JSON and its digest before continuing. In the station
+session, create/resume the fixed
 transaction, acquire its mutation claim, bind the reviewed target, compile the
 fixed campaign, review the resulting draft, and install it at the exact path
 configured in the NixOS module:
@@ -712,6 +753,25 @@ sudo kaiba-provision-lane-workflow install-draft \
   --draft "$DRAFT" \
   --destination "$DRAFT_DEST"
 ```
+
+For the development milestone, an unavailable fresh EEPROM hash permits one
+commit attempt; it does not become an expected or cached digest. The commit
+must still return the expected customer-key hash, expected signed EEPROM digest,
+`EEPROM_UPDATE=success`, and `SECURE_BOOT_PROVISION=success` before the lane can
+create the structured `fresh-commit-attestation/v1alpha1` result. The result is
+bound into the attempt result digest and normalizes an otherwise hash-less
+owned readback to the plan's `commit_attested` state. That proof carries only
+operations 1 and 2, allowing the signed cold boot. A lost, malformed, or
+ambiguous commit response can never establish confirmed-applied. An exact,
+fully observed original fresh prestate may establish confirmed-not-applied;
+every other no-attestation outcome remains uncertain forever. Neither outcome
+authorizes a retry.
+
+Operation 3 deliberately transitions from `commit_attested` to `observed` and
+requires a separately validated installed-EEPROM collector. The v0.1.5 signed
+target contains no such collector, so stop after the verified signed cold boot
+and do not authorize operation 3. Never fill that gap with the expected
+artifact digest, a plan value, or an unbound cached value.
 
 Every `propose-*` command first renews only the exact live claim appropriate to
 that state and then constructs an immutable proposal from the returned
@@ -1091,7 +1151,7 @@ apply. A delayed retry never selects a later reconciliation claim.
 ### Journal replacement and migration
 
 The current guard strictly accepts only its current
-`lane-guard-attempt-store/v1alpha3` envelope. It does not migrate an older
+`lane-guard-attempt-store/v1alpha4` envelope. It does not migrate an older
 journal, even when individual records look compatible. Before replacing a
 deployment, stop the lane and preserve the old journal, lock file, attempt
 receipts, control record, and audit records. Any older **nonempty** journal is
@@ -1213,11 +1273,14 @@ five live gates remain:
    [Ubuntu development signing ceremony](ubuntu-rpi5-development-signing-ceremony.md)
    for the software-only signing and assembly portion. This is a development
    release, not a production release.
-2. Use the typed sacrificial hardware configuration to stage the approved
-   layout on the actual fixed `/dev/nvme0n1`, remove power and reattach it, and
-   complete independent cold readback of every manifest-bound byte and
-   dm-verity result. Record content evidence only: do not verify or retain NVMe
-   model, serial, WWID, `/dev/disk/by-id`, or any other boot-media identity.
+2. Select the typed hardware configuration for the machine that actually runs
+   the writer. On `malak`, use only its fixed USB-reader configuration; use the
+   Pi-local `/dev/nvme0n1` configuration only on `kaiba-rpi5-provisioner` while
+   that Pi is booted from a separate medium. Review the mandatory attachment-
+   bound preflight, stage the approved layout, remove power and reattach the
+   medium, and complete independent cold readback of every manifest-bound byte
+   and dm-verity result. Record content evidence only: do not verify or retain
+   NVMe model, serial, WWID, `/dev/disk/by-id`, or any other boot-media identity.
 3. Qualify the actual UART adapter's voltage, ground, settings, isolation, and
    stable `/dev/serial/by-id` identity, then prove bounded capture on the fixed
    lane. This pre-SB-08 work does not claim signed-system-image enforcement;

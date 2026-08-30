@@ -57,19 +57,22 @@ const (
 
 func TestAuthenticatedRestartReconcilesRealAdapterWithoutRedispatch(t *testing.T) {
 	for _, test := range []struct {
-		name            string
-		mutationApplied bool
+		name                   string
+		mutationApplied        bool
+		freshEEPROMUnavailable bool
 	}{
 		{name: "confirmed applied", mutationApplied: true},
 		{name: "confirmed not applied", mutationApplied: false},
+		{name: "unavailable prestate remains uncertain", mutationApplied: false, freshEEPROMUnavailable: true},
+		{name: "unavailable poststate remains uncertain", mutationApplied: true, freshEEPROMUnavailable: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			testAuthenticatedRestartReconciliation(t, test.mutationApplied)
+			testAuthenticatedRestartReconciliation(t, test.mutationApplied, test.freshEEPROMUnavailable)
 		})
 	}
 }
 
-func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied bool) {
+func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied, freshEEPROMUnavailable bool) {
 	t.Helper()
 	ctx := context.Background()
 	directory := t.TempDir()
@@ -78,7 +81,7 @@ func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied bool) 
 	journalPath := filepath.Join(directory, "lane-journal.json")
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: now}
-	board := newSimulatedBoard(mutationApplied)
+	board := newSimulatedBoard(mutationApplied, freshEEPROMUnavailable)
 
 	release := releasebinding.Binding{
 		SignedReleaseManifestDigest: digest("signed-release"),
@@ -88,15 +91,20 @@ func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied bool) 
 		ExpectedEEPROMDigest:        "sha256:" + ownedEEPROMHex,
 		ExpectedBootImageDigest:     digest("boot-image"),
 	}
-	freshObservation, err := rpi5.ParseMetadata([]byte(board.metadata(false)))
+	freshObservation, err := rpi5.ParseMetadata([]byte(board.metadata(false, false)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	initialState := laneguard.DirectState{
-		CustomerKeyHash: controlplane.UnownedCustomerKeyHash,
-		EEPROMHash:      "sha256:" + freshEEPROMHex,
-		SecurityState:   "fresh",
-		PowerState:      "powered_off",
+		CustomerKeyHash:  controlplane.UnownedCustomerKeyHash,
+		EEPROMHashStatus: laneguard.EEPROMHashObserved,
+		EEPROMHash:       "sha256:" + freshEEPROMHex,
+		SecurityState:    "fresh",
+		PowerState:       "powered_off",
+	}
+	if freshEEPROMUnavailable {
+		initialState.EEPROMHashStatus = laneguard.EEPROMHashUnavailable
+		initialState.EEPROMHash = ""
 	}
 	operationNames := developmentOperationNames()
 	controlStore := controlplane.FileStore{Path: controlPath}
@@ -108,7 +116,8 @@ func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied bool) 
 	draft, err := plancompiler.BuildDraft(plancompiler.DraftInput{
 		StationID: stationID, LaneID: laneID, TransactionID: transaction.ID,
 		Release: release, TargetFingerprint: freshObservation.TargetFingerprint,
-		FenceEpoch: transaction.FenceEpoch, ApprovalExpiresAt: now.Add(30 * time.Minute),
+		InitialObservationDigest: transaction.Target.ObservationDigest,
+		FenceEpoch:               transaction.FenceEpoch, ApprovalExpiresAt: now.Add(30 * time.Minute),
 		InitialState: initialState,
 		AuthorizationIDs: [7]string{
 			"authorization-1", "authorization-2", "authorization-3", "authorization-4",
@@ -242,6 +251,21 @@ func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied bool) 
 		t.Fatal(err)
 	}
 	reconciled, err := restartedGuard.ReconcilePlan(ctx, reconciliation.Plan, *reconciliation.ReconcileRequest)
+	if freshEEPROMUnavailable {
+		if !errors.Is(err, laneguard.ErrReconciliationRequired) || reconciled.Status != laneguard.AttemptUncertain ||
+			reconciled.ObservedState.EEPROMHashStatus != laneguard.EEPROMHashUnavailable || reconciled.ObservedState.EEPROMHash != "" {
+			t.Fatalf("unavailable EEPROM reconciliation = %#v, %v", reconciled, err)
+		}
+		if initialHardware.executions() != 1 || restartedHardware.executions() != 0 || board.commitCount() != 1 {
+			t.Fatalf("unavailable-prestate redispatch detected = initial:%d restarted:%d commit:%d",
+				initialHardware.executions(), restartedHardware.executions(), board.commitCount())
+		}
+		persisted, found, storeErr := restartedJournal.Get(reconciled.Key)
+		if storeErr != nil || !found || persisted.Status != laneguard.AttemptUncertain {
+			t.Fatalf("persisted unavailable-prestate attempt = %#v, %t, %v", persisted, found, storeErr)
+		}
+		return
+	}
 	wantAttemptStatus := laneguard.AttemptVerified
 	wantResolution := controlplane.ResolutionConfirmedApplied
 	wantOperationStatus := controlplane.OperationConfirmedApplied
@@ -501,16 +525,22 @@ func (clock *testClock) set(now time.Time) {
 }
 
 type simulatedBoard struct {
-	mu          sync.Mutex
-	powered     bool
-	usbInstance uint64
-	owned       bool
-	applyCommit bool
-	commitCalls int
+	mu              sync.Mutex
+	powered         bool
+	usbInstance     uint64
+	owned           bool
+	applyCommit     bool
+	attestCommit    bool
+	failReadback    bool
+	omitFreshEEPROM bool
+	commitCalls     int
 }
 
-func newSimulatedBoard(applyCommit bool) *simulatedBoard {
-	return &simulatedBoard{applyCommit: applyCommit}
+func newSimulatedBoard(applyCommit, omitFreshEEPROM bool) *simulatedBoard {
+	return &simulatedBoard{
+		applyCommit: applyCommit, attestCommit: applyCommit && !omitFreshEEPROM,
+		omitFreshEEPROM: omitFreshEEPROM,
+	}
 }
 
 func (board *simulatedBoard) setPowered(powered bool) {
@@ -546,19 +576,38 @@ func (board *simulatedBoard) commitCount() int {
 	return board.commitCalls
 }
 
-func (board *simulatedBoard) commitWithoutResponse() error {
+func (board *simulatedBoard) commit() (string, error) {
 	board.mu.Lock()
-	defer board.mu.Unlock()
 	if board.applyCommit {
 		board.owned = true
 	}
 	board.commitCalls++
-	return errors.New("simulated RPIBOOT response loss with unknown ownership result")
+	attested := board.attestCommit
+	if attested {
+		board.failReadback = true
+	}
+	board.mu.Unlock()
+	if attested {
+		return board.metadata(false, true), nil
+	}
+	return "", errors.New("simulated RPIBOOT response loss with unknown ownership result")
 }
 
-func (board *simulatedBoard) metadata(forceFresh bool) string {
+func (board *simulatedBoard) readback() (string, error) {
+	board.mu.Lock()
+	if board.failReadback {
+		board.failReadback = false
+		board.mu.Unlock()
+		return "", errors.New("simulated post-commit readback loss")
+	}
+	board.mu.Unlock()
+	return board.metadata(false, false), nil
+}
+
+func (board *simulatedBoard) metadata(forceFresh, commit bool) string {
 	board.mu.Lock()
 	owned := board.owned && !forceFresh
+	omitFreshEEPROM := board.omitFreshEEPROM
 	board.mu.Unlock()
 	key := zeroCustomerHex
 	eeprom := freshEEPROMHex
@@ -566,9 +615,19 @@ func (board *simulatedBoard) metadata(forceFresh bool) string {
 		key = ownedKeyHex
 		eeprom = ownedEEPROMHex
 	}
+	operationFields := ""
+	if commit {
+		operationFields = `,"EEPROM_UPDATE":"success","SECURE_BOOT_PROVISION":"success"`
+	}
+	if omitFreshEEPROM && !commit {
+		return fmt.Sprintf(
+			`{"USER_SERIAL_NUM":"A7EB274C","MAC_ADDR":"2C:CF:67:70:76:F3","CUSTOMER_KEY_HASH":%q,"BOOT_ROM":"0000000A","BOARD_ATTR":"00000000","USER_BOARDREV":"B04170","JTAG_LOCKED":"0","SIGNATURE_MODE":"0","MAC_WIFI_ADDR":"2C:CF:67:70:76:F4","MAC_BT_ADDR":"2C:CF:67:70:76:F5","FACTORY_UUID":"001000911006186073"%s}`,
+			key, operationFields,
+		)
+	}
 	return fmt.Sprintf(
-		`{"USER_SERIAL_NUM":"A7EB274C","MAC_ADDR":"2C:CF:67:70:76:F3","EEPROM_HASH":%q,"CUSTOMER_KEY_HASH":%q,"BOOT_ROM":"0000000A","BOARD_ATTR":"00000000","USER_BOARDREV":"B04170","JTAG_LOCKED":"0","SIGNATURE_MODE":"0","MAC_WIFI_ADDR":"2C:CF:67:70:76:F4","MAC_BT_ADDR":"2C:CF:67:70:76:F5","FACTORY_UUID":"001000911006186073"}`,
-		eeprom, key,
+		`{"USER_SERIAL_NUM":"A7EB274C","MAC_ADDR":"2C:CF:67:70:76:F3","EEPROM_HASH":%q,"CUSTOMER_KEY_HASH":%q,"BOOT_ROM":"0000000A","BOARD_ATTR":"00000000","USER_BOARDREV":"B04170","JTAG_LOCKED":"0","SIGNATURE_MODE":"0","MAC_WIFI_ADDR":"2C:CF:67:70:76:F4","MAC_BT_ADDR":"2C:CF:67:70:76:F5","FACTORY_UUID":"001000911006186073"%s}`,
+		eeprom, key, operationFields,
 	)
 }
 
@@ -584,10 +643,13 @@ func (runner simulatedRunner) Run(_ context.Context, _ string, arguments []strin
 	bundle := arguments[len(arguments)-1]
 	switch bundle {
 	case runner.paths.FreshCommitBundle:
-		return runner.board.commitWithoutResponse()
+		output, err := runner.board.commit()
+		_, _ = io.WriteString(stdout, output)
+		return err
 	case runner.paths.FreshReadbackBundle, runner.paths.OwnedReadbackBundle:
-		_, _ = io.WriteString(stdout, runner.board.metadata(false))
-		return nil
+		output, err := runner.board.readback()
+		_, _ = io.WriteString(stdout, output)
+		return err
 	default:
 		return fmt.Errorf("unexpected simulated RPIBOOT bundle %q", bundle)
 	}

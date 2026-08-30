@@ -77,12 +77,26 @@ In particular, `/dev/disk/by-id` is not accepted as an identity or selector.
 The versioned, typed hardware-configuration catalog under
 `provisioning/config/hardware/` supplies one local operational selector naming
 either an immediate raw whole-device node or one
-`/dev/disk/by-path/<whole-device>` alias. The checked-in
-`raspberryPi5SacrificialDevelopment` configuration selects `/dev/nvme0n1`.
-The factory validates that configuration and linker-fixes its selector into the
-writer and verifier; it rejects a loose selector argument. Neither the selector
-nor the hardware-configuration ID appears in the canonical plan, receipts, or
-evidence. The selector determines where an explicitly authorized destructive
+`/dev/disk/by-path/<whole-device>` alias. There is deliberately no generic
+sacrificial-device entry. The two checked-in choices are:
+
+- `malakRaspberryPi5SacrificialDevelopmentUsbSd`, hostname-bound to `malak`,
+  selects the fixed USB-reader by-path and protects malak's `/dev/nvme0n1`;
+- `raspberryPi5SacrificialDevelopmentPiLocalNvme`, hostname-bound to
+  `kaiba-rpi5-provisioner`, selects `/dev/nvme0n1` for a Pi running from a
+  separate boot medium.
+
+This split does not alter the signed media or its boot contract. The boot and
+root-integrity configuration uses the plan-bound PARTUUIDs, so the same medium
+may enumerate as `/dev/sda` through malak's USB reader and `/dev/nvme0n1` when
+installed in the Pi.
+
+The factory validates the selected configuration and linker-fixes its host,
+selector, protected-device set, and configuration ID into the writer and
+verifier; it rejects loose runtime overrides. The operational preflight records
+those station-local values and the resolved attachment. They do not appear in
+the canonical plan or stage, verification, cold-observation, and final
+receipts. The selector determines where an explicitly authorized destructive
 operation is attempted; it does not attest what hardware is present.
 
 For example, expose the immutable assets and the capability-separated binaries
@@ -95,7 +109,7 @@ let
     verifiedSignedRelease = verifiedSignedRelease;
     transactionID = "transaction:rpi5-sacrificial-001:1";
     hardwareConfiguration =
-      kaiba.lib.hardwareConfigurations.raspberryPi5SacrificialDevelopment;
+      kaiba.lib.hardwareConfigurations.malakRaspberryPi5SacrificialDevelopmentUsbSd;
     target = {
       sizeBytes = <exact-observed-capacity>;
       logicalSectorSizeBytes = 512;
@@ -182,9 +196,26 @@ sudo install -d -o root -g root -m 0700 \
 plan="$(readlink -f result-production-media/plan.json)"
 stager="$(readlink -f result-production-media-device-stager)"
 verifier="$(readlink -f result-production-media-device-verifier)"
+evidence=/var/lib/kaiba-provisioning/evidence/transaction-rpi5-sacrificial-001
+preflight="$evidence/device-preflight.json"
 
 sudo "$stager/bin/kaiba-provision-media-device-stager" dry-run \
-  --plan "$plan"
+  --plan "$plan" \
+  --preflight "$preflight"
+
+sudo jq '{
+  hardware_configuration_id,
+  execution_hostname,
+  requested_device_selector,
+  resolved_device_path,
+  attachment_boot_id,
+  attachment_sequence,
+  target,
+  sources_verified,
+  target_usage_clear,
+  target_locked,
+  write_performed
+}' "$preflight"
 ```
 
 Review the selector resolved from the typed hardware configuration, runtime
@@ -192,12 +223,18 @@ geometry, and successful device preflight against the approved transaction
 before crossing the mutation boundary. That reviewed preflight plus the
 deliberate, transaction-bound `stage` invocation is the current explicit
 destructive-authorization boundary. The production writer has no runtime
-target override, source flag, fixture mode, force switch, or automatic retry:
+target override, source flag, fixture mode, force switch, or automatic retry.
+The preflight is a root-owned, exact-mode `0444`, station-local operational
+binding. `stage` accepts only its canonical bytes and requires the same plan,
+hardware configuration, hostname, requested and resolved paths, boot ID, and
+disk sequence before opening the target writable. A reboot, reattachment, or
+selector change requires a new reviewed preflight:
 
 ```console
 sudo "$stager/bin/kaiba-provision-media-device-stager" stage \
   --plan "$plan" \
-  --receipt /var/lib/kaiba-provisioning/evidence/transaction-rpi5-sacrificial-001/stage.json
+  --preflight "$preflight" \
+  --receipt "$evidence/stage.json"
 ```
 
 The writer resolves the configured selector, requires one raw whole device with
@@ -224,8 +261,8 @@ diskseq)` pair differs from staging. Then run the separate read-only verifier:
 ```console
 sudo "$verifier/bin/kaiba-provision-media-device-verifier" verify \
   --plan "$plan" \
-  --stage-receipt /var/lib/kaiba-provisioning/evidence/transaction-rpi5-sacrificial-001/stage.json \
-  --receipt /var/lib/kaiba-provisioning/evidence/transaction-rpi5-sacrificial-001/verification.json
+  --stage-receipt "$evidence/stage.json" \
+  --receipt "$evidence/verification.json"
 ```
 
 The verifier trusts only a root-owned, non-symlink stage receipt with exact
@@ -240,8 +277,9 @@ descriptors. It does not import the writer.
 That cold readback proves that the freshly attached, operationally selected
 medium contains the expected bytes. Because model, serial, and WWID are not
 collected, and the typed hardware-configuration selector is omitted from
-canonical plans and evidence, it does not prove that this is the same physical
-medium used during staging. Offline verification of the
+canonical plans and receipts, it does not prove that this is the same physical
+medium used during staging. The station-local preflight is overwrite-safety
+evidence, not persistent media identity. Offline verification of the
 staged signed artifacts likewise does not prove that a Pi bootloader executed
 them. Live signed-system boot observation and enforcement are later hardware
 goals.

@@ -228,7 +228,10 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
           "nixos/default/bcm2712-rpi-5-b.dtb",
           "nixos/default/cmdline.txt",
           "nixos/default/initrd",
-          "nixos/default/kernel.img"
+          "nixos/default/kernel.img",
+          "nixos/default/overlays/README",
+          "nixos/default/overlays/bcm2712d0.dtbo",
+          "nixos/default/overlays/overlay_map.dtb"
         ]
         and .persistent_mutable_state == "tmpfs-only"
         and .rollback_policy == "unimplemented-block-enrollment-ready"
@@ -281,7 +284,7 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
     mtype -i "$unsigned/unsigned/boot.img" ::nixos/default/cmdline.txt \
       > "$TMPDIR/cmdline.txt"
     grep -F \
-      "root=/dev/mapper/root rootfstype=ext4 rd.systemd.verity=1 roothash=$root_hash" \
+      "root=fstab rd.systemd.verity=1 roothash=$root_hash" \
       "$TMPDIR/cmdline.txt" > /dev/null
     grep -F 'systemd.verity_root_data=PARTUUID=${unsignedContract.rootDataPartitionGUID}' \
       "$TMPDIR/cmdline.txt" > /dev/null
@@ -289,6 +292,10 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
       "$TMPDIR/cmdline.txt" > /dev/null
     if grep -F '/dev/nvme' "$TMPDIR/cmdline.txt" > /dev/null; then
       echo 'signed boot command line contains an enumeration-dependent NVMe path' >&2
+      exit 1
+    fi
+    if grep -Eq '(^|[[:space:]])rootfstype=' "$TMPDIR/cmdline.txt"; then
+      echo 'signed boot command line bypasses the sealed initrd fstab filesystem type' >&2
       exit 1
     fi
     mtype -i "$unsigned/unsigned/boot.img" ::kaiba-root-integrity.json \

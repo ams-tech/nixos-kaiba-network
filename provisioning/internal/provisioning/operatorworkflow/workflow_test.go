@@ -69,7 +69,8 @@ func newWorkflowFixture(t *testing.T) workflowFixture {
 			},
 			TargetFingerprint: testDigest("8"), ObservationDigest: testDigest("9"),
 			InitialState: laneguard.DirectState{
-				CustomerKeyHash: controlplane.UnownedCustomerKeyHash, EEPROMHash: testDigest("a"),
+				CustomerKeyHash:  controlplane.UnownedCustomerKeyHash,
+				EEPROMHashStatus: laneguard.EEPROMHashObserved, EEPROMHash: testDigest("a"),
 				SecurityState: "fresh", PowerState: "powered_off",
 			},
 			ApprovalExpiresAt: now.Add(30 * time.Minute),
@@ -92,6 +93,10 @@ func TestWorkflowProducesBridgeCompatibleAuthorityAndAdvancesOnlyAfterEvidence(t
 	}
 	if snapshot.ApprovalID != "" || snapshot.IntentReceipt != "" || snapshot.IntentSequence != 0 {
 		t.Fatalf("draft leaked execution authority: %#v", snapshot)
+	}
+	if snapshot.InitialObservationDigest != fixture.input.ObservationDigest ||
+		transaction.Target == nil || transaction.Target.ObservationDigest != snapshot.InitialObservationDigest {
+		t.Fatalf("draft/control observation binding = %q / %#v", snapshot.InitialObservationDigest, transaction.Target)
 	}
 	wantOperations := campaign.DevelopmentOperations()
 	if len(snapshot.Operations) != len(wantOperations) {
@@ -1246,6 +1251,22 @@ func TestDraftInputAcceptsMaximumExecutableOperationBudget(t *testing.T) {
 	}
 }
 
+func TestDraftInputAcceptsExplicitlyUnavailableFreshEEPROMHash(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	fixture.input.InitialState.EEPROMHashStatus = laneguard.EEPROMHashUnavailable
+	fixture.input.InitialState.EEPROMHash = ""
+	snapshot, transaction, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatalf("PrepareDraft() rejected unavailable fresh EEPROM hash: %v", err)
+	}
+	got := snapshot.Operations[0].ExpectedPrestate
+	if got.EEPROMHashStatus != laneguard.EEPROMHashUnavailable || got.EEPROMHash != "" ||
+		snapshot.InitialObservationDigest != fixture.input.ObservationDigest || transaction.Target == nil ||
+		transaction.Target.ObservationDigest != snapshot.InitialObservationDigest {
+		t.Fatalf("unavailable prestate was not evidence-bound: state=%#v plan=%q target=%#v", got, snapshot.InitialObservationDigest, transaction.Target)
+	}
+}
+
 func TestPrestateDigestIsPolicyDerivedForEveryOperation(t *testing.T) {
 	fixture := newWorkflowFixture(t)
 	snapshot, _, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
@@ -1263,17 +1284,28 @@ func TestPrestateDigestIsPolicyDerivedForEveryOperation(t *testing.T) {
 	if first != draft.InitialPrestateDigest() || !digestPattern.MatchString(first) {
 		t.Fatalf("initial prestate digest = %q", first)
 	}
-	second, err := draft.PrestateDigest(2)
+	commitAttested, err := draft.PrestateDigest(2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second == first {
+	if commitAttested == first {
 		t.Fatal("fresh and owned prestates have the same digest")
 	}
-	for sequence := uint32(3); sequence <= 7; sequence++ {
+	third, err := draft.PrestateDigest(3)
+	if err != nil || third != commitAttested {
+		t.Fatalf("sequence 3 prestate digest = %q, %v; want commit-attested digest %q", third, err, commitAttested)
+	}
+	observed, err := draft.PrestateDigest(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed == commitAttested {
+		t.Fatal("commit-attested and independently observed prestates have the same digest")
+	}
+	for sequence := uint32(5); sequence <= 7; sequence++ {
 		got, err := draft.PrestateDigest(sequence)
-		if err != nil || got != second {
-			t.Fatalf("sequence %d prestate digest = %q, %v; want %q", sequence, got, err, second)
+		if err != nil || got != observed {
+			t.Fatalf("sequence %d prestate digest = %q, %v; want observed digest %q", sequence, got, err, observed)
 		}
 	}
 	for _, sequence := range []uint32{0, 8} {

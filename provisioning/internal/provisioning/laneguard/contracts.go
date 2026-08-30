@@ -17,9 +17,11 @@ import (
 )
 
 const (
-	ContractSchemaVersion           = "provisioning.kaiba.network/lane-guard/v1alpha4"
-	ReconcileRequestSchemaVersion   = "provisioning.kaiba.network/lane-guard-reconcile-request/v1alpha2"
+	ContractSchemaVersion           = "provisioning.kaiba.network/lane-guard/v1alpha5"
+	ReconcileRequestSchemaVersion   = "provisioning.kaiba.network/lane-guard-reconcile-request/v1alpha3"
+	CommitAttestationSchemaVersion  = "provisioning.kaiba.network/fresh-commit-attestation/v1alpha1"
 	ReconciliationObservationBudget = 5 * time.Minute
+	unownedCustomerKeyHash          = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 )
 
 var (
@@ -174,13 +176,61 @@ func fixedChild(value, prefix string) bool {
 	return relative != "" && relative != "." && !strings.Contains(relative, "/")
 }
 
-// DirectState contains only non-secret, directly observable security state.
-// It is comparable so guards can require an exact approved pre/postcondition.
+// EEPROMHashStatus states whether the EEPROM bytes were available to the
+// observation boundary. Unavailable is not a wildcard: it is a precise claim
+// that the fresh target's EEPROM hash could not be observed.
+type EEPROMHashStatus string
+
+const (
+	EEPROMHashObserved       EEPROMHashStatus = "observed"
+	EEPROMHashUnavailable    EEPROMHashStatus = "unavailable"
+	EEPROMHashCommitAttested EEPROMHashStatus = "commit_attested"
+)
+
+// DirectState contains non-secret, evidence-backed security state. The EEPROM
+// status distinguishes a current byte observation from a digest attested by
+// the authoritative fresh-commit response. It is comparable so guards can
+// require an exact approved pre/postcondition.
 type DirectState struct {
-	CustomerKeyHash string `json:"customer_key_hash"`
-	EEPROMHash      string `json:"eeprom_hash"`
-	SecurityState   string `json:"security_state"`
-	PowerState      string `json:"power_state"`
+	CustomerKeyHash  string           `json:"customer_key_hash"`
+	EEPROMHash       string           `json:"eeprom_hash"`
+	EEPROMHashStatus EEPROMHashStatus `json:"eeprom_hash_status"`
+	SecurityState    string           `json:"security_state"`
+	PowerState       string           `json:"power_state"`
+}
+
+// Validate rejects ambiguous direct-state encodings. An unavailable EEPROM
+// hash is an exact statement about the observation boundary, not a wildcard,
+// and must be represented by an empty hash rather than a synthetic digest.
+func (state DirectState) Validate() error {
+	if !digestPattern.MatchString(state.CustomerKeyHash) {
+		return errors.New("direct-state customer key hash must be a canonical sha256 digest")
+	}
+	if state.SecurityState == "" || state.PowerState == "" {
+		return errors.New("direct-state security and power fields must not be empty")
+	}
+	if state.SecurityState == "fresh" && state.CustomerKeyHash != unownedCustomerKeyHash {
+		return errors.New("a fresh direct state must carry the unowned customer key hash")
+	}
+	if state.SecurityState != "fresh" && state.CustomerKeyHash == unownedCustomerKeyHash {
+		return errors.New("an unowned customer key hash must carry the fresh security state")
+	}
+	switch state.EEPROMHashStatus {
+	case EEPROMHashObserved, EEPROMHashCommitAttested:
+		if !digestPattern.MatchString(state.EEPROMHash) {
+			return errors.New("an observed or commit-attested EEPROM hash must be a canonical sha256 digest")
+		}
+		if state.EEPROMHashStatus == EEPROMHashCommitAttested && state.SecurityState != "owned" {
+			return errors.New("a commit-attested EEPROM hash is allowed only for an owned target")
+		}
+	case EEPROMHashUnavailable:
+		if state.EEPROMHash != "" {
+			return errors.New("an unavailable EEPROM hash must be empty")
+		}
+	default:
+		return errors.New("direct-state EEPROM hash status is invalid")
+	}
+	return nil
 }
 
 type Observation struct {
@@ -206,19 +256,20 @@ type OperationSpec struct {
 // Plan is the complete approved operation sequence for one target and fence
 // epoch. Approval and intent receipts are required before it can be loaded.
 type Plan struct {
-	SchemaVersion     string                 `json:"schema_version"`
-	StationID         string                 `json:"station_id"`
-	LaneID            string                 `json:"lane_id"`
-	TransactionID     string                 `json:"transaction_id"`
-	PlanDigest        string                 `json:"plan_digest"`
-	Release           releasebinding.Binding `json:"release"`
-	TargetFingerprint string                 `json:"target_fingerprint"`
-	FenceEpoch        uint64                 `json:"fence_epoch"`
-	ApprovalID        string                 `json:"approval_id"`
-	ApprovalExpiresAt time.Time              `json:"approval_expires_at"`
-	IntentReceipt     string                 `json:"intent_receipt"`
-	IntentSequence    uint32                 `json:"intent_sequence"`
-	Operations        []OperationSpec        `json:"operations"`
+	SchemaVersion            string                 `json:"schema_version"`
+	StationID                string                 `json:"station_id"`
+	LaneID                   string                 `json:"lane_id"`
+	TransactionID            string                 `json:"transaction_id"`
+	PlanDigest               string                 `json:"plan_digest"`
+	Release                  releasebinding.Binding `json:"release"`
+	TargetFingerprint        string                 `json:"target_fingerprint"`
+	InitialObservationDigest string                 `json:"initial_observation_digest"`
+	FenceEpoch               uint64                 `json:"fence_epoch"`
+	ApprovalID               string                 `json:"approval_id"`
+	ApprovalExpiresAt        time.Time              `json:"approval_expires_at"`
+	IntentReceipt            string                 `json:"intent_receipt"`
+	IntentSequence           uint32                 `json:"intent_sequence"`
+	Operations               []OperationSpec        `json:"operations"`
 }
 
 func (plan Plan) Validate(config Config) error {
@@ -249,6 +300,9 @@ func (plan Plan) validate(config Config, requireExecutionLane bool) error {
 	if !identifierPattern.MatchString(plan.TransactionID) || !identifierPattern.MatchString(plan.TargetFingerprint) {
 		return errors.New("plan transaction or target identity is invalid")
 	}
+	if !digestPattern.MatchString(plan.InitialObservationDigest) {
+		return errors.New("plan initial observation digest must be a canonical sha256 digest")
+	}
 	if !digestPattern.MatchString(plan.PlanDigest) {
 		return errors.New("plan digest must be a canonical sha256 digest")
 	}
@@ -273,6 +327,18 @@ func (plan Plan) validate(config Config, requireExecutionLane bool) error {
 	if err := campaign.ValidateDevelopmentOperations(operations); err != nil {
 		return fmt.Errorf("plan operations: %w", err)
 	}
+	initialState := plan.Operations[0].ExpectedPrestate
+	if initialState.SecurityState != "fresh" || initialState.CustomerKeyHash != unownedCustomerKeyHash ||
+		initialState.PowerState != "powered_off" ||
+		(initialState.EEPROMHashStatus != EEPROMHashObserved && initialState.EEPROMHashStatus != EEPROMHashUnavailable) {
+		return errors.New("plan initial state must be a fresh powered-off observed-or-unavailable state")
+	}
+	commitAttestedState := DirectState{
+		CustomerKeyHash: plan.Release.ExpectedCustomerKeyHash, EEPROMHash: plan.Release.ExpectedEEPROMDigest,
+		EEPROMHashStatus: EEPROMHashCommitAttested, SecurityState: "owned", PowerState: "powered_off",
+	}
+	observedOwnedState := commitAttestedState
+	observedOwnedState.EEPROMHashStatus = EEPROMHashObserved
 	if int(plan.IntentSequence) > len(plan.Operations) {
 		return errors.New("plan intent sequence is outside the approved campaign")
 	}
@@ -295,6 +361,12 @@ func (plan Plan) validate(config Config, requireExecutionLane bool) error {
 		if operation.MaximumDuration <= 0 {
 			return errors.New("every operation requires a positive maximum duration")
 		}
+		if err := operation.ExpectedPrestate.Validate(); err != nil {
+			return fmt.Errorf("operation %d prestate: %w", index+1, err)
+		}
+		if err := operation.ExpectedPoststate.Validate(); err != nil {
+			return fmt.Errorf("operation %d poststate: %w", index+1, err)
+		}
 		if index > 0 && operation.ExpectedPrestate != previousPoststate {
 			return errors.New("an operation prestate does not match the preceding postcondition")
 		}
@@ -304,6 +376,18 @@ func (plan Plan) validate(config Config, requireExecutionLane bool) error {
 		}
 		if operation.OperationDigest != derivedDigest {
 			return fmt.Errorf("%w: operation %d", ErrDigestMismatch, index+1)
+		}
+		wantPrestate, wantPoststate := observedOwnedState, observedOwnedState
+		switch index {
+		case 0:
+			wantPrestate, wantPoststate = initialState, commitAttestedState
+		case 1:
+			wantPrestate, wantPoststate = commitAttestedState, commitAttestedState
+		case 2:
+			wantPrestate, wantPoststate = commitAttestedState, observedOwnedState
+		}
+		if operation.ExpectedPrestate != wantPrestate || operation.ExpectedPoststate != wantPoststate {
+			return errors.New("operation EEPROM proof state does not match the fixed commit-attested-to-observed campaign")
 		}
 		previousPoststate = operation.ExpectedPoststate
 	}
@@ -346,23 +430,24 @@ func ValidateReconcileRequest(config Config, plan Plan, request ReconcileRequest
 // ExecuteRequest repeats every security-relevant binding. Physical paths and
 // payload selectors are intentionally not request fields.
 type ExecuteRequest struct {
-	SchemaVersion     string                 `json:"schema_version"`
-	StationID         string                 `json:"station_id"`
-	LaneID            string                 `json:"lane_id"`
-	TransactionID     string                 `json:"transaction_id"`
-	PlanDigest        string                 `json:"plan_digest"`
-	Release           releasebinding.Binding `json:"release"`
-	TargetFingerprint string                 `json:"target_fingerprint"`
-	FenceEpoch        uint64                 `json:"fence_epoch"`
-	ApprovalID        string                 `json:"approval_id"`
-	ApprovalExpiresAt time.Time              `json:"approval_expires_at"`
-	IntentReceipt     string                 `json:"intent_receipt"`
-	Sequence          uint32                 `json:"sequence"`
-	OperationDigest   string                 `json:"operation_digest"`
-	AuthorizationID   string                 `json:"authorization_id"`
-	RequiredBootMode  BootMode               `json:"required_boot_mode"`
-	ExpectedPrestate  DirectState            `json:"expected_prestate"`
-	ClaimExpiresAt    time.Time              `json:"claim_expires_at"`
+	SchemaVersion            string                 `json:"schema_version"`
+	StationID                string                 `json:"station_id"`
+	LaneID                   string                 `json:"lane_id"`
+	TransactionID            string                 `json:"transaction_id"`
+	PlanDigest               string                 `json:"plan_digest"`
+	Release                  releasebinding.Binding `json:"release"`
+	TargetFingerprint        string                 `json:"target_fingerprint"`
+	InitialObservationDigest string                 `json:"initial_observation_digest"`
+	FenceEpoch               uint64                 `json:"fence_epoch"`
+	ApprovalID               string                 `json:"approval_id"`
+	ApprovalExpiresAt        time.Time              `json:"approval_expires_at"`
+	IntentReceipt            string                 `json:"intent_receipt"`
+	Sequence                 uint32                 `json:"sequence"`
+	OperationDigest          string                 `json:"operation_digest"`
+	AuthorizationID          string                 `json:"authorization_id"`
+	RequiredBootMode         BootMode               `json:"required_boot_mode"`
+	ExpectedPrestate         DirectState            `json:"expected_prestate"`
+	ClaimExpiresAt           time.Time              `json:"claim_expires_at"`
 }
 
 // ReconciliationClaim is fresh read-only authority for observing one target
@@ -387,9 +472,41 @@ type ReconcileRequest struct {
 	Claim           ReconciliationClaim `json:"claim"`
 }
 
+// CommitAttestation is the normalized semantic result of the one irreversible
+// fresh-commit payload. Its presence means the adapter parsed the exact target
+// response and verified both mutation success fields. Raw output remains bound
+// separately by OperationResult.OutputDigest.
+type CommitAttestation struct {
+	SchemaVersion             string `json:"schema_version"`
+	TargetFingerprint         string `json:"target_fingerprint"`
+	CustomerKeyHash           string `json:"customer_key_hash"`
+	EEPROMHash                string `json:"eeprom_hash"`
+	EEPROMUpdateResult        string `json:"eeprom_update_result"`
+	SecureBootProvisionResult string `json:"secure_boot_provision_result"`
+}
+
+func (attestation CommitAttestation) IsZero() bool {
+	return attestation == (CommitAttestation{})
+}
+
+func (attestation CommitAttestation) Validate() error {
+	if attestation.SchemaVersion != CommitAttestationSchemaVersion ||
+		!identifierPattern.MatchString(attestation.TargetFingerprint) ||
+		!digestPattern.MatchString(attestation.CustomerKeyHash) ||
+		!digestPattern.MatchString(attestation.EEPROMHash) ||
+		attestation.EEPROMUpdateResult != "success" || attestation.SecureBootProvisionResult != "success" {
+		return errors.New("fresh-commit attestation is malformed or incomplete")
+	}
+	if attestation.CustomerKeyHash == unownedCustomerKeyHash {
+		return errors.New("fresh-commit attestation must contain an owned customer key")
+	}
+	return nil
+}
+
 type OperationResult struct {
-	OutputDigest   string                `json:"output_digest"`
-	BindingDigest  string                `json:"binding_digest"`
-	Detail         string                `json:"detail"`
-	BootTransition BootTransitionOutcome `json:"boot_transition"`
+	OutputDigest      string                `json:"output_digest"`
+	BindingDigest     string                `json:"binding_digest"`
+	Detail            string                `json:"detail"`
+	CommitAttestation CommitAttestation     `json:"commit_attestation"`
+	BootTransition    BootTransitionOutcome `json:"boot_transition"`
 }
