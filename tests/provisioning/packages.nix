@@ -720,16 +720,20 @@ let
     signingPlan = signedBootFinalizerPlan;
     signedOutput = signedBootFinalizerSignedOutput;
   };
-  unfusedCapsulePublicKey = pkgs.writeText "kaiba-unfused-capsule-public.pem" (
-    builtins.readFile ./fixtures/unfused-capsule/public.pem
-  );
-  unfusedCapsulePublicKeyFingerprint = "sha256:38e8d4ee40193ae61d3a7bf99b11d793b9b52ba6308f7e8a01dfc16b5cf1ae63";
+  # Reuse the fixture-only deterministic key below so the unfused capsule's
+  # signature is regenerated for the current secureBootFixtureA instead of
+  # depending on a checked-in signature for an obsolete boot image.  The
+  # public-key fingerprint and customer-key hash remain derived and checked
+  # by productionMediaFixturePublicKey.
+  unfusedCapsulePublicKey = productionMediaFixturePublicKey;
+  unfusedCapsulePublicKeyFingerprint = productionMediaFixturePublicKeyFingerprint;
+  unfusedCapsuleCustomerKeyHash = productionMediaFixtureCustomerKeyHash;
   unfusedCapsuleReleaseIntent = mkTestReleaseIntent {
     name = "kaiba-rpi5-unfused-capsule-release-intent";
     bootImage = "${secureBootFixtureA}/unsigned/boot.img";
     releaseID = "release:rpi5-unfused-capsule-fixture:1";
     publicKeyFingerprint = unfusedCapsulePublicKeyFingerprint;
-    expectedCustomerKeyHash = "sha256:17859aa10d0bd53b6722730f14c4878bfd88005f95d2aea40c8a87e87f3aac48";
+    expectedCustomerKeyHash = "sha256:${unfusedCapsuleCustomerKeyHash}";
     signerPolicyDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     sourceDateEpoch = 1786968000;
   };
@@ -749,16 +753,32 @@ let
         nativeBuildInputs = [
           pkgs.coreutils
           pkgs.jq
+          pkgs.openssl
+          pkgs.python3
+          pkgs.xxd
         ];
       }
       ''
         set -euo pipefail
         export LC_ALL=C
 
+        python3 ${./deterministic-rsa-fixture.py} --private "$TMPDIR/private.pem"
+        openssl pkey -in "$TMPDIR/private.pem" -pubout -out "$TMPDIR/public.pem"
+        cmp "$TMPDIR/public.pem" ${unfusedCapsulePublicKey}
+
         mkdir "$out"
-        install -m 0444 \
-          ${./fixtures/unfused-capsule/boot.sig} \
-          "$out/boot.sig"
+        readonly boot=${secureBootFixtureA}/unsigned/boot.img
+        readonly plan=${unfusedCapsuleSigningPlan}/plan.json
+        readonly image_digest="$(sha256sum "$boot" | cut -d ' ' -f 1)"
+        readonly source_date_epoch="$(jq -er .source_date_epoch "$plan")"
+        openssl dgst -sha256 -sign "$TMPDIR/private.pem" "$boot" \
+          > "$TMPDIR/signature.bin"
+        test "$(stat --format=%s "$TMPDIR/signature.bin")" -eq 256
+        printf '%s\nts: %s\nrsa2048: %s\n' \
+          "$image_digest" \
+          "$source_date_epoch" \
+          "$(xxd -p -c 4096 "$TMPDIR/signature.bin")" \
+          > "$out/boot.sig"
         canonical_plan="$(cat ${unfusedCapsuleSigningPlan}/plan.json)"
         plan_digest="sha256:$({
           printf '%s\0' 'kaiba.provisioning.rpi5-boot-signing-plan.v1alpha2'
@@ -807,7 +827,7 @@ let
             gate_receipt_digest: $gate_receipt_digest,
             source_date_epoch: $source_date_epoch
           }' > "$out/signing-result.json"
-        chmod 0444 "$out/signing-result.json"
+        chmod 0444 "$out/boot.sig" "$out/signing-result.json"
       '';
   unfusedCapsuleVerifiedSignedBoot = built.mkRpi5VerifiedSignedBoot {
     name = "kaiba-rpi5-unfused-capsule-verified-signed-boot-fixture";
