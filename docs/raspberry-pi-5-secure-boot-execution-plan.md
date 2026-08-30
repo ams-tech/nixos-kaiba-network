@@ -985,9 +985,10 @@ powered until the operator disconnects it.
 For the authorized sacrificial-development manual lane, the previously cut
 VBUS/data-only cable is forbidden for RPIBOOT because it cannot establish
 target power. RPIBOOT uses one pre-qualified intact power-and-data path through
-a compliant externally powered USB 3 hub, or another separately reviewed
-source that supplies at least the 900 mA RPIBOOT power budget without
-brownout, as the target's sole power and data source; the normal PSU is absent.
+a Raspberry Pi Powered USB Hub (the upstream `usbboot` recommendation), or
+another separately reviewed USB 3 source capable of supplying at least 900 mA
+without brownout, as the target's sole power and data source; the normal PSU is
+absent.
 Qualify that path under load before an OTP-capable run. Any undervoltage, USB
 reset, target disappearance, or other brownout symptom is a stop condition,
 and an unqualified or marginal source must not be used for OTP. Normal signed

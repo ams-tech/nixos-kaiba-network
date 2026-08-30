@@ -93,10 +93,11 @@ terminal references preserve the power mode and closed safe-off basis, using
 `unproven` when disconnection plus USB absence was not established. The
 previously cut VBUS/data-only cable is not a manual RPIBOOT power path. Before
 any OTP-capable run, use and load-qualify an intact power-and-data path through
-a compliant externally powered USB 3 hub, or another reviewed source that can
-supply at least the 900 mA RPIBOOT budget without brownout, with the normal Pi
-PSU absent. Undervoltage, USB reset, or target disappearance is a stop
-condition; an unqualified or marginal source does not authorize OTP. The
+a Raspberry Pi Powered USB Hub (the upstream `usbboot` recommendation), or
+another reviewed USB 3 source capable of supplying at least 900 mA without
+brownout, with the normal Pi PSU absent. Undervoltage, USB reset, or target
+disappearance is a stop condition; an unqualified or marginal source does not
+authorize OTP. The
 module uses the NixOS setgid security-wrapper boundary and a native fixed-argv
 launcher to enter that authenticated GID and supply the module-owned socket to
 the constrained client. A shell launcher is deliberately not used because it

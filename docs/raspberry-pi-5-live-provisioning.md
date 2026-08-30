@@ -1252,10 +1252,10 @@ power source at a time:
 
 - for RPIBOOT, the previously cut VBUS/data-only USB cable is forbidden because
   it cannot establish target power. Use a pre-qualified intact power-and-data
-  USB path through a compliant externally powered USB 3 hub, or another
-  separately reviewed source that supplies at least the 900 mA RPIBOOT power
-  budget without brownout. This path is the target's sole power and data
-  source, and the normal target PSU is absent;
+  USB path through a Raspberry Pi Powered USB Hub (the upstream `usbboot`
+  recommendation), or another separately reviewed USB 3 source capable of
+  supplying at least 900 mA without brownout. This path is the target's sole
+  power and data source, and the normal target PSU is absent;
 - for normal signed NVMe boot, remove the provisioning USB cable completely and
   use the target's normal PSU as its sole power source; and
 - connect UART ground and target TX to adapter RX only for this receive-only
