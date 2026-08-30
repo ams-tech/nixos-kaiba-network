@@ -128,7 +128,14 @@ let
         fail "$gpio_link did not resolve to one canonical gpiochip device"
       [[ -c "$gpio_chip" ]] || fail "$gpio_chip is not a character device"
 
-      sysfs_chip="/sys/class/gpio/''${gpio_chip##*/}"
+      gpio_chip_name="''${gpio_chip##*/}"
+      gpio_chip_id="''${gpio_chip_name#gpiochip}"
+      [[ "$gpio_chip_id" =~ ^[0-9]+$ ]] || \
+        fail "$gpio_chip has an invalid character-device ID"
+      # gpiochip<N> in the legacy sysfs namespace uses the deprecated global
+      # GPIO base and does not identify /dev/gpiochip<N>. The chip<N>
+      # extended-sysfs namespace uses the character-device ID.
+      sysfs_chip="/sys/class/gpio/chip$gpio_chip_id"
       [[ -r "$sysfs_chip/label" ]] || fail "GPIO controller label is unreadable"
       IFS= read -r gpio_label < "$sysfs_chip/label"
       [[ "$gpio_label" == pinctrl-rp1 ]] || \
@@ -283,9 +290,13 @@ in
       # Development bench access to the Pi 5 RP1 header controller only. The
       # standard Raspberry Pi rules grant every gpiochip to group gpio; keep
       # provisioner out of that group and replace the matching RP1 device's
-      # group with this narrower role. GPIO character-device access includes
-      # line-control authority even when the immediate task is inspection.
-      ACTION!="remove", SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", ATTR{label}=="pinctrl-rp1", OWNER:="root", GROUP:="${relayGPIOGroup}", MODE:="0660", SYMLINK+="gpiochip-kaiba-rp1"
+      # group with this narrower role. Match the already-bound parent driver:
+      # gpiolib emits the gpiochip add event before it creates the label sysfs
+      # attribute, so ATTR{label} cannot reliably match that event. The
+      # inventory helper independently verifies the label after enumeration.
+      # GPIO character-device access includes line-control authority even when
+      # the immediate task is inspection.
+      ACTION!="remove", SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", DRIVERS=="pinctrl-rp1", OWNER:="root", GROUP:="${relayGPIOGroup}", MODE:="0660", SYMLINK+="gpiochip-kaiba-rp1"
     '';
   };
 

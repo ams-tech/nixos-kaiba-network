@@ -9,7 +9,7 @@
 let
   privateDirectory = "/var/lib/kaiba-hardware-qual/private";
   relayGPIOGroup = "kaiba-relay-gpio";
-  relayGPIOUdevRule = ''ACTION!="remove", SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", ATTR{label}=="pinctrl-rp1", OWNER:="root", GROUP:="${relayGPIOGroup}", MODE:="0660", SYMLINK+="gpiochip-kaiba-rp1"'';
+  relayGPIOUdevRule = ''ACTION!="remove", SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", DRIVERS=="pinctrl-rp1", OWNER:="root", GROUP:="${relayGPIOGroup}", MODE:="0660", SYMLINK+="gpiochip-kaiba-rp1"'';
   expectedProfilePath = "${kaibaProvisionPackage}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json";
   expectedQualificationSchemaPath = "${kaibaProvisionPackage}/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json";
   systemPackageNames = map lib.getName imageConfig.environment.systemPackages;
@@ -60,6 +60,7 @@ let
     && builtins.elem relayGPIOGroup imageConfig.users.users.provisioner.extraGroups
     && !(builtins.elem "gpio" imageConfig.users.users.provisioner.extraGroups)
     && lib.hasInfix relayGPIOUdevRule imageConfig.services.udev.extraRules
+    && !(lib.hasInfix ''ATTR{label}=="pinctrl-rp1"'' imageConfig.services.udev.extraRules)
     && lib.hasInfix "Relay GPIO inventory: kaiba-relay-gpio-inventory" imageConfig.environment.etc.issue.text;
 
   accessContract =

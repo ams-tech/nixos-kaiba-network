@@ -24,9 +24,9 @@ The image provides:
 - access to exactly USB `0a5c:2712` for the `kaiba-provision` operator group;
 - `gpiodetect`, `gpioinfo`, and `gpioset`, plus
   `kaiba-relay-gpio-inventory`, for the development relay bench;
-- access to only the gpiochip whose kernel label is exactly `pinctrl-rp1`, via
-  the `kaiba-relay-gpio` operator group and stable
-  `/dev/gpiochip-kaiba-rp1` alias;
+- access to only the gpiochip whose bound parent driver and post-enumeration
+  kernel label are exactly `pinctrl-rp1`, via the `kaiba-relay-gpio` operator
+  group and stable `/dev/gpiochip-kaiba-rp1` alias;
 - the `provisioner` physical-console account, with no `sudo`, Nix daemon, or
   runtime configuration-switching or first-boot Nix-store registration
   authority;
@@ -75,11 +75,17 @@ terminals disconnected for the first boot. Then run:
 kaiba-relay-gpio-inventory
 ```
 
-The command resolves the kernel-numbered gpiochip through the stable alias,
-requires the exact `pinctrl-rp1` label and operator access, prints the resolved
-`/dev/gpiochipN`, and reports only candidate relay lines 4, 6, 22, and 26. Bare
+The udev rule matches the already-bound `pinctrl-rp1` parent driver because the
+kernel emits the gpiochip add event before publishing the chip's `label`
+attribute. The command then resolves the kernel-numbered gpiochip through the
+stable alias, requires the exact post-enumeration `pinctrl-rp1` label and
+operator access, prints the resolved `/dev/gpiochipN`, and reports only
+candidate relay lines 4, 6, 22, and 26. Bare
 `gpiodetect` may also inspect unrelated SoC gpiochips for which `provisioner`
 deliberately has no access, so use the fixed inventory command for this image.
+The helper validates `/dev/gpiochipN` through `/sys/class/gpio/chipN`; the
+similarly named legacy `/sys/class/gpio/gpiochipM` uses a deprecated global
+GPIO base, so `M` is not the character-device number.
 Do not connect a target load until the selected active-high line has passed
 power-up, process-exit, reboot, and station-power-loss release tests with the
 normally-open contact.
