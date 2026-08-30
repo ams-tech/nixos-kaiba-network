@@ -501,11 +501,7 @@ in
             (utils.escapeSystemdExecArgs gpioInactiveArgs)
           ];
           ExecStart = utils.escapeSystemdExecArgs args;
-          ExecStopPost =
-            if relayPowerControl then
-              utils.escapeSystemdExecArgs gpioInactiveArgs
-            else
-              [ ];
+          ExecStopPost = if relayPowerControl then utils.escapeSystemdExecArgs gpioInactiveArgs else [ ];
           StateDirectory = [
             stateDirectory
             "${stateDirectory}/attempts"
@@ -534,12 +530,14 @@ in
           # character-device class is the narrowest cgroup rule with which
           # libusb/rpiboot can operate.
           DevicePolicy = "closed";
-          DeviceAllow = lib.optionals relayPowerControl [
-            "${cfg.gpioChip} rw"
-          ] ++ [
-            "${cfg.uartPath} r"
-            "char-usb_device rw"
-          ];
+          DeviceAllow =
+            lib.optionals relayPowerControl [
+              "${cfg.gpioChip} rw"
+            ]
+            ++ [
+              "${cfg.uartPath} r"
+              "char-usb_device rw"
+            ];
           PrivateDevices = false;
 
           ReadOnlyPaths = [ cfg.draftPath ];
