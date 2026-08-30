@@ -210,24 +210,33 @@ func (fakeDirEntry) Type() fs.FileMode          { return fs.ModeDir }
 func (fakeDirEntry) Info() (fs.FileInfo, error) { return nil, errors.New("unused") }
 
 type fakeGPIO struct {
-	mu         sync.Mutex
-	acquired   int
-	released   int
-	powered    bool
-	on         func()
-	off        func()
-	releaseErr error
+	mu                    sync.Mutex
+	acquired              int
+	released              int
+	powered               bool
+	on                    func()
+	off                   func()
+	acquireErr            error
+	acquireCleanupPending bool
+	releaseErr            error
+	releaseErrorPowersOff bool
 }
 
 func (gpio *fakeGPIO) AcquirePower(context.Context, laneguard.GPIODescriptor) (PowerLease, error) {
 	gpio.mu.Lock()
 	gpio.acquired++
-	gpio.powered = true
+	acquireErr := gpio.acquireErr
+	cleanupPending := acquireErr != nil && gpio.acquireCleanupPending
+	powered := acquireErr == nil || cleanupPending
+	gpio.powered = powered
 	gpio.mu.Unlock()
-	if gpio.on != nil {
+	if powered && gpio.on != nil {
 		gpio.on()
 	}
-	return &fakePowerLease{gpio: gpio}, nil
+	if acquireErr != nil && !cleanupPending {
+		return nil, acquireErr
+	}
+	return &fakePowerLease{gpio: gpio}, acquireErr
 }
 
 func (gpio *fakeGPIO) state() (int, int, bool) {
@@ -245,14 +254,19 @@ func (lease *fakePowerLease) Release() error {
 	if lease.released {
 		return nil
 	}
-	lease.released = true
 	lease.gpio.mu.Lock()
 	lease.gpio.released++
-	lease.gpio.powered = false
 	err := lease.gpio.releaseErr
+	electricallyOff := err == nil || lease.gpio.releaseErrorPowersOff
+	if electricallyOff {
+		lease.gpio.powered = false
+	}
 	lease.gpio.mu.Unlock()
-	if lease.gpio.off != nil {
+	if electricallyOff && lease.gpio.off != nil {
 		lease.gpio.off()
+	}
+	if err == nil {
+		lease.released = true
 	}
 	return err
 }
@@ -845,6 +859,7 @@ func TestRelayReleaseErrorQuarantinesEvenWhenUSBDisappears(t *testing.T) {
 	environment.gpio.on = func() { environment.filesystem.set(exactTarget()) }
 	environment.gpio.off = func() { environment.filesystem.set(map[string][2]string{}) }
 	environment.gpio.releaseErr = errors.New("relay release acknowledgement failed")
+	environment.gpio.releaseErrorPowersOff = true
 	action := testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM)
 	observation, err := environment.adapter.Observe(context.Background(), environment.lane, action)
 	if err == nil || observation.BootTransition.Reference.Status != laneguard.BootTransitionQuarantined ||
@@ -852,6 +867,78 @@ func TestRelayReleaseErrorQuarantinesEvenWhenUSBDisappears(t *testing.T) {
 		t.Fatalf("relay release failure = %#v, %v", observation.BootTransition, err)
 	}
 	assertOutcomeEqualsJournal(t, environment.journal, observation.BootTransition, action)
+}
+
+func TestReleasePowerRetainsFailedLeaseForInactiveRetry(t *testing.T) {
+	environment := newEnvironment(t, ModeFresh)
+	if err := environment.adapter.ensurePower(context.Background(), environment.lane.PowerGPIO); err != nil {
+		t.Fatalf("acquire relay: %v", err)
+	}
+	environment.gpio.releaseErr = errors.New("inactive transition failed")
+	if err := environment.adapter.releasePower(); err == nil {
+		t.Fatal("failed inactive transition was accepted")
+	}
+	if environment.adapter.power == nil {
+		t.Fatal("failed relay lease was discarded before an inactive retry")
+	}
+	acquired, released, powered := environment.gpio.state()
+	if acquired != 1 || released != 1 || !powered {
+		t.Fatalf("failed release state acquired=%d released=%d powered=%t", acquired, released, powered)
+	}
+
+	environment.gpio.releaseErr = nil
+	if err := environment.adapter.releasePower(); err != nil {
+		t.Fatalf("retry inactive transition: %v", err)
+	}
+	if environment.adapter.power != nil {
+		t.Fatal("successfully released relay lease was retained")
+	}
+	acquired, released, powered = environment.gpio.state()
+	if acquired != 1 || released != 2 || powered {
+		t.Fatalf("retried release state acquired=%d released=%d powered=%t", acquired, released, powered)
+	}
+}
+
+func TestEnsurePowerRetainsCleanupPendingAcquireLease(t *testing.T) {
+	environment := newEnvironment(t, ModeFresh)
+	environment.gpio.acquireErr = errors.New("acquisition acknowledgement failed")
+	environment.gpio.acquireCleanupPending = true
+	if err := environment.adapter.ensurePower(context.Background(), environment.lane.PowerGPIO); err == nil {
+		t.Fatal("cleanup-pending acquisition failure was accepted")
+	}
+	if environment.adapter.power == nil {
+		t.Fatal("cleanup-pending acquisition lease was discarded")
+	}
+	acquired, released, powered := environment.gpio.state()
+	if acquired != 1 || released != 0 || !powered {
+		t.Fatalf("pending acquisition state acquired=%d released=%d powered=%t", acquired, released, powered)
+	}
+
+	if err := environment.adapter.releasePower(); err != nil {
+		t.Fatalf("retry acquisition cleanup: %v", err)
+	}
+	if environment.adapter.power != nil {
+		t.Fatal("completed acquisition cleanup lease was retained")
+	}
+	acquired, released, powered = environment.gpio.state()
+	if acquired != 1 || released != 1 || powered {
+		t.Fatalf("cleaned acquisition state acquired=%d released=%d powered=%t", acquired, released, powered)
+	}
+}
+
+func TestEnsurePowerDoesNotRetainCleanedAcquireFailure(t *testing.T) {
+	environment := newEnvironment(t, ModeFresh)
+	environment.gpio.acquireErr = errors.New("acquisition failed after inactive cleanup")
+	if err := environment.adapter.ensurePower(context.Background(), environment.lane.PowerGPIO); err == nil {
+		t.Fatal("cleaned acquisition failure was accepted")
+	}
+	if environment.adapter.power != nil {
+		t.Fatal("fully cleaned acquisition failure retained a lease")
+	}
+	acquired, released, powered := environment.gpio.state()
+	if acquired != 1 || released != 0 || powered {
+		t.Fatalf("cleaned acquisition state acquired=%d released=%d powered=%t", acquired, released, powered)
+	}
 }
 
 func TestSafeOffRequiresFixedSysfsNodeDisappearance(t *testing.T) {

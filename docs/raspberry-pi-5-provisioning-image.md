@@ -86,6 +86,12 @@ deliberately has no access, so use the fixed inventory command for this image.
 The helper validates `/dev/gpiochipN` through `/sys/class/gpio/chipN`; the
 similarly named legacy `/sys/class/gpio/gpiochipM` uses a deprecated global
 GPIO base, so `M` is not the character-device number.
+The image also enables the Raspberry Pi `strict_gpiod` base-DT parameter and
+the helper refuses to proceed unless the live RP1 driver reports
+`persist_gpio_outputs=N`. Without that setting, the downstream Raspberry Pi
+kernel may leave an asserted output electrically high after `gpioset` exits.
+Strict release returns the line to an input; it does not replace the qualified
+relay HAT's physical normally-off bias.
 Do not connect a target load until the selected active-high line has passed
 power-up, process-exit, reboot, and station-power-loss release tests with the
 normally-open contact.

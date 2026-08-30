@@ -30,6 +30,7 @@ let
   stateDirectory = "kaiba-provision-lane-guard";
   stateRoot = "/var/lib/${stateDirectory}";
   attemptDirectory = "${stateRoot}/attempts";
+  gpioPersistenceParameter = "/sys/module/pinctrl_rp1/parameters/persist_gpio_outputs";
   defaultOperatorPackage = (import ../packages.nix { inherit pkgs lib; }).laneOperator;
   # This source must be a native executable: shells intentionally drop an
   # inherited setgid identity unless privileged mode is requested. The NixOS
@@ -75,6 +76,35 @@ let
     cfg.journalPath
     cfg.draftPath
   ];
+
+  gpioSetPackage =
+    if cfg.package == null then null else cfg.package.kaibaPhysicalLaneGuard.gpioSet or null;
+  gpioReleasePolicyCheckArgs = [
+    (getExe' pkgs.gnugrep "grep")
+    "--fixed-strings"
+    "--line-regexp"
+    "N"
+    gpioPersistenceParameter
+  ];
+  gpioInactiveArgs =
+    if gpioSetPackage == null then
+      [ ]
+    else
+      [
+        "${gpioSetPackage}/bin/gpioset"
+        "--chip"
+        cfg.gpioChip
+        "--consumer"
+        "kaiba-provision-lane-guard-inactive"
+      ]
+      ++ optional cfg.gpioActiveLow "--active-low"
+      ++ [
+        "--hold-period"
+        "100ms"
+        "--toggle"
+        "0"
+        "${toString cfg.gpioOffset}=0"
+      ];
 
   isCleanStatePath =
     path:
@@ -311,6 +341,20 @@ in
           assertion =
             cfg.package == null
             || (
+              gpioSetPackage != null
+              && lib.isDerivation gpioSetPackage
+              && hasPrefix "${builtins.storeDir}/" (toString gpioSetPackage)
+            );
+          message = ''
+            services.kaiba-provisioning-lane-guard.package must bind the exact
+            immutable libgpiod package used for active and inactive relay
+            control.
+          '';
+        }
+        {
+          assertion =
+            cfg.package == null
+            || (
               let
                 contract = cfg.package.kaibaPhysicalLaneGuard or { };
                 release = contract.verifiedSignedRelease or null;
@@ -421,7 +465,17 @@ in
           User = "root";
           Group = operatorGroup;
           SupplementaryGroups = optional cfg.enableMutations bridgeClientGroup;
+          # Refuse to energize a relay on Raspberry Pi kernels that retain an
+          # output after its character-device owner exits. Also establish
+          # logical inactive before startup and after every main-process exit,
+          # including abnormal termination. The Go adapter independently
+          # drives inactive during its normal release path.
+          ExecStartPre = [
+            (utils.escapeSystemdExecArgs gpioReleasePolicyCheckArgs)
+            (utils.escapeSystemdExecArgs gpioInactiveArgs)
+          ];
           ExecStart = utils.escapeSystemdExecArgs args;
+          ExecStopPost = utils.escapeSystemdExecArgs gpioInactiveArgs;
           StateDirectory = [
             stateDirectory
             "${stateDirectory}/attempts"

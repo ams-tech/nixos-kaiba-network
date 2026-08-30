@@ -1177,6 +1177,13 @@ that removing lane power removes *all* target power, including back-power from
 UART or USB. Confirm that UART ground and voltage levels are correct for the
 Pi. A relay transition is not accepted as proof of power removal; the lane
 guard must observe target disappearance and the configured cold interval.
+The station must boot with Raspberry Pi `strict_gpiod` enabled and must expose
+`/sys/module/pinctrl_rp1/parameters/persist_gpio_outputs` as exactly `N`.
+The lane unit refuses startup otherwise, drives logical inactive before its
+main process, drives inactive again after every exit, and the adapter drives
+inactive during normal lease release. Returning a released line to an input is
+still only one layer: the qualified active-high relay input needs a physical
+normally-off bias and the target must use the relay's normally-open contact.
 
 ## Transaction sequence
 

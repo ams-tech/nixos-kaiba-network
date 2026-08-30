@@ -13,6 +13,9 @@ let
   expectedProfilePath = "${kaibaProvisionPackage}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json";
   expectedQualificationSchemaPath = "${kaibaProvisionPackage}/share/kaiba/schemas/rpi5-hardware-qualification-v1alpha1.schema.json";
   systemPackageNames = map lib.getName imageConfig.environment.systemPackages;
+  relayGPIOInventoryPackage = lib.findFirst (
+    package: lib.getName package == "kaiba-relay-gpio-inventory"
+  ) (throw "relay GPIO inventory package is absent") imageConfig.environment.systemPackages;
   forbiddenTargetMutationPackages = [
     "cryptsetup"
     "ddrescue"
@@ -61,6 +64,9 @@ let
     && !(builtins.elem "gpio" imageConfig.users.users.provisioner.extraGroups)
     && lib.hasInfix relayGPIOUdevRule imageConfig.services.udev.extraRules
     && !(lib.hasInfix ''ATTR{label}=="pinctrl-rp1"'' imageConfig.services.udev.extraRules)
+    && imageConfig.hardware.raspberry-pi.config.all.base-dt-params.strict_gpiod.enable
+    && imageConfig.hardware.raspberry-pi.config.all.base-dt-params.strict_gpiod.value == null
+    && lib.hasInfix "dtparam=strict_gpiod" imageConfig.hardware.raspberry-pi.config-generated
     && lib.hasInfix "Relay GPIO inventory: kaiba-relay-gpio-inventory" imageConfig.environment.etc.issue.text;
 
   accessContract =
@@ -181,6 +187,10 @@ pkgs.runCommand "kaiba-rpi5-provisioning-image-evaluation" { } ''
   test -x ${pkgs.libgpiod}/bin/gpiodetect
   test -x ${pkgs.libgpiod}/bin/gpioinfo
   test -x ${pkgs.libgpiod}/bin/gpioset
+  grep -F '/sys/module/pinctrl_rp1/parameters/persist_gpio_outputs' \
+    ${relayGPIOInventoryPackage}/bin/kaiba-relay-gpio-inventory >/dev/null
+  grep -F 'KAIBA_RP1_GPIO_RELEASE_MODE=strict' \
+    ${relayGPIOInventoryPackage}/bin/kaiba-relay-gpio-inventory >/dev/null
 
   mkdir -p "$out"
   printf '%s\n' \

@@ -287,6 +287,13 @@ let
     };
   };
 
+  provisioningLaneGuardActiveLow = lib.recursiveUpdate provisioningLaneGuard {
+    services.kaiba-provisioning-lane-guard = {
+      gpioActiveLow = true;
+      gpioOffset = 22;
+    };
+  };
+
   duplicateLaneGuardOperators = lib.recursiveUpdate provisioningLaneGuard {
     services.kaiba-provisioning-lane-guard.operators = [
       "provisioner"
@@ -419,6 +426,7 @@ let
   stationDemoIPv6Config = evaluateConfig provisioningStationDemoIPv6;
   secureBootTargetConfig = evaluateConfig secureBootTarget;
   laneGuardConfig = evaluateConfig provisioningLaneGuard;
+  laneGuardActiveLowConfig = evaluateConfig provisioningLaneGuardActiveLow;
   laneGuardMutatingConfig = evaluateConfig provisioningLaneGuardMutating;
   laneGuardMutatingCustomSocketConfig = evaluateConfig provisioningLaneGuardMutatingCustomSocket;
   laneGuardReconcileConfig = evaluateConfig provisioningLaneGuardReconcile;
@@ -438,6 +446,8 @@ let
   authorityBridgeService =
     authorityBridgeConfig.systemd.services.kaiba-provisioning-authority-bridge.serviceConfig;
   laneGuardService = laneGuardConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
+  laneGuardActiveLowService =
+    laneGuardActiveLowConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
   laneGuardMutatingService =
     laneGuardMutatingConfig.systemd.services.kaiba-provisioning-lane-guard.serviceConfig;
   laneGuardMutatingCustomSocketService =
@@ -655,6 +665,22 @@ let
     && builtins.elem "d /var/lib/kaiba-provision-lane-guard/attempts 0700 root kaiba-provision-operator -" laneGuardConfig.systemd.tmpfiles.rules
     && laneGuardService.TimeoutStartSec == "65min"
     && laneGuardService.TimeoutStopSec == "45s"
+    && builtins.length laneGuardService.ExecStartPre == 2
+    && lib.hasInfix "/sys/module/pinctrl_rp1/parameters/persist_gpio_outputs" (
+      builtins.elemAt laneGuardService.ExecStartPre 0
+    )
+    && lib.hasInfix ''"--fixed-strings" "--line-regexp" "N"'' (
+      builtins.elemAt laneGuardService.ExecStartPre 0
+    )
+    && lib.hasInfix ''"--chip" "/dev/gpiochip0"'' (builtins.elemAt laneGuardService.ExecStartPre 1)
+    && lib.hasInfix ''"--consumer" "kaiba-provision-lane-guard-inactive"'' (
+      builtins.elemAt laneGuardService.ExecStartPre 1
+    )
+    && lib.hasInfix ''"--hold-period" "100ms" "--toggle" "0" "0=0"'' (
+      builtins.elemAt laneGuardService.ExecStartPre 1
+    )
+    && laneGuardService.ExecStopPost == builtins.elemAt laneGuardService.ExecStartPre 1
+    && lib.hasInfix ''"--active-low" "--hold-period" "100ms" "--toggle" "0" "22=0"'' laneGuardActiveLowService.ExecStopPost
     && laneGuardService.DevicePolicy == "closed"
     && builtins.elem "/dev/gpiochip0 rw" laneGuardService.DeviceAllow
     && builtins.elem "/dev/serial/by-id/kaiba-target-uart r" laneGuardService.DeviceAllow

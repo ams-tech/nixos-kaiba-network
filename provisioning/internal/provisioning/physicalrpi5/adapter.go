@@ -1012,10 +1012,17 @@ func (adapter *Adapter) ensurePower(ctx context.Context, descriptor laneguard.GP
 	commandCtx, cancel := context.WithTimeout(ctx, adapter.config.CommandTimeout)
 	defer cancel()
 	lease, err := adapter.gpio.AcquirePower(commandCtx, descriptor)
+	if lease != nil {
+		// A lease returned with an acquisition error owns cleanup that is still
+		// pending. Retain it so failTransition or Close can retry inactive.
+		adapter.power = lease
+	}
 	if err != nil {
 		return err
 	}
-	adapter.power = lease
+	if lease == nil {
+		return errors.New("GPIO acquisition succeeded without a power lease")
+	}
 	return nil
 }
 
@@ -1023,11 +1030,10 @@ func (adapter *Adapter) releasePower() error {
 	if adapter.power == nil {
 		return nil
 	}
-	lease := adapter.power
-	adapter.power = nil
-	if err := lease.Release(); err != nil {
+	if err := adapter.power.Release(); err != nil {
 		return fmt.Errorf("release normally-off power relay: %w", err)
 	}
+	adapter.power = nil
 	return nil
 }
 

@@ -946,6 +946,14 @@ manual mechanism passes the same live acceptance tests. All current GPIO, USB,
 UART, power, timeout, cancellation, restart, and safe-off results are simulated
 or fake-backed software evidence, not physical qualification.
 
+The lane unit now refuses to start unless the RP1 driver reports
+`persist_gpio_outputs=N`, then uses its release-bound immutable `gpioset` to
+establish logical inactive both before the guard and after every guard exit.
+The adapter separately drives logical inactive during normal release instead
+of treating process termination as an electrical transition. These software
+controls do not replace a physical pull-down, normally-open contacts, or the
+live fail-off and back-power campaign below.
+
 ### Deliverables
 
 - [x] Bind a closed `required_boot_mode` policy into each operation, execute

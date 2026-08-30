@@ -72,6 +72,10 @@ The `provisioning-lane-guard` module installs only the fixed, no-argument
 `kaiba-provision-lane-acknowledge` wrapper, creates the
 `kaiba-provision-operator` group, fixes every device and socket path in the root
 one-shot unit, and leaves that unit without an automatic start target. The
+unit refuses to run unless the Raspberry Pi RP1 driver has output persistence
+disabled, and it invokes the release-bound immutable GPIO setter at logical
+inactive before startup and after every exit. The physical relay still requires
+a qualified normally-off bias and normally-open contacts. The
 module uses the NixOS setgid security-wrapper boundary and a native fixed-argv
 launcher to enter that authenticated GID and supply the module-owned socket to
 the constrained client. A shell launcher is deliberately not used because it

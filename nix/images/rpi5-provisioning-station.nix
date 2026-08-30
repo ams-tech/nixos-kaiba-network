@@ -16,6 +16,7 @@ let
   privateDirectory = "/var/lib/kaiba-hardware-qual/private";
   relayGPIOGroup = "kaiba-relay-gpio";
   relayGPIOPath = "/dev/gpiochip-kaiba-rp1";
+  relayGPIOPersistenceParameter = "/sys/module/pinctrl_rp1/parameters/persist_gpio_outputs";
   # Custom share trees are not guaranteed to appear in the NixOS system path.
   # Keep qualification inputs bound to the same immutable package as the tool.
   profilePath = "${kaibaProvisionPackage}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json";
@@ -121,7 +122,14 @@ let
       }
 
       readonly gpio_link=${lib.escapeShellArg relayGPIOPath}
+      readonly persistence_parameter=${lib.escapeShellArg relayGPIOPersistenceParameter}
       [[ -L "$gpio_link" ]] || fail "$gpio_link is absent"
+
+      [[ -r "$persistence_parameter" ]] || \
+        fail "RP1 GPIO release policy is unreadable"
+      IFS= read -r persist_gpio_outputs < "$persistence_parameter"
+      [[ "$persist_gpio_outputs" == N ]] || \
+        fail "RP1 GPIO outputs persist after process exit"
 
       gpio_chip="$(readlink -f -- "$gpio_link")"
       [[ "$gpio_chip" =~ ^/dev/gpiochip[0-9]+$ ]] || \
@@ -144,6 +152,7 @@ let
         fail "$gpio_chip is not accessible to the current operator"
 
       printf 'KAIBA_RP1_GPIO_CHIP=%s\n' "$gpio_chip"
+      printf 'KAIBA_RP1_GPIO_RELEASE_MODE=strict\n'
       gpiodetect "$gpio_link"
       gpioinfo --chip "$gpio_link" 4 6 22 26
     '';
@@ -185,7 +194,14 @@ in
     useNetworkd = true;
   };
 
-  hardware.enableAllHardware = lib.mkForce false;
+  hardware = {
+    enableAllHardware = lib.mkForce false;
+    # Raspberry Pi kernels otherwise deliberately retain an output level after
+    # the owning GPIO character-device process exits. Relay control must fail
+    # back to an input when its line holder terminates; the qualified HAT then
+    # supplies the physical normally-off bias.
+    raspberry-pi.config.all.base-dt-params.strict_gpiod.enable = true;
+  };
 
   boot = {
     loader.raspberry-pi.bootloader = "kernel";
