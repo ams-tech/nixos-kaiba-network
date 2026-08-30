@@ -136,7 +136,7 @@ func commandTestPrompt(t *testing.T, lifetime time.Duration) operatorprompt.Prom
 	t.Helper()
 	action := laneguard.HardwareAction{
 		SchemaVersion: laneguard.BootTransitionActionSchemaVersion,
-		StationID:     "station", LaneID: "lane", TransactionID: "transaction",
+		StationID:     "station", LaneID: "lane", PowerControlMode: laneguard.PowerControlRelay, TransactionID: "transaction",
 		PlanDigest: commandDigest("a"), TargetFingerprint: "target", FenceEpoch: 1,
 		ApprovalID: "approval", IntentReceipt: "intent", IntentSequence: 1, Sequence: 1,
 		Operation: laneguard.OperationOwnedReadback, OperationDigest: commandDigest("b"), AuthorizationID: "authorization",

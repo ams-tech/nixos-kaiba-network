@@ -199,7 +199,7 @@ These rules apply to every work item and rehearsal:
 | SB-03 | Complete signed release | In progress | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
 | SB-04 | Target-media staging | In progress | The exact NVMe layout is written and cold-read back with matching digests. |
 | SB-05 | Enforced transaction plan | Complete (software gate) | The fixed operator workflow, control, audit, bridge, compiler, guard, trusted receipts, and Nix service boundary require the complete ordered campaign and verify every plan, approval, intent, attempt, and artifact binding. This status is not live-hardware qualification. |
-| SB-06 | Qualified physical lane | In progress; software complete, live qualification pending | The authenticated manual mode-transition implementation exists, but USB, UART, power, and boot-selection behavior must still pass the combined physical acceptance tests. |
+| SB-06 | Qualified physical lane | In progress; software complete, live qualification pending | The selected fixed relay or sacrificial-development manual power mode, authenticated physical prompts, USB, UART, and boot-selection behavior pass their applicable combined physical acceptance tests without overstating manual fail-off. |
 | SB-07 | Rehearsal and failure campaign | In progress; live drills pending | Automated fake/simulated failure coverage exists, but the non-OTP physical failure-mechanics campaign has not passed. |
 | SB-08 | Sacrificial ownership ceremony | Blocked by SB-01 through SB-07 | One approved one-shot commit completes or the target is quarantined; no retry path exists. |
 | SB-09 | Owned-state acceptance | Blocked by SB-08 | All positive, recovery, negative, root-integrity, and evidence-reconciliation gates pass and the board stops at `security_applied`. |
@@ -649,6 +649,10 @@ shortened campaign from producing `security_applied`.
   `approval_id`, `intent_receipt`, and `intent_sequence` values. Approval and
   durable intent bind the recomputed plan digest in a separate execution
   envelope.
+- [x] Bind the fixed `power_control_mode` into the reviewed draft and canonical
+  plan digest. The independently approved plan, executable request, immutable
+  lane configuration, and every transition action must agree before physical
+  I/O; switching between `relay` and `manual` requires a new approval.
 - [x] Recompute and compare plan and operation digests at the trusted boundary;
   do not accept syntactically valid caller-supplied digests as proof of content.
 - [x] Publish golden digest vectors and mutate every covered field in tests.
@@ -663,7 +667,7 @@ shortened campaign from producing `security_applied`.
   compiler and lane both validate that pair; a root-edited draft cannot replace
   the independently approved digest or durable intent receipt.
 
-The release-bound `v1alpha5` plan and digest contract serializes fixed-order JSON
+The release-bound `v1alpha6` plan and digest contract serializes fixed-order JSON
 structs without whitespace. It deliberately supersedes the earlier pre-release
 contracts rather than changing canonical material under an existing version.
 Operation material contains `sequence`, `operation`,
@@ -687,16 +691,16 @@ confirmed-not-applied or retried.
 `required_boot_mode` is not caller policy: the closed compiler and guard policy
 requires `normal` for `cold_power_cycle` and `rpiboot` for each of the other six
 development operations. Plan material contains `schema_version`, `station_id`,
-`lane_id`, `transaction_id`, the six-field `release` binding,
-`target_fingerprint`, `initial_observation_digest`, `fence_epoch`, canonical
-UTC `approval_expires_at`, and the ordered operation digests freshly derived
-from their bodies; it excludes
+`lane_id`, `transaction_id`, `power_control_mode`, the six-field `release`
+binding, `target_fingerprint`, `initial_observation_digest`, `fence_epoch`,
+canonical UTC `approval_expires_at`, and the ordered operation digests freshly
+derived from their bodies; it excludes
 `plan_digest`, `approval_id`, `intent_receipt`, and `intent_sequence`. Every
 release-binding field is a canonical lowercase SHA-256 value. The lowercase
 plan SHA-256 value is computed over the ASCII domain, one NUL byte, and the
 JSON bytes. The domains are
 `kaiba.provisioning.lane-guard.operation-digest.v1alpha5` and
-`kaiba.provisioning.lane-guard.plan-digest.v1alpha5`. `LoadPlan` snapshots the
+`kaiba.provisioning.lane-guard.plan-digest.v1alpha6`. `LoadPlan` snapshots the
 caller-owned operation slice, validates this contract and every claimed plan
 and operation digest, and restores durable journal lockout state. It is a
 validation-only boundary and performs no target-facing I/O; `Execute` or
@@ -710,15 +714,16 @@ reconciliation cannot erase it, and persisted approvals fail closed if their
 lifetime exceeds 24 hours.
 
 The execute-once journal now uses the dedicated
-`lane-guard-attempt-store/v1alpha4` envelope,
-`lane-guard-attempt/v1alpha3` records, and current durable boot-transition
+`lane-guard-attempt-store/v1alpha5` envelope,
+`lane-guard-attempt/v1alpha4` records, and current durable boot-transition
 records. Every attempt persists the approval ID, current intent receipt,
 current intent sequence, phase-specific transition evidence, and a terminal
 distinction between verified-applied, confirmed-not-applied, and quarantined
 outcomes. Each terminal attempt is also published at a new digest-derived path
 as a root-owned, mode-0444 trusted receipt; caller-owned copies cannot enter
-the evidence workflow. The `v1alpha5` EEPROM-hash availability and initial
-observation bindings change every operation and plan digest, so older drafts,
+the evidence workflow. The `v1alpha6` plan retains the EEPROM-hash availability
+and initial-observation bindings and additionally binds the power-control mode.
+These fields change the applicable operation or plan digest, so older drafts,
 approvals, intents, requests, and attempts are not reusable.
 
 There is deliberately no in-place journal migration. The current decoder
@@ -919,40 +924,90 @@ terminal classification.
 
 - one stable BCM2712 RPIBOOT USB topology path;
 - one UART adapter selected through `/dev/serial/by-id`;
-- one electrically appropriate, isolated, normally-off target power relay;
-- one fixed GPIO chip and line for that relay; and
+- one fixed power-control mode: an electrically appropriate, isolated,
+  normally-off relay with a fixed GPIO, or the explicitly authorized
+  sacrificial-development manual mode; and
 - a deterministic, directly observed way to select RPIBOOT versus normal boot.
 
-The `v1alpha5` lane contract carries a digest-bound `required_boot_mode`, and
-the sacrificial-development implementation now uses an explicit, durable,
-authenticated manual operator handshake. The guard proves relay release and
-USB absence, persists the requested transition and exact prompt, waits the
-minimum cold interval, and accepts acknowledgement only over its private Unix
-socket from the configured primary operator group. For RPIBOOT it persists the
-hold acknowledgement before power, directly observes exactly one BCM2712 at
-the fixed sysfs path, persists that observation, and then issues a distinct
-BOOTSEL-release prompt. For normal boot it persists the no-action
-acknowledgement and rejects any RPIBOOT enumeration while capturing bounded
-UART evidence. Every phase ends in persisted safe-off evidence or durable
-quarantine when safe-off cannot be proved; restart never resumes an old prompt.
+The `v1alpha6` lane contract carries both the digest-bound closed
+`required_boot_mode` policy and one approved `power_control_mode`. The latter
+must match the immutable lane-service configuration and every execute or
+reconciliation action; a mismatch fails before target-facing I/O. The
+sacrificial-development implementation now uses an explicit, durable,
+authenticated operator handshake. In relay mode the guard releases the relay;
+in manual mode it presents a digest-bound disconnect prompt. It then requires
+USB absence, persists the requested transition and exact evidence, waits the
+minimum cold interval, and accepts acknowledgements only over its private Unix
+socket from the configured primary operator group. For RPIBOOT, relay mode
+persists a hold acknowledgement before relay assertion; manual mode uses a
+combined hold-BOOTSEL and sole-USB-power/data connection prompt. It then
+directly observes exactly one BCM2712 at the fixed sysfs path, persists that
+observation, and issues a distinct BOOTSEL-release prompt. For normal boot,
+relay mode persists a no-action acknowledgement before assertion; manual mode
+arms UART and the USB watcher before its combined no-BOOTSEL and normal-PSU
+connection prompt. Both reject any RPIBOOT enumeration while capturing bounded
+UART evidence. After the relay command or manual connection acknowledgement,
+the state machine persists `power_established` with a closed
+`power_establishment_basis` (`relay_command` or `operator_attestation`) and
+`power_established_at`. The manual timestamp is operator-attested rather than a
+direct observation of an electrical edge. Every phase ends in persisted
+mechanism-aware safe-off evidence or durable quarantine; restart never resumes
+an old prompt. A persisted/configured power-mode mismatch on restart invokes
+neither mechanism; it quarantines with unproven safe-off for external
+inspection. The authority-bound hardware-action contract is
+`boot-transition-action/v1alpha2`. The corresponding durable transition and
+completed-evidence contracts are `boot-transition/v1alpha3` and
+`boot-transition-evidence/v1alpha3`; public terminal references and outcomes
+are `v1alpha2` so failure paths retain the same power provenance needed for
+review. The new manual and relay prompt kinds are closed over both modes by
+`operator-prompt/v1alpha2`.
 
 The NixOS module installs only the fixed no-argument
 `kaiba-provision-lane-acknowledge` wrapper. It enters the authenticated primary
 group and supplies the module-owned socket; the operator cannot select an
-operation, mode, target, physical path, or payload. A fixed
-BOOTSEL/power-button actuator remains in scope as a later station enhancement,
-but is not required before the first sacrificial-board campaign once this
-manual mechanism passes the same live acceptance tests. All current GPIO, USB,
-UART, power, timeout, cancellation, restart, and safe-off results are simulated
-or fake-backed software evidence, not physical qualification.
+operation, mode, target, physical path, power-control mode, or payload. The
+module fixes either the default relay mode or the development-only manual mode
+in the unit configuration. A fixed BOOTSEL/power-button actuator remains in
+scope as a later station enhancement. All current GPIO, USB, UART, power,
+timeout, cancellation, restart, and safe-off results are simulated or
+fake-backed software evidence, not physical qualification.
 
-The lane unit now refuses to start unless the RP1 driver reports
+The relay lane refuses to start unless the RP1 driver reports
 `persist_gpio_outputs=N`, then uses its release-bound immutable `gpioset` to
 establish logical inactive both before the guard and after every guard exit.
 The adapter separately drives logical inactive during normal release instead
 of treating process termination as an electrical transition. These software
 controls do not replace a physical pull-down, normally-open contacts, or the
-live fail-off and back-power campaign below.
+live fail-off and back-power campaign below. Manual mode has no GPIO access and
+no automated fail-off guarantee; process or station failure can leave a target
+powered until the operator disconnects it.
+
+For the authorized sacrificial-development manual lane, the previously cut
+VBUS/data-only cable is forbidden for RPIBOOT because it cannot establish
+target power. RPIBOOT uses one pre-qualified intact power-and-data path through
+a compliant externally powered USB 3 hub, or another separately reviewed
+source that supplies at least the 900 mA RPIBOOT power budget without
+brownout, as the target's sole power and data source; the normal PSU is absent.
+Qualify that path under load before an OTP-capable run. Any undervoltage, USB
+reset, target disappearance, or other brownout symptom is a stop condition,
+and an unqualified or marginal source must not be used for OTP. Normal signed
+NVMe boot uses the normal target PSU only, with the provisioning USB cable
+completely removed. UART is receive-only from the station's perspective:
+target TX and ground are connected, while adapter VCC and adapter TX remain
+disconnected. `power_control_mode: manual` evidence
+contains `power_establishment_basis: operator_attestation`, its generic
+`power_established_at` acknowledgement timestamp, and separate
+`initial_power_off_proof` and `final_safe_off_proof` objects binding the prompt
+ID, digest, expiry, authenticated operator, and acknowledgement time. USB
+absence remains a separate direct topology observation and must not be
+described as direct electrical power measurement, especially during normal
+boot. Completed and failed terminal references retain the power mode,
+establishment basis, proofs obtained, `safe_off_observed_at`, and a closed
+`safe_off_basis`: `relay_inactive_and_usb_absence`,
+`operator_disconnect_and_usb_absence`, or `unproven`. An unproven terminal never
+fabricates a safe-off proof or timestamp. This exception can authorize only the
+reviewed sacrificial development campaign; it cannot support a production-lane,
+automatic emergency-stop, or relay-backed fail-off claim.
 
 ### Deliverables
 
@@ -960,36 +1015,48 @@ live fail-off and back-power campaign below.
   request, operation digest, plan digest, and authenticated bridge response.
   `cold_power_cycle` requires `normal`; the other six operations require
   `rpiboot`. Keep this transient transition out of powered-off `DirectState`.
-- [x] Implement the explicit, durable, authenticated manual
-  BOOTSEL/power-button handshake with bounded prompts and direct software mode
-  observation. Keep a fixed actuator as deferred station automation subject to
-  the same acceptance tests.
+- [x] Bind the selected `power_control_mode` into the reviewed draft, plan
+  digest, approval, intent, execute/reconciliation request, configured lane,
+  transition action, and terminal evidence. Reject any mismatch before I/O.
+- [x] Implement explicit, durable, authenticated BOOTSEL and fixed-power-mode
+  handshakes with bounded prompts and direct software mode observation. Keep a
+  fixed actuator as deferred station automation.
 - [x] Persist the requested transition and directly observed mode evidence with
   each pre-observation, operation result, post-observation, and reconciliation.
 - [x] Publish trusted immutable attempt receipts that bind the completed
   transition evidence, and retain incomplete/recovered/quarantined transition
-  records in the same durable journal.
-- [ ] Qualify the manual handshake, prompt timing, fixed USB path, and direct
-  mode observations on the actual lane.
+  records in the same durable journal. Failed public terminal references retain
+  the mechanism and safe-off basis rather than collapsing to an ambiguous
+  status-only result.
+- [ ] Qualify the selected power-mode handshake, prompt timing, fixed USB path,
+  and direct mode observations on the actual lane.
 - [ ] Prove on the physical rig that a normal-boot operation cannot accidentally
   enter RPIBOOT and that an owned readback or recovery operation cannot
   accidentally normal-boot.
 - [ ] Confirm correct UART voltage, grounding, settings, isolation, and stable
   device identity.
-- [ ] Confirm that relay release removes every target power source, including
-  USB, UART, display, GPIO, and NVMe back-power.
-- [ ] Require observed USB disappearance plus the minimum cold interval; a GPIO
-  transition alone is not evidence of power removal.
+- [ ] In relay mode, confirm release removes every target power source,
+  including USB, UART, display, GPIO, and NVMe back-power. In manual mode,
+  qualify the exact single-source wiring and retain authenticated disconnect
+  attribution without claiming that USB absence is an electrical measurement.
+- [ ] Require observed USB disappearance plus the minimum cold interval; neither
+  a GPIO transition nor an operator acknowledgement alone is direct evidence of
+  complete electrical power removal.
 - [ ] Reject absent, additional, moved, or replaced BCM2712 targets before any
   target-facing operation can execute or reconciliation can advance.
-- [ ] Verify fail-off behavior after process death, station power loss, kernel
-  restart, relay-control loss, and emergency stop.
+- [ ] In relay mode, verify fail-off after process death, station power loss,
+  kernel restart, relay-control loss, and emergency stop. In manual mode, verify
+  that interruption never resumes a prompt or redispatches mutation, requires a
+  new authenticated disconnect before recovery, and preserves the explicit
+  absence of automated fail-off in terminal evidence.
 
 ### Exit criteria
 
 The complete guard-plus-adapter sequence can alternate deterministically
 between RPIBOOT and normal boot without an operator guessing timing or acting
-outside a persisted prompt, target ambiguity, or residual power.
+outside a persisted prompt, target ambiguity, or unrecorded residual-power
+assumption. Manual-mode acceptance remains development-only and cannot close a
+production automated-fail-off requirement.
 
 ## Workstream 7: rehearsal and failure campaign
 

@@ -414,7 +414,7 @@ func (diagnostic *boundedDiagnostic) Write(value []byte) (int, error) {
 // UART captures a bounded byte stream after opening the fixed adapter and
 // before Trigger powers or boots the target.
 type UART interface {
-	Capture(context.Context, string, []byte, int, func() error) ([]byte, error)
+	Capture(context.Context, string, []byte, int, time.Duration, func() error) ([]byte, error)
 }
 
 // FileUART owns the serial settings for the duration of one capture. It fixes
@@ -491,7 +491,10 @@ func raw115200(settings syscall.Termios) syscall.Termios {
 	return settings
 }
 
-func (uart FileUART) Capture(ctx context.Context, path string, marker []byte, maximum int, trigger func() error) (result []byte, resultErr error) {
+func (uart FileUART) Capture(ctx context.Context, path string, marker []byte, maximum int, captureTimeout time.Duration, trigger func() error) (result []byte, resultErr error) {
+	if captureTimeout <= 0 {
+		return nil, errors.New("UART capture timeout must be positive")
+	}
 	device := uart.device
 	if device == nil {
 		device = linuxUARTDevice{}
@@ -523,6 +526,8 @@ func (uart FileUART) Capture(ctx context.Context, path string, marker []byte, ma
 	if err := trigger(); err != nil {
 		return nil, err
 	}
+	captureCtx, cancelCapture := context.WithTimeout(ctx, captureTimeout)
+	defer cancelCapture()
 	interval := uart.PollInterval
 	if interval <= 0 {
 		interval = 10 * time.Millisecond
@@ -545,11 +550,11 @@ func (uart FileUART) Capture(ctx context.Context, path string, marker []byte, ma
 		}
 		timer := time.NewTimer(interval)
 		select {
-		case <-ctx.Done():
+		case <-captureCtx.Done():
 			if !timer.Stop() {
 				<-timer.C
 			}
-			return nil, ctx.Err()
+			return nil, captureCtx.Err()
 		case <-timer.C:
 		}
 	}

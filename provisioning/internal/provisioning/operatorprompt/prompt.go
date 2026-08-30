@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	PromptSchemaVersion          = "provisioning.kaiba.network/operator-prompt/v1alpha1"
+	PromptSchemaVersion          = "provisioning.kaiba.network/operator-prompt/v1alpha2"
 	AcknowledgementSchemaVersion = "provisioning.kaiba.network/operator-acknowledgement/v1alpha1"
 
-	promptDigestDomain = "kaiba.provisioning.operator-prompt.v1alpha1"
+	promptDigestDomain = "kaiba.provisioning.operator-prompt.v1alpha2"
 	maxInstructions    = 2048
 )
 
@@ -37,9 +37,12 @@ var (
 type Kind string
 
 const (
-	KindHoldBOOTSEL    Kind = "hold_bootsel"
-	KindReleaseBOOTSEL Kind = "release_bootsel"
-	KindNormalNoAction Kind = "normal_no_action"
+	KindHoldBOOTSEL         Kind = "hold_bootsel"
+	KindReleaseBOOTSEL      Kind = "release_bootsel"
+	KindNormalNoAction      Kind = "normal_no_action"
+	KindDisconnectPower     Kind = "disconnect_power"
+	KindConnectRPIBootPower Kind = "connect_rpiboot_power"
+	KindConnectNormalPower  Kind = "connect_normal_power"
 )
 
 // Prompt binds the operator ceremony to one exact authority-bound hardware
@@ -113,13 +116,30 @@ func (prompt Prompt) validateBody() error {
 		return fmt.Errorf("operator prompt action: %w", err)
 	}
 	switch prompt.Kind {
-	case KindHoldBOOTSEL, KindReleaseBOOTSEL:
+	case KindHoldBOOTSEL:
+		if prompt.Action.RequestedBootMode != laneguard.BootModeRPIBoot || prompt.Action.PowerControlMode != laneguard.PowerControlRelay {
+			return errors.New("hold-BOOTSEL prompt requires a relay-powered RPIBOOT hardware action")
+		}
+	case KindReleaseBOOTSEL:
 		if prompt.Action.RequestedBootMode != laneguard.BootModeRPIBoot {
-			return errors.New("BOOTSEL prompts require an RPIBOOT hardware action")
+			return errors.New("release-BOOTSEL prompt requires an RPIBOOT hardware action")
 		}
 	case KindNormalNoAction:
-		if prompt.Action.RequestedBootMode != laneguard.BootModeNormal {
-			return errors.New("normal no-action prompt requires a normal-mode hardware action")
+		if prompt.Action.RequestedBootMode != laneguard.BootModeNormal || prompt.Action.PowerControlMode != laneguard.PowerControlRelay {
+			return errors.New("normal no-action prompt requires a relay-powered normal-mode hardware action")
+		}
+	case KindDisconnectPower:
+		if (prompt.Action.RequestedBootMode != laneguard.BootModeRPIBoot && prompt.Action.RequestedBootMode != laneguard.BootModeNormal) ||
+			prompt.Action.PowerControlMode != laneguard.PowerControlManual {
+			return errors.New("disconnect-power prompt requires a manual-power RPIBOOT or normal-mode hardware action")
+		}
+	case KindConnectRPIBootPower:
+		if prompt.Action.RequestedBootMode != laneguard.BootModeRPIBoot || prompt.Action.PowerControlMode != laneguard.PowerControlManual {
+			return errors.New("RPIBOOT power-connection prompt requires a manual-power RPIBOOT hardware action")
+		}
+	case KindConnectNormalPower:
+		if prompt.Action.RequestedBootMode != laneguard.BootModeNormal || prompt.Action.PowerControlMode != laneguard.PowerControlManual {
+			return errors.New("normal power-connection prompt requires a manual-power normal-mode hardware action")
 		}
 	default:
 		return errors.New("operator prompt kind is outside the closed policy")

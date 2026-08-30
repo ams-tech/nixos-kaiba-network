@@ -228,7 +228,8 @@ func approvalMTLSDraftInput(now time.Time) DraftInput {
 	return DraftInput{
 		SchemaVersion: DraftInputSchemaVersion,
 		StationID:     "station-1", LaneID: "lane-1", TransactionID: "transaction-mtls-approval",
-		AssetID: "asset-mtls-approval", IntendedLogicalID: "kaiba-mtls-approval", ProfileID: "rpi5-test",
+		PowerControlMode: laneguard.PowerControlRelay,
+		AssetID:          "asset-mtls-approval", IntendedLogicalID: "kaiba-mtls-approval", ProfileID: "rpi5-test",
 		PolicyDigest: approvalMTLSDigest("1"),
 		Release: releasebinding.Binding{
 			SignedReleaseManifestDigest: approvalMTLSDigest("2"),

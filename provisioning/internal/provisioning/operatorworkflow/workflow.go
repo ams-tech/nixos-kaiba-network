@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	DraftInputSchemaVersion              = "provisioning.kaiba.network/operator-draft-input/v1alpha2"
+	DraftInputSchemaVersion              = "provisioning.kaiba.network/operator-draft-input/v1alpha3"
 	ApprovalProposalSchemaVersion        = "provisioning.kaiba.network/operator-approval-proposal/v1alpha2"
 	IntentProposalSchemaVersion          = "provisioning.kaiba.network/operator-intent-proposal/v1alpha2"
 	EvidenceProposalSchemaVersion        = "provisioning.kaiba.network/operator-evidence-proposal/v1alpha2"
@@ -51,21 +51,22 @@ var (
 // seven-operation compiler. The operation vocabulary, ordering,
 // classifications, boot modes, and claim stages are not input fields.
 type DraftInput struct {
-	SchemaVersion     string                 `json:"schema_version"`
-	StationID         string                 `json:"station_id"`
-	LaneID            string                 `json:"lane_id"`
-	TransactionID     string                 `json:"transaction_id"`
-	AssetID           string                 `json:"asset_id"`
-	IntendedLogicalID string                 `json:"intended_logical_id"`
-	ProfileID         string                 `json:"profile_id"`
-	PolicyDigest      string                 `json:"policy_digest"`
-	Release           releasebinding.Binding `json:"release"`
-	TargetFingerprint string                 `json:"target_fingerprint"`
-	ObservationDigest string                 `json:"observation_digest"`
-	InitialState      laneguard.DirectState  `json:"initial_state"`
-	ApprovalExpiresAt time.Time              `json:"approval_expires_at"`
-	AuthorizationIDs  []string               `json:"authorization_ids"`
-	MaximumSeconds    []uint32               `json:"maximum_duration_seconds"`
+	SchemaVersion     string                     `json:"schema_version"`
+	StationID         string                     `json:"station_id"`
+	LaneID            string                     `json:"lane_id"`
+	PowerControlMode  laneguard.PowerControlMode `json:"power_control_mode"`
+	TransactionID     string                     `json:"transaction_id"`
+	AssetID           string                     `json:"asset_id"`
+	IntendedLogicalID string                     `json:"intended_logical_id"`
+	ProfileID         string                     `json:"profile_id"`
+	PolicyDigest      string                     `json:"policy_digest"`
+	Release           releasebinding.Binding     `json:"release"`
+	TargetFingerprint string                     `json:"target_fingerprint"`
+	ObservationDigest string                     `json:"observation_digest"`
+	InitialState      laneguard.DirectState      `json:"initial_state"`
+	ApprovalExpiresAt time.Time                  `json:"approval_expires_at"`
+	AuthorizationIDs  []string                   `json:"authorization_ids"`
+	MaximumSeconds    []uint32                   `json:"maximum_duration_seconds"`
 }
 
 // ApprovalProposal is durable, secret-free material handed to the independent
@@ -279,6 +280,9 @@ func validateDraftInput(input DraftInput, now time.Time) error {
 	if input.SchemaVersion != DraftInputSchemaVersion || now.IsZero() {
 		return fmt.Errorf("%w: schema version or current time", ErrInvalidInput)
 	}
+	if input.PowerControlMode != laneguard.PowerControlRelay && input.PowerControlMode != laneguard.PowerControlManual {
+		return fmt.Errorf("%w: power control mode must be relay or manual", ErrInvalidInput)
+	}
 	if !identifierPattern.MatchString(input.AssetID) || !identifierPattern.MatchString(input.IntendedLogicalID) ||
 		!identifierPattern.MatchString(input.ProfileID) || !digestPattern.MatchString(input.PolicyDigest) ||
 		!digestPattern.MatchString(input.ObservationDigest) {
@@ -317,7 +321,8 @@ func buildDraft(input DraftInput, fenceEpoch uint64) (plancompiler.Draft, error)
 	}
 	draft, err := plancompiler.BuildDraft(plancompiler.DraftInput{
 		StationID: input.StationID, LaneID: input.LaneID, TransactionID: input.TransactionID,
-		Release: input.Release, TargetFingerprint: input.TargetFingerprint, FenceEpoch: fenceEpoch,
+		PowerControlMode: input.PowerControlMode,
+		Release:          input.Release, TargetFingerprint: input.TargetFingerprint, FenceEpoch: fenceEpoch,
 		InitialObservationDigest: input.ObservationDigest,
 		ApprovalExpiresAt:        input.ApprovalExpiresAt, InitialState: input.InitialState,
 		AuthorizationIDs: authorizationIDs, MaximumDurations: maximum,
@@ -2190,7 +2195,7 @@ func validateAttemptBootTransitions(snapshot laneguard.Plan, attempt laneguard.A
 	operation := snapshot.Operations[attempt.Sequence-1]
 	base := laneguard.HardwareAction{
 		SchemaVersion: laneguard.BootTransitionActionSchemaVersion,
-		StationID:     snapshot.StationID, LaneID: snapshot.LaneID,
+		StationID:     snapshot.StationID, LaneID: snapshot.LaneID, PowerControlMode: snapshot.PowerControlMode,
 		TransactionID: snapshot.TransactionID, PlanDigest: snapshot.PlanDigest,
 		TargetFingerprint: snapshot.TargetFingerprint, FenceEpoch: snapshot.FenceEpoch,
 		ApprovalID: attempt.ApprovalID, IntentReceipt: attempt.IntentReceipt,

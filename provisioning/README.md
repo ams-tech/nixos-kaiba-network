@@ -71,11 +71,32 @@ and independent control/audit server trust roots.
 The `provisioning-lane-guard` module installs only the fixed, no-argument
 `kaiba-provision-lane-acknowledge` wrapper, creates the
 `kaiba-provision-operator` group, fixes every device and socket path in the root
-one-shot unit, and leaves that unit without an automatic start target. The
-unit refuses to run unless the Raspberry Pi RP1 driver has output persistence
-disabled, and it invokes the release-bound immutable GPIO setter at logical
-inactive before startup and after every exit. The physical relay still requires
-a qualified normally-off bias and normally-open contacts. The
+one-shot unit, and leaves that unit without an automatic start target. Relay
+power control remains the default: the unit refuses to run unless the Raspberry
+Pi RP1 driver has output persistence disabled, and it invokes the release-bound
+immutable GPIO setter at logical inactive before startup and after every exit.
+The physical relay still requires a qualified normally-off bias and
+normally-open contacts. An explicit development-only manual-power mode instead
+uses authenticated connect and disconnect prompts and grants the service no
+GPIO device access. That mode records operator-attributed power actions and USB
+topology observations, but it provides no automated fail-off guarantee and is
+not a production-lane qualification. The closed power mode is part of the
+reviewed draft and `v1alpha6` plan digest, so the approval, intent, executable
+request, immutable service configuration, and transition evidence must agree;
+there is no relay-to-manual runtime fallback. Restart recovery encountering a
+persisted/configured mode mismatch uses neither actuator, quarantines the
+transition with unproven safe-off, and requires external inspection. Manual
+power establishment uses
+an explicit operator-attestation basis and acknowledgement timestamp, not a
+claim that software directly observed an electrical edge. Completed and failed
+terminal references preserve the power mode and closed safe-off basis, using
+`unproven` when disconnection plus USB absence was not established. The
+previously cut VBUS/data-only cable is not a manual RPIBOOT power path. Before
+any OTP-capable run, use and load-qualify an intact power-and-data path through
+a compliant externally powered USB 3 hub, or another reviewed source that can
+supply at least the 900 mA RPIBOOT budget without brownout, with the normal Pi
+PSU absent. Undervoltage, USB reset, or target disappearance is a stop
+condition; an unqualified or marginal source does not authorize OTP. The
 module uses the NixOS setgid security-wrapper boundary and a native fixed-argv
 launcher to enter that authenticated GID and supply the module-owned socket to
 the constrained client. A shell launcher is deliberately not used because it
@@ -136,8 +157,8 @@ size, and initial contents are not trust inputs. See the
 [target-media staging contracts](../docs/target-media-staging-prototype.md).
 
 The current file journal accepts only
-`lane-guard-attempt-store/v1alpha4` envelopes containing
-`lane-guard-attempt/v1alpha3` attempts and current durable boot-transition
+`lane-guard-attempt-store/v1alpha5` envelopes containing
+`lane-guard-attempt/v1alpha4` attempts and current durable boot-transition
 records. Older nonempty journals are not migrated or replayed: remove the lane
 from service and resolve the target externally as a reconciliation or
 quarantine case before replacing the deployment. Only a journal positively

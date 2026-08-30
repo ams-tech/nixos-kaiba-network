@@ -13,7 +13,7 @@ import (
 
 const (
 	operationDigestDomain = "kaiba.provisioning.lane-guard.operation-digest.v1alpha5"
-	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha5"
+	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha6"
 )
 
 type operationDigestMaterial struct {
@@ -31,6 +31,7 @@ type planDigestMaterial struct {
 	SchemaVersion            string                 `json:"schema_version"`
 	StationID                string                 `json:"station_id"`
 	LaneID                   string                 `json:"lane_id"`
+	PowerControlMode         PowerControlMode       `json:"power_control_mode"`
 	TransactionID            string                 `json:"transaction_id"`
 	Release                  releasebinding.Binding `json:"release"`
 	TargetFingerprint        string                 `json:"target_fingerprint"`
@@ -90,6 +91,7 @@ func (plan Plan) CanonicalDigestMaterial() ([]byte, error) {
 		SchemaVersion:            plan.SchemaVersion,
 		StationID:                plan.StationID,
 		LaneID:                   plan.LaneID,
+		PowerControlMode:         plan.PowerControlMode,
 		TransactionID:            plan.TransactionID,
 		Release:                  plan.Release,
 		TargetFingerprint:        plan.TargetFingerprint,

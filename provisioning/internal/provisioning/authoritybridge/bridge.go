@@ -363,7 +363,7 @@ func validateBoundRequest(binding BoundRequest, source BridgeRequest) error {
 		if binding.ExecuteRequest == nil || binding.ReconcileRequest != nil || binding.ExecuteRequest.TransactionID != source.TransactionID {
 			return errors.New("execution response is not a strict execute request")
 		}
-		if err := laneguard.ValidatePlanRequest(validationConfig(binding.Plan.StationID, binding.Plan.LaneID), binding.Plan, *binding.ExecuteRequest); err != nil {
+		if err := laneguard.ValidatePlanRequest(validationConfig(binding.Plan.StationID, binding.Plan.LaneID, binding.Plan.PowerControlMode), binding.Plan, *binding.ExecuteRequest); err != nil {
 			return fmt.Errorf("plan/execute-request contract: %w", err)
 		}
 	case ModeReconcile:
@@ -371,7 +371,7 @@ func validateBoundRequest(binding BoundRequest, source BridgeRequest) error {
 			return errors.New("reconciliation response is not a strict reconcile request")
 		}
 		claim := binding.ReconcileRequest.Claim
-		if err := laneguard.ValidateReconcileRequest(validationConfig(claim.StationID, claim.LaneID), binding.Plan, *binding.ReconcileRequest); err != nil {
+		if err := laneguard.ValidateReconcileRequest(validationConfig(claim.StationID, claim.LaneID, binding.Plan.PowerControlMode), binding.Plan, *binding.ReconcileRequest); err != nil {
 			return fmt.Errorf("plan/reconcile-request contract: %w", err)
 		}
 	default:
@@ -380,11 +380,12 @@ func validateBoundRequest(binding BoundRequest, source BridgeRequest) error {
 	return nil
 }
 
-func validationConfig(stationID, laneID string) laneguard.Config {
+func validationConfig(stationID, laneID string, powerControlMode laneguard.PowerControlMode) laneguard.Config {
 	return laneguard.Config{
 		SchemaVersion:    laneguard.ContractSchemaVersion,
 		StationID:        stationID,
 		LaneID:           laneID,
+		PowerControlMode: powerControlMode,
 		RPIBootSysfsPath: "/sys/bus/usb/devices/authority-bridge-validation",
 		UARTPath:         "/dev/serial/by-id/authority-bridge-validation",
 		PowerGPIO:        laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0"},

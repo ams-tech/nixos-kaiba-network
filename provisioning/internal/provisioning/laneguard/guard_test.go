@@ -169,7 +169,8 @@ func recordFakeBootTransition(journal Journal, config Config, action HardwareAct
 	}
 	started := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC).Add(time.Duration(ordinal) * time.Minute)
 	request := BeginBootTransitionRequest{
-		Action: action, StartedAt: started, RecordedAt: started.Add(2 * time.Second),
+		Action: action, PowerControlMode: PowerControlRelay,
+		StartedAt: started, RecordedAt: started.Add(2 * time.Second),
 		PowerOffObservedAt: started.Add(time.Second), USBAbsentObservedAt: started.Add(2 * time.Second),
 		ColdIntervalEndsAt: started.Add(4 * time.Second), PromptID: "hold_prompt",
 		PromptDigest: digest("a"), PromptExpiresAt: started.Add(2 * time.Minute),
@@ -200,14 +201,14 @@ func recordFakeBootTransition(journal Journal, config Config, action HardwareAct
 	if err := journal.PutBootTransition(transition); err != nil {
 		return BootTransitionOutcome{}, err
 	}
-	transition.Status = BootTransitionPowerApplied
-	transition.PowerAppliedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
-	transition.UpdatedAt = transition.PowerAppliedAt
+	transition.Status = BootTransitionPowerEstablished
+	transition.PowerEstablishedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
+	transition.UpdatedAt = transition.PowerEstablishedAt
 	if err := journal.PutBootTransition(transition); err != nil {
 		return BootTransitionOutcome{}, err
 	}
 	transition.Status = BootTransitionModeObserved
-	transition.ModeObservedAt = transition.PowerAppliedAt.Add(time.Second)
+	transition.ModeObservedAt = transition.PowerEstablishedAt.Add(time.Second)
 	transition.ObservedMode = action.RequestedBootMode
 	transition.RPIBootSysfsPath = config.RPIBootSysfsPath
 	transition.RPIBootObservationMethod = RPIBootObservationSysfsPoll
@@ -1286,6 +1287,7 @@ func TestSamePlanIncludesReleaseAndApprovalExpiry(t *testing.T) {
 		mutate func(*Plan)
 	}{
 		{"release", func(value *Plan) { value.Release.ExpectedEEPROMDigest = digest("9") }},
+		{"power control mode", func(value *Plan) { value.PowerControlMode = PowerControlManual }},
 		{"approval expiry", func(value *Plan) { value.ApprovalExpiresAt = value.ApprovalExpiresAt.Add(time.Second) }},
 		{"intent sequence", func(value *Plan) { value.IntentSequence++ }},
 	} {
@@ -1296,6 +1298,20 @@ func TestSamePlanIncludesReleaseAndApprovalExpiry(t *testing.T) {
 				t.Fatalf("plans compare equal after mutating %s", test.name)
 			}
 		})
+	}
+}
+
+func TestValidateAttemptForPlanBindsPublishedTransitionPowerMode(t *testing.T) {
+	guard, _, _, plan, now := newTestGuard(t)
+	attempt, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := attempt
+	tampered.PreObservationTransition.Action.PowerControlMode = PowerControlManual
+	tampered.PreObservationTransition.Reference.PowerControlMode = PowerControlManual
+	if err := ValidateAttemptForPlan(plan, tampered); !errors.Is(err, ErrPlanMismatch) {
+		t.Fatalf("wrong-mode published transition error = %v, want plan mismatch", err)
 	}
 }
 
@@ -1820,6 +1836,7 @@ func reconcileRequest(plan Plan, original ExecuteRequest, expiresAt time.Time) R
 func testConfig() Config {
 	return Config{
 		SchemaVersion: ContractSchemaVersion, StationID: "station-1", LaneID: "lane-1",
+		PowerControlMode: PowerControlRelay,
 		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", UARTPath: "/dev/serial/by-id/kaiba-uart-1",
 		PowerGPIO: GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17}, LeaseSafetyMargin: 30 * time.Second,
 	}
@@ -1844,7 +1861,8 @@ func testPlanBody() Plan {
 	observed.EEPROMHashStatus = EEPROMHashObserved
 	return Plan{
 		SchemaVersion: ContractSchemaVersion, StationID: "station-1", LaneID: "lane-1",
-		TransactionID: "transaction-1", Release: testReleaseBinding(), TargetFingerprint: "target-1", InitialObservationDigest: digest("7"),
+		PowerControlMode: PowerControlRelay,
+		TransactionID:    "transaction-1", Release: testReleaseBinding(), TargetFingerprint: "target-1", InitialObservationDigest: digest("7"),
 		FenceEpoch: 7, ApprovalID: "approval-1",
 		ApprovalExpiresAt: time.Date(2026, 8, 16, 12, 0, 0, 123456789, time.UTC), IntentReceipt: "receipt-1", IntentSequence: 1,
 		Operations: []OperationSpec{

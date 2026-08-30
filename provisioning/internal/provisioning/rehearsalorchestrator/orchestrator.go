@@ -249,7 +249,8 @@ func newFixture(config Config) fixture {
 	targetObservation := fixtureDigest(id, "target-observation")
 	draft, err := plancompiler.BuildDraft(plancompiler.DraftInput{
 		StationID: stationID, LaneID: laneID, TransactionID: transactionID,
-		Release: release, TargetFingerprint: fixtureDigest(id, "target"), FenceEpoch: 1,
+		PowerControlMode: laneguard.PowerControlRelay,
+		Release:          release, TargetFingerprint: fixtureDigest(id, "target"), FenceEpoch: 1,
 		InitialObservationDigest: targetObservation,
 		ApprovalExpiresAt:        config.Now.UTC().Add(30 * time.Minute), InitialState: fresh,
 		AuthorizationIDs: [7]string{

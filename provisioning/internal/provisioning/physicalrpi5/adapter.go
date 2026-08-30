@@ -28,9 +28,12 @@ const (
 	negativeBootProof  = "KAIBA_NEGATIVE_BOOT_REJECTED"
 	rootIntegrityProof = "KAIBA_ROOT_INTEGRITY_REJECTED"
 
-	holdBOOTSELInstructions    = "Hold BOOTSEL before target power is applied and keep holding it until a separate release prompt appears."
-	releaseBOOTSELInstructions = "Release BOOTSEL now; do not disconnect target power or the lane USB connection."
-	normalBootInstructions     = "Leave BOOTSEL untouched while target power is applied."
+	holdBOOTSELInstructions      = "Hold BOOTSEL before target power is applied and keep holding it until a separate release prompt appears."
+	releaseBOOTSELInstructions   = "Release BOOTSEL now; do not disconnect target power or the lane USB connection."
+	normalBootInstructions       = "Leave BOOTSEL untouched while target power is applied."
+	manualDisconnectInstructions = "Disconnect every target power source, including the lane USB cable and the normal Raspberry Pi power supply. Confirm the target power LED is off, then acknowledge."
+	manualRPIBootInstructions    = "Keep the normal Raspberry Pi power supply disconnected. Hold BOOTSEL, connect the pre-qualified intact power-capable lane USB path as the target's sole power and data connection, keep BOOTSEL held, then acknowledge. A VBUS-cut data-only cable is not valid for this step."
+	manualNormalBootInstructions = "Confirm the lane USB cable is disconnected. Leave BOOTSEL untouched, connect the normal Raspberry Pi power supply, then acknowledge."
 )
 
 var (
@@ -87,6 +90,12 @@ type Adapter struct {
 	mode        string
 	power       PowerLease
 	usbPin      USBInstancePin
+}
+
+type safeOffProof struct {
+	powerOffAt  time.Time
+	usbAbsentAt time.Time
+	operator    laneguard.OperatorPowerProof
 }
 
 func New(config Config, dependencies Dependencies) (*Adapter, error) {
@@ -230,6 +239,10 @@ func (adapter *Adapter) validateAction(lane laneguard.Config, action laneguard.H
 	if action.StationID != lane.StationID || action.LaneID != lane.LaneID {
 		return errors.New("hardware action does not belong to the fixed lane")
 	}
+	if action.PowerControlMode != lane.PowerControlMode ||
+		action.PowerControlMode != laneguard.PowerControlMode(adapter.config.PowerControl) {
+		return errors.New("hardware action power control does not match the authorized physical lane")
+	}
 	if execute {
 		if action.Phase != laneguard.HardwarePhaseExecute {
 			return errors.New("Execute requires an execute-phase hardware action")
@@ -251,24 +264,33 @@ func (adapter *Adapter) runBootTransition(
 	payload func(context.Context) (laneguard.OperationResult, error),
 ) (laneguard.OperationResult, laneguard.BootTransitionOutcome, error) {
 	startedAt := adapter.now()
-	powerOffAt, usbAbsentAt, err := adapter.proveSafeOff(ctx, lane)
+	initialSafeOff, err := adapter.establishInitialSafeOff(ctx, lane, action)
 	if err != nil {
 		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, fmt.Errorf("establish initial safe-off state: %w", err)
 	}
-	coldEndsAt := usbAbsentAt.Add(adapter.config.MinimumColdInterval)
+	coldEndsAt := initialSafeOff.usbAbsentAt.Add(adapter.config.MinimumColdInterval)
 	kind := operatorprompt.KindHoldBOOTSEL
 	instructions := holdBOOTSELInstructions
 	if action.RequestedBootMode == laneguard.BootModeNormal {
 		kind = operatorprompt.KindNormalNoAction
 		instructions = normalBootInstructions
 	}
+	if adapter.config.PowerControl == PowerControlManual {
+		kind = operatorprompt.KindConnectRPIBootPower
+		instructions = manualRPIBootInstructions
+		if action.RequestedBootMode == laneguard.BootModeNormal {
+			kind = operatorprompt.KindConnectNormalPower
+			instructions = manualNormalBootInstructions
+		}
+	}
 	prompt, err := adapter.newPrompt(action, kind, instructions, coldEndsAt.Add(adapter.config.OperatorPromptTimeout))
 	if err != nil {
 		return laneguard.OperationResult{}, laneguard.BootTransitionOutcome{}, err
 	}
 	transition, err := adapter.journal.BeginBootTransition(laneguard.BeginBootTransitionRequest{
-		Action: action, StartedAt: startedAt, RecordedAt: adapter.atLeast(usbAbsentAt),
-		PowerOffObservedAt: powerOffAt, USBAbsentObservedAt: usbAbsentAt, ColdIntervalEndsAt: coldEndsAt,
+		PowerControlMode: laneguard.PowerControlMode(adapter.config.PowerControl), InitialPowerOffProof: initialSafeOff.operator,
+		Action: action, StartedAt: startedAt, RecordedAt: adapter.atLeast(initialSafeOff.usbAbsentAt),
+		PowerOffObservedAt: initialSafeOff.powerOffAt, USBAbsentObservedAt: initialSafeOff.usbAbsentAt, ColdIntervalEndsAt: coldEndsAt,
 		PromptID: prompt.ID, PromptDigest: prompt.Digest, PromptExpiresAt: prompt.ExpiresAt,
 	})
 	if err != nil {
@@ -282,6 +304,29 @@ func (adapter *Adapter) runBootTransition(
 	if err := adapter.journal.PutBootTransition(transition); err != nil {
 		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist operator-ready transition: %w", err))
 	}
+	// In manual normal-boot mode the UART and wrong-mode watcher must be armed
+	// before the operator connects the normal power supply. The transition
+	// therefore remains durably awaiting the already-bound prompt until the
+	// capture trigger presents it.
+	if adapter.config.PowerControl == PowerControlManual && action.RequestedBootMode == laneguard.BootModeNormal {
+		return adapter.runNormalTransition(ctx, lane, transition, prompt)
+	}
+	acknowledged, failure, promptErr := adapter.acknowledgePowerPrompt(ctx, transition, prompt)
+	if promptErr != nil {
+		return adapter.failTransition(ctx, lane, acknowledged, failure, promptErr)
+	}
+	transition = acknowledged
+	if action.RequestedBootMode == laneguard.BootModeNormal {
+		return adapter.runNormalTransition(ctx, lane, transition, prompt)
+	}
+	return adapter.runRPIBootTransition(ctx, lane, transition, payload)
+}
+
+func (adapter *Adapter) acknowledgePowerPrompt(
+	ctx context.Context,
+	transition laneguard.BootTransition,
+	prompt operatorprompt.Prompt,
+) (laneguard.BootTransition, laneguard.BootTransitionFailure, error) {
 	acknowledgement, err := adapter.prompter.Present(ctx, prompt)
 	if err != nil {
 		failure := laneguard.BootTransitionFailureOperatorRejected
@@ -291,22 +336,19 @@ func (adapter *Adapter) runBootTransition(
 		if ctx.Err() != nil {
 			failure = laneguard.BootTransitionFailureInterrupted
 		}
-		return adapter.failTransition(ctx, lane, transition, failure, fmt.Errorf("obtain operator boot-mode acknowledgement: %w", err))
+		return transition, failure, fmt.Errorf("obtain operator power acknowledgement: %w", err)
 	}
 	if err := validatePromptAcknowledgement(prompt, acknowledgement, transition.ColdIntervalEndsAt); err != nil {
-		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureOperatorRejected, err)
+		return transition, laneguard.BootTransitionFailureOperatorRejected, err
 	}
 	transition.Status = laneguard.BootTransitionOperatorAcknowledged
 	transition.Operator = acknowledgement.Peer
 	transition.OperatorAcknowledgedAt = acknowledgement.AcknowledgedAt.UTC()
 	transition.UpdatedAt = adapter.atLeast(transition.OperatorAcknowledgedAt)
 	if err := adapter.journal.PutBootTransition(transition); err != nil {
-		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist operator acknowledgement: %w", err))
+		return transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist operator power acknowledgement: %w", err)
 	}
-	if action.RequestedBootMode == laneguard.BootModeNormal {
-		return adapter.runNormalTransition(ctx, lane, transition)
-	}
-	return adapter.runRPIBootTransition(ctx, lane, transition, payload)
+	return transition, laneguard.BootTransitionFailureNone, nil
 }
 
 func (adapter *Adapter) runRPIBootTransition(
@@ -315,12 +357,14 @@ func (adapter *Adapter) runRPIBootTransition(
 	transition laneguard.BootTransition,
 	payload func(context.Context) (laneguard.OperationResult, error),
 ) (laneguard.OperationResult, laneguard.BootTransitionOutcome, error) {
-	if err := adapter.ensurePower(ctx, lane.PowerGPIO); err != nil {
-		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("apply target power: %w", err))
+	if adapter.config.PowerControl == PowerControlRelay {
+		if err := adapter.ensurePower(ctx, lane.PowerGPIO); err != nil {
+			return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("apply target power: %w", err))
+		}
 	}
-	transition.Status = laneguard.BootTransitionPowerApplied
-	transition.PowerAppliedAt = adapter.atLeast(transition.OperatorAcknowledgedAt)
-	transition.UpdatedAt = transition.PowerAppliedAt
+	transition.Status = laneguard.BootTransitionPowerEstablished
+	transition.PowerEstablishedAt = adapter.powerEstablishedAt(transition)
+	transition.UpdatedAt = adapter.atLeast(transition.UpdatedAt, transition.PowerEstablishedAt)
 	if err := adapter.journal.PutBootTransition(transition); err != nil {
 		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist power application: %w", err))
 	}
@@ -336,7 +380,7 @@ func (adapter *Adapter) runRPIBootTransition(
 		}
 		return adapter.failTransition(ctx, lane, transition, failure, err)
 	}
-	modeObservedAt := adapter.atLeast(transition.PowerAppliedAt)
+	modeObservedAt := adapter.atLeast(transition.PowerEstablishedAt)
 	releasePrompt, err := adapter.newPrompt(transition.Action, operatorprompt.KindReleaseBOOTSEL, releaseBOOTSELInstructions, modeObservedAt.Add(adapter.config.OperatorPromptTimeout))
 	if err != nil {
 		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, err)
@@ -428,31 +472,42 @@ func (adapter *Adapter) runNormalTransition(
 	ctx context.Context,
 	lane laneguard.Config,
 	transition laneguard.BootTransition,
+	prompt operatorprompt.Prompt,
 ) (laneguard.OperationResult, laneguard.BootTransitionOutcome, error) {
 	if adapter.target == nil || adapter.mode != ModeOwned {
 		return adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, errors.New("normal cold-power boot requires an authoritative owned-target readback"))
 	}
-	uartCtx, cancelUART := context.WithTimeout(ctx, adapter.config.UARTTimeout)
+	uartCtx, cancelUART := context.WithCancel(ctx)
 	defer cancelUART()
 	var watcher *normalModeWatcher
-	evidence, captureErr := adapter.uart.Capture(uartCtx, lane.UARTPath, []byte(signedBootMarker), adapter.config.MaximumOutputBytes, func() error {
+	var powerPromptErr error
+	powerPromptFailure := laneguard.BootTransitionFailureNone
+	evidence, captureErr := adapter.uart.Capture(uartCtx, lane.UARTPath, []byte(signedBootMarker), adapter.config.MaximumOutputBytes, adapter.config.UARTTimeout, func() error {
 		var err error
 		watcher, err = adapter.startNormalModeWatcher(uartCtx, lane.RPIBootSysfsPath, cancelUART)
 		if err != nil {
 			return err
 		}
-		if err := adapter.ensurePower(uartCtx, lane.PowerGPIO); err != nil {
+		if adapter.config.PowerControl == PowerControlManual {
+			transition, powerPromptFailure, powerPromptErr = adapter.acknowledgePowerPrompt(uartCtx, transition, prompt)
+			if powerPromptErr != nil {
+				return powerPromptErr
+			}
+		} else if err := adapter.ensurePower(uartCtx, lane.PowerGPIO); err != nil {
 			return fmt.Errorf("apply target power: %w", err)
 		}
-		transition.Status = laneguard.BootTransitionPowerApplied
-		transition.PowerAppliedAt = adapter.atLeast(transition.OperatorAcknowledgedAt)
-		transition.UpdatedAt = transition.PowerAppliedAt
+		transition.Status = laneguard.BootTransitionPowerEstablished
+		transition.PowerEstablishedAt = adapter.powerEstablishedAt(transition)
+		transition.UpdatedAt = adapter.atLeast(transition.UpdatedAt, transition.PowerEstablishedAt)
 		if err := adapter.journal.PutBootTransition(transition); err != nil {
 			return fmt.Errorf("persist power application: %w", err)
 		}
 		return nil
 	})
 	if watcher == nil {
+		if powerPromptErr != nil {
+			return adapter.failTransition(ctx, lane, transition, powerPromptFailure, powerPromptErr)
+		}
 		failure := laneguard.BootTransitionFailureHardware
 		if errors.Is(captureErr, ErrWrongBootMode) {
 			failure = laneguard.BootTransitionFailureWrongMode
@@ -470,16 +525,22 @@ func (adapter *Adapter) runNormalTransition(
 		}
 		return adapter.failTransition(ctx, lane, transition, failure, errors.Join(watcherErr, captureErr))
 	}
+	if powerPromptErr != nil {
+		return adapter.failTransition(ctx, lane, transition, powerPromptFailure, powerPromptErr)
+	}
 	if captureErr != nil {
 		failure := laneguard.BootTransitionFailureHardware
+		if errors.Is(captureErr, context.DeadlineExceeded) && ctx.Err() == nil {
+			failure = laneguard.BootTransitionFailureModeTimeout
+		}
 		if ctx.Err() != nil {
 			failure = laneguard.BootTransitionFailureInterrupted
 		}
 		return adapter.failTransition(ctx, lane, transition, failure, fmt.Errorf("capture signed cold-boot UART evidence: %w", captureErr))
 	}
 	modeObservedAt := notObservedThrough
-	if modeObservedAt.Before(transition.PowerAppliedAt) {
-		modeObservedAt = transition.PowerAppliedAt
+	if modeObservedAt.Before(transition.PowerEstablishedAt) {
+		modeObservedAt = transition.PowerEstablishedAt
 		notObservedThrough = modeObservedAt
 	}
 	transition.Status = laneguard.BootTransitionModeObserved
@@ -579,10 +640,28 @@ func (adapter *Adapter) recoverIncompleteTransitions(ctx context.Context, lane l
 	if len(incomplete) == 0 {
 		return nil
 	}
-	_, safeOffAt, safeErr := adapter.proveSafeOff(ctx, lane)
 	for _, transition := range incomplete {
+		configuredMode := laneguard.PowerControlMode(adapter.config.PowerControl)
+		if transition.PowerControlMode != configuredMode {
+			terminal := transition
+			terminal.Status = laneguard.BootTransitionQuarantined
+			terminal.Failure = laneguard.BootTransitionFailureSafeOffUnproven
+			terminal.FinalSafeOffProof = laneguard.OperatorPowerProof{}
+			terminal.SafeOffObservedAt = time.Time{}
+			terminal.UpdatedAt = adapter.atLeast(transition.UpdatedAt)
+			mismatchErr := fmt.Errorf(
+				"interrupted transition power-control mode %q differs from configured mode %q; no recovery actuator was used",
+				transition.PowerControlMode, configuredMode,
+			)
+			if err := adapter.journal.PutBootTransition(terminal); err != nil {
+				return errors.Join(ErrRestartRecovered, mismatchErr, fmt.Errorf("quarantine mismatched interrupted transition %q: %w", transition.Key, err))
+			}
+			return errors.Join(ErrRestartRecovered, mismatchErr)
+		}
+		proof, safeErr := adapter.proveSafeOff(ctx, lane, transition.Action, transition.PowerControlMode)
 		terminal := transition
-		terminal.UpdatedAt = adapter.atLeast(transition.UpdatedAt, safeOffAt)
+		terminal.FinalSafeOffProof = proof.operator
+		terminal.UpdatedAt = adapter.atLeast(transition.UpdatedAt, proof.usbAbsentAt)
 		if safeErr != nil {
 			terminal.Status = laneguard.BootTransitionQuarantined
 			terminal.Failure = laneguard.BootTransitionFailureSafeOffUnproven
@@ -595,9 +674,9 @@ func (adapter *Adapter) recoverIncompleteTransitions(ctx context.Context, lane l
 		if err := adapter.journal.PutBootTransition(terminal); err != nil {
 			return errors.Join(ErrRestartRecovered, safeErr, fmt.Errorf("terminalize interrupted transition %q: %w", transition.Key, err))
 		}
-	}
-	if safeErr != nil {
-		return errors.Join(ErrRestartRecovered, errors.New("restart recovery quarantined the lane because safe-off was not proven"), safeErr)
+		if safeErr != nil {
+			return errors.Join(ErrRestartRecovered, errors.New("restart recovery quarantined the lane because safe-off was not proven"), safeErr)
+		}
 	}
 	return nil
 }
@@ -609,8 +688,9 @@ func (adapter *Adapter) failTransition(
 	failure laneguard.BootTransitionFailure,
 	cause error,
 ) (laneguard.OperationResult, laneguard.BootTransitionOutcome, error) {
-	_, safeOffAt, safeErr := adapter.proveSafeOff(ctx, lane)
-	return adapter.terminalizeTransition(ctx, transition, failure, cause, safeOffAt, safeErr)
+	proof, safeErr := adapter.proveSafeOff(ctx, lane, transition.Action, transition.PowerControlMode)
+	transition.FinalSafeOffProof = proof.operator
+	return adapter.terminalizeTransition(ctx, transition, failure, cause, proof.usbAbsentAt, safeErr)
 }
 
 func (adapter *Adapter) terminalizeTransition(
@@ -644,6 +724,7 @@ func (adapter *Adapter) terminalizeTransition(
 		)
 	}
 	terminal := progress
+	terminal.FinalSafeOffProof = transition.FinalSafeOffProof
 	terminal.UpdatedAt = adapter.atLeast(stored.UpdatedAt, progress.UpdatedAt, safeOffAt)
 	if safeErr != nil {
 		terminal.Status = laneguard.BootTransitionQuarantined
@@ -678,27 +759,28 @@ func (adapter *Adapter) terminalizeTransition(
 }
 
 func (adapter *Adapter) completeTransition(ctx context.Context, lane laneguard.Config, transition laneguard.BootTransition) (laneguard.BootTransitionOutcome, error) {
-	_, safeOffAt, safeErr := adapter.proveSafeOff(ctx, lane)
+	proof, safeErr := adapter.proveSafeOff(ctx, lane, transition.Action, transition.PowerControlMode)
+	transition.FinalSafeOffProof = proof.operator
 	if safeErr != nil {
-		_, outcome, err := adapter.terminalizeTransition(ctx, transition, laneguard.BootTransitionFailureHardware, errors.New("prove final safe-off state"), safeOffAt, safeErr)
+		_, outcome, err := adapter.terminalizeTransition(ctx, transition, laneguard.BootTransitionFailureHardware, errors.New("prove final safe-off state"), proof.usbAbsentAt, safeErr)
 		return outcome, err
 	}
 	transition.Status = laneguard.BootTransitionCompleted
-	transition.SafeOffObservedAt = adapter.atLeast(transition.UpdatedAt, safeOffAt)
+	transition.SafeOffObservedAt = adapter.atLeast(transition.UpdatedAt, proof.usbAbsentAt)
 	transition.CompletedAt = adapter.atLeast(transition.SafeOffObservedAt)
 	transition.UpdatedAt = transition.CompletedAt
 	evidence, err := transition.Evidence()
 	if err != nil {
-		_, outcome, terminalErr := adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, err)
+		_, outcome, terminalErr := adapter.terminalizeTransition(ctx, transition, laneguard.BootTransitionFailureHardware, err, transition.SafeOffObservedAt, nil)
 		return outcome, terminalErr
 	}
 	transition.EvidenceDigest, err = evidence.Digest()
 	if err != nil {
-		_, outcome, terminalErr := adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, err)
+		_, outcome, terminalErr := adapter.terminalizeTransition(ctx, transition, laneguard.BootTransitionFailureHardware, err, transition.SafeOffObservedAt, nil)
 		return outcome, terminalErr
 	}
 	if err := adapter.journal.PutBootTransition(transition); err != nil {
-		_, outcome, terminalErr := adapter.failTransition(ctx, lane, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist completed boot transition: %w", err))
+		_, outcome, terminalErr := adapter.terminalizeTransition(ctx, transition, laneguard.BootTransitionFailureHardware, fmt.Errorf("persist completed boot transition: %w", err), transition.SafeOffObservedAt, nil)
 		return outcome, terminalErr
 	}
 	outcome, err := adapter.reloadDurableOutcome(transition.Key)
@@ -708,12 +790,38 @@ func (adapter *Adapter) completeTransition(ctx context.Context, lane laneguard.C
 	return outcome, nil
 }
 
-func (adapter *Adapter) proveSafeOff(ctx context.Context, lane laneguard.Config) (time.Time, time.Time, error) {
+func (adapter *Adapter) establishInitialSafeOff(
+	ctx context.Context,
+	lane laneguard.Config,
+	action laneguard.HardwareAction,
+) (safeOffProof, error) {
+	if adapter.config.PowerControl == PowerControlManual {
+		return adapter.manualSafeOff(ctx, lane, action)
+	}
+	return adapter.relaySafeOff(ctx, lane)
+}
+
+func (adapter *Adapter) proveSafeOff(
+	ctx context.Context,
+	lane laneguard.Config,
+	action laneguard.HardwareAction,
+	mode laneguard.PowerControlMode,
+) (safeOffProof, error) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adapter.config.CleanupTimeout)
 	defer cancel()
+	if mode == laneguard.PowerControlManual {
+		return adapter.manualSafeOff(cleanupCtx, lane, action)
+	}
+	if mode != laneguard.PowerControlRelay {
+		return safeOffProof{}, errors.New("cannot establish safe-off for an unknown power-control mode")
+	}
+	return adapter.relaySafeOff(cleanupCtx, lane)
+}
+
+func (adapter *Adapter) relaySafeOff(ctx context.Context, lane laneguard.Config) (safeOffProof, error) {
 	releaseErr := adapter.releasePower()
 	powerOffAt := adapter.now()
-	disappearanceErr := adapter.waitForDisappearance(cleanupCtx, lane.RPIBootSysfsPath)
+	disappearanceErr := adapter.waitForDisappearance(ctx, lane.RPIBootSysfsPath)
 	if disappearanceErr != nil {
 		disappearanceErr = fmt.Errorf("confirm USB absence after relay release: %w", disappearanceErr)
 	}
@@ -721,7 +829,53 @@ func (adapter *Adapter) proveSafeOff(ctx context.Context, lane laneguard.Config)
 	if releaseErr == nil && disappearanceErr == nil && adapter.target != nil {
 		adapter.directState.PowerState = "powered_off"
 	}
-	return powerOffAt, usbAbsentAt, errors.Join(releaseErr, disappearanceErr)
+	return safeOffProof{powerOffAt: powerOffAt, usbAbsentAt: usbAbsentAt}, errors.Join(releaseErr, disappearanceErr)
+}
+
+func (adapter *Adapter) manualSafeOff(
+	ctx context.Context,
+	lane laneguard.Config,
+	action laneguard.HardwareAction,
+) (safeOffProof, error) {
+	promptStartedAt := adapter.now()
+	promptExpiresAt := promptStartedAt.Add(adapter.config.OperatorPromptTimeout)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(promptExpiresAt) {
+		promptExpiresAt = deadline.UTC()
+	}
+	if !promptExpiresAt.After(promptStartedAt) {
+		return safeOffProof{}, context.DeadlineExceeded
+	}
+	prompt, err := adapter.newPrompt(
+		action,
+		operatorprompt.KindDisconnectPower,
+		manualDisconnectInstructions,
+		promptExpiresAt,
+	)
+	if err != nil {
+		return safeOffProof{}, err
+	}
+	acknowledgement, err := adapter.prompter.Present(ctx, prompt)
+	if err != nil {
+		return safeOffProof{}, fmt.Errorf("obtain operator power-disconnection acknowledgement: %w", err)
+	}
+	if err := validatePromptAcknowledgement(prompt, acknowledgement, promptStartedAt); err != nil {
+		return safeOffProof{}, err
+	}
+	proof := safeOffProof{
+		powerOffAt: acknowledgement.AcknowledgedAt.UTC(),
+		operator: laneguard.OperatorPowerProof{
+			PromptID: prompt.ID, PromptDigest: prompt.Digest, PromptExpiresAt: prompt.ExpiresAt,
+			Operator: acknowledgement.Peer, AcknowledgedAt: acknowledgement.AcknowledgedAt.UTC(),
+		},
+	}
+	if err := adapter.waitForDisappearance(ctx, lane.RPIBootSysfsPath); err != nil {
+		return proof, fmt.Errorf("confirm RPIBOOT USB absence after manual power-off acknowledgement: %w", err)
+	}
+	proof.usbAbsentAt = adapter.atLeast(proof.powerOffAt)
+	if adapter.target != nil {
+		adapter.directState.PowerState = "powered_off"
+	}
+	return proof, nil
 }
 
 func (adapter *Adapter) reloadDurableOutcome(key string) (laneguard.BootTransitionOutcome, error) {
@@ -856,9 +1010,7 @@ func (adapter *Adapter) preflightRPIBootIdentityLocked(ctx context.Context, lane
 }
 
 func (adapter *Adapter) uartBundleTestLocked(ctx context.Context, lane laneguard.Config, bundle string, marker []byte, powerState string) (laneguard.OperationResult, error) {
-	uartCtx, cancel := context.WithTimeout(ctx, adapter.config.UARTTimeout)
-	defer cancel()
-	evidence, err := adapter.uart.Capture(uartCtx, lane.UARTPath, marker, adapter.config.MaximumOutputBytes, func() error {
+	evidence, err := adapter.uart.Capture(ctx, lane.UARTPath, marker, adapter.config.MaximumOutputBytes, adapter.config.UARTTimeout, func() error {
 		_, runErr := adapter.runRPIBootPayloadLocked(ctx, lane, bundle)
 		return runErr
 	})
@@ -877,8 +1029,17 @@ func (adapter *Adapter) uartBundleTestLocked(ctx context.Context, lane laneguard
 // durable transition has already proved exact target selection and BOOTSEL
 // release before any payload helper is reached.
 func (adapter *Adapter) runRPIBootPayloadLocked(ctx context.Context, lane laneguard.Config, bundle string) ([]byte, error) {
-	if adapter.power == nil {
-		return nil, errors.New("RPIBOOT payload requires an active transition-owned power lease")
+	switch adapter.config.PowerControl {
+	case PowerControlRelay:
+		if adapter.power == nil {
+			return nil, errors.New("relay-backed RPIBOOT payload requires an active transition-owned power lease")
+		}
+	case PowerControlManual:
+		if adapter.power != nil {
+			return nil, errors.New("manual-power RPIBOOT payload must not hold a GPIO power lease")
+		}
+	default:
+		return nil, errors.New("RPIBOOT payload has an invalid power-control mode")
 	}
 	if err := adapter.requireExactTarget(ctx, lane.RPIBootSysfsPath); err != nil {
 		return nil, err
@@ -1080,6 +1241,9 @@ func (adapter *Adapter) bindLane(lane laneguard.Config) error {
 	if err := lane.Validate(); err != nil {
 		return err
 	}
+	if lane.PowerControlMode != laneguard.PowerControlMode(adapter.config.PowerControl) {
+		return errors.New("physical adapter power control differs from the authorized lane mode")
+	}
 	if adapter.lane == nil {
 		copy := lane
 		adapter.lane = &copy
@@ -1132,6 +1296,15 @@ func validatePromptAcknowledgement(prompt operatorprompt.Prompt, acknowledgement
 }
 
 func (adapter *Adapter) now() time.Time { return adapter.clock.Now().UTC() }
+
+func (adapter *Adapter) powerEstablishedAt(transition laneguard.BootTransition) time.Time {
+	if transition.PowerControlMode == laneguard.PowerControlManual {
+		// The daemon cannot observe the physical edge. In manual mode this field
+		// deliberately records the authenticated acknowledgement/attestation.
+		return transition.OperatorAcknowledgedAt
+	}
+	return adapter.atLeast(transition.OperatorAcknowledgedAt)
+}
 
 func (adapter *Adapter) atLeast(values ...time.Time) time.Time {
 	result := adapter.now()
@@ -1224,8 +1397,9 @@ func validateExactMarkerEvidence(evidence []byte, expected string) error {
 	return nil
 }
 
-// Close de-energizes the normally-off lane relay. The command also configures
-// gpioset with a parent-death signal so an ungraceful process exit fails off.
+// Close releases any relay lease still owned by the adapter. Manual mode has
+// no electrical actuator; its terminal and restart paths require a separate
+// authenticated disconnect acknowledgement instead.
 func (adapter *Adapter) Close() error {
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()

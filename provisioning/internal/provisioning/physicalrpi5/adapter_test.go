@@ -27,19 +27,28 @@ const (
 )
 
 type fakeClock struct {
-	mu  sync.Mutex
-	now time.Time
+	mu   sync.Mutex
+	now  time.Time
+	step time.Duration
 }
 
 func (clock *fakeClock) Now() time.Time {
 	clock.mu.Lock()
 	defer clock.mu.Unlock()
-	return clock.now
+	now := clock.now
+	clock.now = clock.now.Add(clock.step)
+	return now
 }
 
 func (clock *fakeClock) advance(duration time.Duration) {
 	clock.mu.Lock()
 	clock.now = clock.now.Add(duration)
+	clock.mu.Unlock()
+}
+
+func (clock *fakeClock) progressBy(step time.Duration) {
+	clock.mu.Lock()
+	clock.step = step
 	clock.mu.Unlock()
 }
 
@@ -320,7 +329,7 @@ type fakeUART struct {
 	err           error
 }
 
-func (uart *fakeUART) Capture(_ context.Context, _ string, marker []byte, _ int, trigger func() error) ([]byte, error) {
+func (uart *fakeUART) Capture(_ context.Context, _ string, marker []byte, _ int, _ time.Duration, trigger func() error) ([]byte, error) {
 	uart.ready = true
 	uart.baselineReads = uart.filesystem.readCount()
 	if err := trigger(); err != nil {
@@ -452,6 +461,18 @@ type testEnvironment struct {
 	lane       laneguard.Config
 }
 
+func TestManualPowerDefaultCleanupCoversAdvertisedDisconnectAndUSBProof(t *testing.T) {
+	config := Config{
+		PowerControl:          PowerControlManual,
+		OperatorPromptTimeout: 2 * time.Minute,
+		USBDisappearTimeout:   15 * time.Second,
+	}
+	config.applyDefaults()
+	if config.CleanupTimeout != 2*time.Minute+15*time.Second {
+		t.Fatalf("manual cleanup timeout = %s", config.CleanupTimeout)
+	}
+}
+
 func TestRPIBootTransitionPersistsBeforePromptsAndReturnsJournalOutcome(t *testing.T) {
 	environment := newEnvironment(t, ModeFresh)
 	action := testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM)
@@ -494,11 +515,71 @@ func TestRPIBootTransitionPersistsBeforePromptsAndReturnsJournalOutcome(t *testi
 	if got := environment.prompter.kinds(); fmt.Sprint(got) != fmt.Sprint([]operatorprompt.Kind{operatorprompt.KindHoldBOOTSEL, operatorprompt.KindReleaseBOOTSEL}) {
 		t.Fatalf("prompt order = %v", got)
 	}
+	if evidence, reference := observation.BootTransition.Evidence, observation.BootTransition.Reference; evidence.PowerControlMode != laneguard.PowerControlRelay ||
+		evidence.PowerEstablishmentBasis != laneguard.PowerEstablishmentRelayCommand ||
+		reference.PowerControlMode != laneguard.PowerControlRelay ||
+		reference.PowerEstablishmentBasis != laneguard.PowerEstablishmentRelayCommand ||
+		reference.SafeOffBasis != laneguard.SafeOffRelayInactiveAndUSBAbsence {
+		t.Fatalf("relay power attribution = evidence %#v reference %#v", evidence, reference)
+	}
 	assertOutcomeEqualsJournal(t, environment.journal, observation.BootTransition, action)
 	acquired, released, powered := environment.gpio.state()
 	if acquired != 1 || released != 1 || powered {
 		t.Fatalf("relay state acquired=%d released=%d powered=%t", acquired, released, powered)
 	}
+}
+
+func TestManualRPIBootTransitionBindsPowerProofsWithoutGPIO(t *testing.T) {
+	environment := newEnvironment(t, ModeFresh)
+	useManualPower(environment)
+	environment.clock.progressBy(time.Millisecond)
+	action := testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM)
+	action.PowerControlMode = laneguard.PowerControlManual
+	environment.prompter.before = func(prompt operatorprompt.Prompt) {
+		switch prompt.Kind {
+		case operatorprompt.KindDisconnectPower:
+			environment.filesystem.set(map[string][2]string{})
+		case operatorprompt.KindConnectRPIBootPower:
+			environment.filesystem.set(exactTarget())
+		}
+	}
+
+	observation, err := environment.adapter.Observe(context.Background(), environment.lane, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPrompts := []operatorprompt.Kind{
+		operatorprompt.KindDisconnectPower,
+		operatorprompt.KindConnectRPIBootPower,
+		operatorprompt.KindReleaseBOOTSEL,
+		operatorprompt.KindDisconnectPower,
+	}
+	if got := environment.prompter.kinds(); fmt.Sprint(got) != fmt.Sprint(wantPrompts) {
+		t.Fatalf("manual RPIBOOT prompt order = %v, want %v", got, wantPrompts)
+	}
+	evidence := observation.BootTransition.Evidence
+	reference := observation.BootTransition.Reference
+	if evidence.PowerControlMode != laneguard.PowerControlManual ||
+		evidence.PowerEstablishmentBasis != laneguard.PowerEstablishmentOperatorAttestation ||
+		!evidence.PowerEstablishedAt.Equal(evidence.OperatorAcknowledgedAt) ||
+		evidence.InitialPowerOffProof.PromptID == "" || evidence.InitialPowerOffProof.Operator.PID <= 0 ||
+		evidence.FinalSafeOffProof.PromptID == "" || evidence.FinalSafeOffProof.Operator.PID <= 0 ||
+		evidence.PowerOffObservedAt.Before(evidence.InitialPowerOffProof.AcknowledgedAt) ||
+		evidence.SafeOffObservedAt.Before(evidence.FinalSafeOffProof.AcknowledgedAt) {
+		t.Fatalf("manual RPIBOOT power evidence = %#v", evidence)
+	}
+	if reference.PowerControlMode != laneguard.PowerControlManual ||
+		reference.PowerEstablishmentBasis != laneguard.PowerEstablishmentOperatorAttestation ||
+		reference.SafeOffBasis != laneguard.SafeOffOperatorDisconnectAndUSBAbsence ||
+		reference.InitialPowerOffProof != evidence.InitialPowerOffProof ||
+		reference.FinalSafeOffProof != evidence.FinalSafeOffProof ||
+		!reference.SafeOffObservedAt.Equal(evidence.SafeOffObservedAt) {
+		t.Fatalf("manual RPIBOOT public reference = %#v", reference)
+	}
+	if acquired, released, powered := environment.gpio.state(); acquired != 0 || released != 0 || powered {
+		t.Fatalf("manual RPIBOOT touched GPIO: acquired=%d released=%d powered=%t", acquired, released, powered)
+	}
+	assertOutcomeEqualsJournal(t, environment.journal, observation.BootTransition, action)
 }
 
 func TestRPIBootReadbackReportsEEPROMHashAvailability(t *testing.T) {
@@ -654,6 +735,116 @@ func TestNormalTransitionArmsUARTAndWatcherBeforePower(t *testing.T) {
 		t.Fatalf("normal evidence = %#v", outcome.Evidence)
 	}
 	assertOutcomeEqualsJournal(t, environment.journal, outcome, action)
+}
+
+func TestNormalTransitionAttributesBoundedUARTExpiryAsModeTimeout(t *testing.T) {
+	environment := newEnvironment(t, ModeOwned)
+	target := targetObservation()
+	environment.adapter.target = &target
+	environment.adapter.directState = directState(target, "powered_off")
+	environment.uart.err = context.DeadlineExceeded
+
+	result, err := environment.adapter.Execute(
+		context.Background(),
+		environment.lane,
+		testAction(laneguard.HardwarePhaseExecute, laneguard.OperationColdPowerCycle),
+	)
+	if err == nil || result.BootTransition.Reference.Failure != laneguard.BootTransitionFailureModeTimeout ||
+		result.BootTransition.Reference.Status != laneguard.BootTransitionAbortedSafeOff {
+		t.Fatalf("UART expiry outcome = %#v, %v", result.BootTransition.Reference, err)
+	}
+}
+
+func TestManualNormalTransitionArmsUARTAndWatcherBeforePromptWithoutGPIO(t *testing.T) {
+	environment := newEnvironment(t, ModeOwned)
+	useManualPower(environment)
+	target := targetObservation()
+	environment.adapter.target = &target
+	environment.adapter.directState = directState(target, "powered_off")
+	action := testAction(laneguard.HardwarePhaseExecute, laneguard.OperationColdPowerCycle)
+	action.PowerControlMode = laneguard.PowerControlManual
+	environment.prompter.before = func(prompt operatorprompt.Prompt) {
+		switch prompt.Kind {
+		case operatorprompt.KindDisconnectPower:
+			environment.filesystem.set(map[string][2]string{})
+		case operatorprompt.KindConnectNormalPower:
+			if !environment.uart.ready {
+				t.Error("manual normal-power prompt appeared before UART was opened/configured/flushed")
+			}
+			if environment.filesystem.readCount() <= environment.uart.baselineReads {
+				t.Error("manual normal-power prompt appeared before the BCM2712 watcher completed its arming poll")
+			}
+		}
+	}
+
+	result, err := environment.adapter.Execute(context.Background(), environment.lane, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPrompts := []operatorprompt.Kind{
+		operatorprompt.KindDisconnectPower,
+		operatorprompt.KindConnectNormalPower,
+		operatorprompt.KindDisconnectPower,
+	}
+	if got := environment.prompter.kinds(); fmt.Sprint(got) != fmt.Sprint(wantPrompts) {
+		t.Fatalf("manual normal prompt order = %v, want %v", got, wantPrompts)
+	}
+	evidence := result.BootTransition.Evidence
+	if evidence.PowerControlMode != laneguard.PowerControlManual ||
+		evidence.PowerEstablishmentBasis != laneguard.PowerEstablishmentOperatorAttestation ||
+		!evidence.PowerEstablishedAt.Equal(evidence.OperatorAcknowledgedAt) || evidence.ObservedMode != laneguard.BootModeNormal ||
+		evidence.RPIBootEligibleTargets != 0 || evidence.UARTOutputDigest == "" ||
+		evidence.InitialPowerOffProof.PromptID == "" || evidence.FinalSafeOffProof.PromptID == "" {
+		t.Fatalf("manual normal evidence = %#v", evidence)
+	}
+	if acquired, released, powered := environment.gpio.state(); acquired != 0 || released != 0 || powered {
+		t.Fatalf("manual normal boot touched GPIO: acquired=%d released=%d powered=%t", acquired, released, powered)
+	}
+	assertOutcomeEqualsJournal(t, environment.journal, result.BootTransition, action)
+}
+
+func TestManualFinalDisconnectFailureQuarantinesEvenWhenUSBIsAbsent(t *testing.T) {
+	environment := newEnvironment(t, ModeFresh)
+	useManualPower(environment)
+	action := testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM)
+	action.PowerControlMode = laneguard.PowerControlManual
+	disconnects := 0
+	environment.prompter.before = func(prompt operatorprompt.Prompt) {
+		switch prompt.Kind {
+		case operatorprompt.KindDisconnectPower:
+			disconnects++
+			environment.filesystem.set(map[string][2]string{})
+			if disconnects == 1 {
+				environment.prompter.mu.Lock()
+				environment.prompter.errors[operatorprompt.KindDisconnectPower] = errors.New("final disconnect not acknowledged")
+				environment.prompter.mu.Unlock()
+			}
+		case operatorprompt.KindConnectRPIBootPower:
+			environment.filesystem.set(exactTarget())
+		}
+	}
+
+	observation, err := environment.adapter.Observe(context.Background(), environment.lane, action)
+	if err == nil || observation.BootTransition.Reference.Status != laneguard.BootTransitionQuarantined ||
+		observation.BootTransition.Reference.Failure != laneguard.BootTransitionFailureSafeOffUnproven {
+		t.Fatalf("manual final-disconnect outcome = %#v, %v", observation.BootTransition, err)
+	}
+	reference := observation.BootTransition.Reference
+	if reference.PowerControlMode != laneguard.PowerControlManual ||
+		reference.PowerEstablishmentBasis != laneguard.PowerEstablishmentOperatorAttestation ||
+		reference.SafeOffBasis != laneguard.SafeOffUnproven ||
+		reference.InitialPowerOffProof.PromptID == "" || reference.FinalSafeOffProof != (laneguard.OperatorPowerProof{}) ||
+		!reference.SafeOffObservedAt.IsZero() {
+		t.Fatalf("manual quarantine lost or overstated public power attribution: %#v", reference)
+	}
+	stored, exists, readErr := environment.journal.GetBootTransition(observation.BootTransition.Reference.TransitionKey)
+	if readErr != nil || !exists || stored.FinalSafeOffProof != (laneguard.OperatorPowerProof{}) {
+		t.Fatalf("manual quarantine stored false final proof: %#v, exists=%t err=%v", stored, exists, readErr)
+	}
+	if acquired, released, powered := environment.gpio.state(); acquired != 0 || released != 0 || powered {
+		t.Fatalf("manual quarantine touched GPIO: acquired=%d released=%d powered=%t", acquired, released, powered)
+	}
+	assertOutcomeEqualsJournal(t, environment.journal, observation.BootTransition, action)
 }
 
 func TestWrongBootModeFailsClosedInBothDirections(t *testing.T) {
@@ -1003,13 +1194,116 @@ func TestRestartRecoveryTerminalizesOldPromptBeforeNewIO(t *testing.T) {
 	}
 }
 
+func TestManualRestartRequiresFreshDisconnectAndNeverResumesOldPrompt(t *testing.T) {
+	environment := newEnvironment(t, ModeFresh)
+	useManualPower(environment)
+	action := testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM)
+	action.PowerControlMode = laneguard.PowerControlManual
+	old := seedIncompleteManualTransition(t, environment, action)
+	environment.filesystem.set(exactTarget())
+	environment.prompter.before = func(prompt operatorprompt.Prompt) {
+		switch prompt.Kind {
+		case operatorprompt.KindDisconnectPower:
+			environment.filesystem.set(map[string][2]string{})
+		case operatorprompt.KindConnectRPIBootPower:
+			environment.filesystem.set(exactTarget())
+		}
+	}
+
+	observation, err := environment.adapter.Observe(context.Background(), environment.lane, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, exists, readErr := environment.journal.GetBootTransition(old.Key)
+	if readErr != nil || !exists || recovered.Status != laneguard.BootTransitionInterruptedSafeOff ||
+		recovered.Failure != laneguard.BootTransitionFailureInterrupted || recovered.FinalSafeOffProof.PromptID == "" {
+		t.Fatalf("manual recovered transition = %#v, exists=%t err=%v", recovered, exists, readErr)
+	}
+	if observation.BootTransition.Generation != old.Generation+1 {
+		t.Fatalf("new manual generation = %d, old = %d", observation.BootTransition.Generation, old.Generation)
+	}
+	wantPrompts := []operatorprompt.Kind{
+		operatorprompt.KindDisconnectPower,
+		operatorprompt.KindDisconnectPower,
+		operatorprompt.KindConnectRPIBootPower,
+		operatorprompt.KindReleaseBOOTSEL,
+		operatorprompt.KindDisconnectPower,
+	}
+	if got := environment.prompter.kinds(); fmt.Sprint(got) != fmt.Sprint(wantPrompts) {
+		t.Fatalf("manual restart prompt order = %v, want %v", got, wantPrompts)
+	}
+	if acquired, released, powered := environment.gpio.state(); acquired != 0 || released != 0 || powered {
+		t.Fatalf("manual restart touched GPIO: acquired=%d released=%d powered=%t", acquired, released, powered)
+	}
+}
+
+func TestRestartRecoveryQuarantinesPersistedPowerModeMismatchWithoutActuation(t *testing.T) {
+	t.Run("old manual transition does not use configured relay", func(t *testing.T) {
+		environment := newEnvironment(t, ModeFresh)
+		action := testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM)
+		action.PowerControlMode = laneguard.PowerControlManual
+		old := seedIncompleteManualTransition(t, environment, action)
+		environment.filesystem.set(exactTarget())
+
+		recoveryErr := environment.adapter.recoverIncompleteTransitions(context.Background(), environment.lane)
+		if !errors.Is(recoveryErr, ErrRestartRecovered) {
+			t.Fatalf("cross-mode manual recovery error = %v, want ErrRestartRecovered", recoveryErr)
+		}
+		recovered, exists, err := environment.journal.GetBootTransition(old.Key)
+		if err != nil || !exists || recovered.Status != laneguard.BootTransitionQuarantined ||
+			recovered.Failure != laneguard.BootTransitionFailureSafeOffUnproven ||
+			recovered.FinalSafeOffProof != (laneguard.OperatorPowerProof{}) || !recovered.SafeOffObservedAt.IsZero() {
+			t.Fatalf("cross-mode manual recovery = %#v, exists=%t err=%v", recovered, exists, err)
+		}
+		reference, err := recovered.Reference()
+		if err != nil || reference.SafeOffBasis != laneguard.SafeOffUnproven {
+			t.Fatalf("cross-mode manual recovery reference = %#v, err=%v", reference, err)
+		}
+		if got := environment.prompter.kinds(); len(got) != 0 {
+			t.Fatalf("cross-mode manual recovery unexpectedly prompted: %v", got)
+		}
+		if acquired, released, powered := environment.gpio.state(); acquired != 0 || released != 0 || powered {
+			t.Fatalf("cross-mode manual recovery actuated relay: acquired=%d released=%d powered=%t", acquired, released, powered)
+		}
+	})
+
+	t.Run("old relay transition does not use configured manual prompt", func(t *testing.T) {
+		environment := newEnvironment(t, ModeFresh)
+		useManualPower(environment)
+		action := testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM)
+		old := seedIncompleteTransition(t, environment, action)
+		environment.filesystem.set(exactTarget())
+		environment.gpio.mu.Lock()
+		environment.gpio.powered = true
+		environment.gpio.mu.Unlock()
+		environment.adapter.power = &fakePowerLease{gpio: environment.gpio}
+		environment.gpio.off = func() { environment.filesystem.set(map[string][2]string{}) }
+
+		recoveryErr := environment.adapter.recoverIncompleteTransitions(context.Background(), environment.lane)
+		if !errors.Is(recoveryErr, ErrRestartRecovered) {
+			t.Fatalf("cross-mode relay recovery error = %v, want ErrRestartRecovered", recoveryErr)
+		}
+		recovered, exists, err := environment.journal.GetBootTransition(old.Key)
+		if err != nil || !exists || recovered.Status != laneguard.BootTransitionQuarantined ||
+			recovered.Failure != laneguard.BootTransitionFailureSafeOffUnproven || !recovered.SafeOffObservedAt.IsZero() {
+			t.Fatalf("cross-mode relay recovery = %#v, exists=%t err=%v", recovered, exists, err)
+		}
+		if got := environment.prompter.kinds(); len(got) != 0 {
+			t.Fatalf("cross-mode relay recovery unexpectedly prompted: %v", got)
+		}
+		if acquired, released, powered := environment.gpio.state(); acquired != 0 || released != 0 || !powered {
+			t.Fatalf("cross-mode relay recovery actuated power: acquired=%d released=%d powered=%t", acquired, released, powered)
+		}
+	})
+}
+
 func TestJournalFailureTerminalizationPreservesLocalProgress(t *testing.T) {
 	for _, test := range []struct {
 		status      laneguard.BootTransitionStatus
 		wantMode    bool
 		wantRelease bool
 	}{
-		{status: laneguard.BootTransitionPowerApplied},
+		{status: laneguard.BootTransitionPowerEstablished},
 		{status: laneguard.BootTransitionModeObserved, wantMode: true},
 		{status: laneguard.BootTransitionOperatorReleased, wantMode: true, wantRelease: true},
 	} {
@@ -1024,7 +1318,7 @@ func TestJournalFailureTerminalizationPreservesLocalProgress(t *testing.T) {
 				t.Fatalf("journal failure outcome = %#v, %v", observation.BootTransition, err)
 			}
 			stored, exists, readErr := environment.journal.GetBootTransition(observation.BootTransition.Reference.TransitionKey)
-			if readErr != nil || !exists || stored.PowerAppliedAt.IsZero() || stored.ModeObservedAt.IsZero() != !test.wantMode ||
+			if readErr != nil || !exists || stored.PowerEstablishedAt.IsZero() || stored.ModeObservedAt.IsZero() != !test.wantMode ||
 				stored.OperatorReleasedAt.IsZero() != !test.wantRelease {
 				t.Fatalf("preserved durable progress = %#v, exists=%t err=%v", stored, exists, readErr)
 			}
@@ -1324,6 +1618,7 @@ func newEnvironment(t *testing.T, mode string) *testEnvironment {
 	}
 	lane := laneguard.Config{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: "station-1", LaneID: "lane-1",
+		PowerControlMode: laneguard.PowerControlRelay,
 		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", UARTPath: "/dev/serial/by-id/kaiba-uart",
 		PowerGPIO: laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17}, LeaseSafetyMargin: time.Second,
 	}
@@ -1360,7 +1655,8 @@ func testAction(phase laneguard.HardwarePhase, operation laneguard.Operation) la
 	action := laneguard.HardwareAction{
 		SchemaVersion: laneguard.BootTransitionActionSchemaVersion,
 		StationID:     "station-1", LaneID: "lane-1", TransactionID: "transaction-1",
-		PlanDigest: testDigest("a"), TargetFingerprint: expectedFingerprint, FenceEpoch: 1,
+		PowerControlMode: laneguard.PowerControlRelay,
+		PlanDigest:       testDigest("a"), TargetFingerprint: expectedFingerprint, FenceEpoch: 1,
 		ApprovalID: "approval-1", IntentReceipt: "intent-1", IntentSequence: 1, Sequence: 1,
 		Operation: operation, OperationDigest: testDigest("b"), AuthorizationID: "authorization-1",
 		Phase: phase, OperationRequiredBootMode: required, RequestedBootMode: requested,
@@ -1372,6 +1668,11 @@ func testAction(phase laneguard.HardwarePhase, operation laneguard.Operation) la
 	return action
 }
 
+func useManualPower(environment *testEnvironment) {
+	environment.adapter.config.PowerControl = PowerControlManual
+	environment.lane.PowerControlMode = laneguard.PowerControlManual
+}
+
 func seedIncompleteTransition(t *testing.T, environment *testEnvironment, action laneguard.HardwareAction) laneguard.BootTransition {
 	t.Helper()
 	started := environment.clock.Now().Add(-10 * time.Second)
@@ -1380,7 +1681,40 @@ func seedIncompleteTransition(t *testing.T, environment *testEnvironment, action
 		t.Fatal(err)
 	}
 	transition, err := environment.journal.BeginBootTransition(laneguard.BeginBootTransitionRequest{
-		Action: action, StartedAt: started, PowerOffObservedAt: started.Add(time.Second),
+		Action: action, PowerControlMode: laneguard.PowerControlRelay,
+		StartedAt: started, PowerOffObservedAt: started.Add(time.Second),
+		USBAbsentObservedAt: started.Add(2 * time.Second), ColdIntervalEndsAt: started.Add(3 * time.Second),
+		RecordedAt: started.Add(2 * time.Second), PromptID: prompt.ID, PromptDigest: prompt.Digest, PromptExpiresAt: prompt.ExpiresAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return transition
+}
+
+func seedIncompleteManualTransition(t *testing.T, environment *testEnvironment, action laneguard.HardwareAction) laneguard.BootTransition {
+	t.Helper()
+	started := environment.clock.Now().Add(-10 * time.Second)
+	prompt, err := operatorprompt.New(
+		action,
+		operatorprompt.KindConnectRPIBootPower,
+		"old-connect-power-prompt",
+		manualRPIBootInstructions,
+		environment.clock.Now().Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialProof := laneguard.OperatorPowerProof{
+		PromptID:        "old-disconnect-power-prompt",
+		PromptDigest:    testDigest("d"),
+		PromptExpiresAt: environment.clock.Now().Add(time.Minute),
+		Operator:        laneguard.OperatorPeer{UID: 1000, GID: 1000, PID: 2000},
+		AcknowledgedAt:  started.Add(time.Second),
+	}
+	transition, err := environment.journal.BeginBootTransition(laneguard.BeginBootTransitionRequest{
+		Action: action, PowerControlMode: laneguard.PowerControlManual, InitialPowerOffProof: initialProof,
+		StartedAt: started, PowerOffObservedAt: started.Add(time.Second),
 		USBAbsentObservedAt: started.Add(2 * time.Second), ColdIntervalEndsAt: started.Add(3 * time.Second),
 		RecordedAt: started.Add(2 * time.Second), PromptID: prompt.ID, PromptDigest: prompt.Digest, PromptExpiresAt: prompt.ExpiresAt,
 	})

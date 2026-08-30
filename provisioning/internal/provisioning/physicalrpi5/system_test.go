@@ -539,7 +539,7 @@ func TestFileUARTConfiguresFlushesAndRestoresAroundTrigger(t *testing.T) {
 		fresh:    []byte("FRESH_PROOF\n"),
 	}}
 	uart := FileUART{device: device}
-	evidence, err := uart.Capture(context.Background(), "/dev/serial/by-id/test", []byte("FRESH_PROOF"), 4096, func() error {
+	evidence, err := uart.Capture(context.Background(), "/dev/serial/by-id/test", []byte("FRESH_PROOF"), 4096, time.Second, func() error {
 		device.events = append(device.events, "trigger")
 		return nil
 	})
@@ -567,7 +567,7 @@ func TestFileUARTConfiguresFlushesAndRestoresAroundTrigger(t *testing.T) {
 func TestFileUARTFailsClosedWhenStaleInputCannotBeFlushed(t *testing.T) {
 	device := &fakeUARTDevice{flushErr: errors.New("flush failed")}
 	triggered := false
-	_, err := (FileUART{device: device}).Capture(context.Background(), "/dev/serial/by-id/test", []byte("PROOF"), 4096, func() error {
+	_, err := (FileUART{device: device}).Capture(context.Background(), "/dev/serial/by-id/test", []byte("PROOF"), 4096, time.Second, func() error {
 		triggered = true
 		return nil
 	})
@@ -577,5 +577,24 @@ func TestFileUARTFailsClosedWhenStaleInputCannotBeFlushed(t *testing.T) {
 	wantEvents := []string{"open", "get", "set", "flush", "set", "close"}
 	if !reflect.DeepEqual(device.events, wantEvents) {
 		t.Fatalf("UART failure event order = %v, want %v", device.events, wantEvents)
+	}
+}
+
+func TestFileUARTCaptureTimeoutStartsAfterTrigger(t *testing.T) {
+	device := &fakeUARTDevice{}
+	uart := FileUART{PollInterval: time.Millisecond, device: device}
+	triggerDelay := 40 * time.Millisecond
+	captureTimeout := 30 * time.Millisecond
+	started := time.Now()
+	_, err := uart.Capture(context.Background(), "/dev/serial/by-id/test", []byte("PROOF"), 4096, captureTimeout, func() error {
+		time.Sleep(triggerDelay)
+		return nil
+	})
+	elapsed := time.Since(started)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("capture error = %v, want deadline exceeded", err)
+	}
+	if elapsed < triggerDelay+captureTimeout-(5*time.Millisecond) {
+		t.Fatalf("capture timeout was consumed before trigger completed: elapsed %s", elapsed)
 	}
 }

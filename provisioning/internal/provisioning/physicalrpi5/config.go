@@ -13,12 +13,15 @@ import (
 	"time"
 )
 
-const AdapterVersion = "provisioning.kaiba.network/physical-rpi5/v1alpha2"
+const AdapterVersion = "provisioning.kaiba.network/physical-rpi5/v1alpha3"
 
 const (
 	ModeFresh = "fresh"
 	ModeOwned = "owned"
 	ModeAuto  = "auto_reconcile"
+
+	PowerControlRelay  = "relay"
+	PowerControlManual = "manual"
 )
 
 var (
@@ -66,6 +69,7 @@ func (paths ImmutablePaths) Validate() error {
 
 type Config struct {
 	Paths                   ImmutablePaths
+	PowerControl            string
 	InitialMode             string
 	ExpectedCustomerKeyHash string
 	ExpectedEEPROMHash      string
@@ -82,6 +86,9 @@ type Config struct {
 }
 
 func (config *Config) applyDefaults() {
+	if config.PowerControl == "" {
+		config.PowerControl = PowerControlRelay
+	}
 	if config.CommandTimeout == 0 {
 		config.CommandTimeout = 2 * time.Minute
 	}
@@ -105,6 +112,11 @@ func (config *Config) applyDefaults() {
 	}
 	if config.CleanupTimeout == 0 {
 		config.CleanupTimeout = 30 * time.Second
+		if config.PowerControl == PowerControlManual {
+			// A cancellation-independent manual disconnect needs the complete
+			// advertised operator window plus bounded USB-disappearance proof.
+			config.CleanupTimeout = config.OperatorPromptTimeout + config.USBDisappearTimeout
+		}
 	}
 	if config.MaximumOutputBytes == 0 {
 		config.MaximumOutputBytes = 256 * 1024
@@ -117,6 +129,9 @@ func (config Config) Validate() error {
 	}
 	if config.InitialMode != ModeFresh && config.InitialMode != ModeOwned && config.InitialMode != ModeAuto {
 		return errors.New("initial target mode must be fresh, owned, or auto-reconcile")
+	}
+	if config.PowerControl != PowerControlRelay && config.PowerControl != PowerControlManual {
+		return errors.New("power control must be relay or manual")
 	}
 	for label, value := range map[string]string{
 		"customer key hash": config.ExpectedCustomerKeyHash,

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ContractSchemaVersion           = "provisioning.kaiba.network/lane-guard/v1alpha5"
+	ContractSchemaVersion           = "provisioning.kaiba.network/lane-guard/v1alpha6"
 	ReconcileRequestSchemaVersion   = "provisioning.kaiba.network/lane-guard-reconcile-request/v1alpha3"
 	CommitAttestationSchemaVersion  = "provisioning.kaiba.network/fresh-commit-attestation/v1alpha1"
 	ReconciliationObservationBudget = 5 * time.Minute
@@ -123,13 +123,14 @@ type GPIODescriptor struct {
 
 // Config fixes all physical resources owned by a guard instance.
 type Config struct {
-	SchemaVersion     string         `json:"schema_version"`
-	StationID         string         `json:"station_id"`
-	LaneID            string         `json:"lane_id"`
-	RPIBootSysfsPath  string         `json:"rpiboot_sysfs_path"`
-	UARTPath          string         `json:"uart_path"`
-	PowerGPIO         GPIODescriptor `json:"power_gpio"`
-	LeaseSafetyMargin time.Duration  `json:"lease_safety_margin"`
+	SchemaVersion     string           `json:"schema_version"`
+	StationID         string           `json:"station_id"`
+	LaneID            string           `json:"lane_id"`
+	PowerControlMode  PowerControlMode `json:"power_control_mode"`
+	RPIBootSysfsPath  string           `json:"rpiboot_sysfs_path"`
+	UARTPath          string           `json:"uart_path"`
+	PowerGPIO         GPIODescriptor   `json:"power_gpio"`
+	LeaseSafetyMargin time.Duration    `json:"lease_safety_margin"`
 }
 
 func (config Config) Validate() error {
@@ -141,6 +142,9 @@ func (config Config) Validate() error {
 	}
 	if !identifierPattern.MatchString(config.LaneID) {
 		return errors.New("lane ID is invalid")
+	}
+	if config.PowerControlMode != PowerControlRelay && config.PowerControlMode != PowerControlManual {
+		return errors.New("power control mode must be relay or manual")
 	}
 	if !fixedChild(config.RPIBootSysfsPath, "/sys/bus/usb/devices/") {
 		return errors.New("RPIBOOT path must identify one fixed child of /sys/bus/usb/devices")
@@ -259,6 +263,7 @@ type Plan struct {
 	SchemaVersion            string                 `json:"schema_version"`
 	StationID                string                 `json:"station_id"`
 	LaneID                   string                 `json:"lane_id"`
+	PowerControlMode         PowerControlMode       `json:"power_control_mode"`
 	TransactionID            string                 `json:"transaction_id"`
 	PlanDigest               string                 `json:"plan_digest"`
 	Release                  releasebinding.Binding `json:"release"`
@@ -296,6 +301,12 @@ func (plan Plan) validate(config Config, requireExecutionLane bool) error {
 	}
 	if requireExecutionLane && (plan.StationID != config.StationID || plan.LaneID != config.LaneID) {
 		return fmt.Errorf("%w: station or lane identity", ErrPlanMismatch)
+	}
+	if plan.PowerControlMode != PowerControlRelay && plan.PowerControlMode != PowerControlManual {
+		return errors.New("plan power control mode must be relay or manual")
+	}
+	if plan.PowerControlMode != config.PowerControlMode {
+		return fmt.Errorf("%w: power control mode", ErrPlanMismatch)
 	}
 	if !identifierPattern.MatchString(plan.TransactionID) || !identifierPattern.MatchString(plan.TargetFingerprint) {
 		return errors.New("plan transaction or target identity is invalid")

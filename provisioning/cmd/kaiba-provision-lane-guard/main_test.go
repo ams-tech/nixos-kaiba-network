@@ -35,6 +35,7 @@ type commandHardware struct {
 	observeErrAt map[int]error
 	executeErr   error
 	poststate    laneguard.DirectState
+	powerControl laneguard.PowerControlMode
 }
 
 func (hardware *commandHardware) Observe(_ context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.Observation, error) {
@@ -45,7 +46,7 @@ func (hardware *commandHardware) Observe(_ context.Context, config laneguard.Con
 		hardwareErr = scheduledErr
 	}
 	outcome, transitionErr := recordCommandBootTransition(
-		hardware.journal, config, action, hardware.transitions, hardwareErr != nil,
+		hardware.journal, config, action, hardware.transitions, hardwareErr != nil, hardware.powerControl,
 	)
 	observation := hardware.observation
 	observation.BootTransition = outcome
@@ -56,7 +57,9 @@ func (hardware *commandHardware) Execute(_ context.Context, config laneguard.Con
 	hardware.executions++
 	hardware.transitions++
 	hardware.observation.State = hardware.poststate
-	outcome, transitionErr := recordCommandBootTransition(hardware.journal, config, action, hardware.transitions, hardware.executeErr != nil)
+	outcome, transitionErr := recordCommandBootTransition(
+		hardware.journal, config, action, hardware.transitions, hardware.executeErr != nil, hardware.powerControl,
+	)
 	result := laneguard.OperationResult{
 		OutputDigest: commandDigest("f"), Detail: "fake physical execution", BootTransition: outcome,
 	}
@@ -148,6 +151,38 @@ func TestDisabledCommandValidatesLaneWithoutMutationInputs(t *testing.T) {
 	}
 }
 
+func TestPowerControlSelectionIsClosed(t *testing.T) {
+	restoreCommandGlobals(t)
+	if err := run(context.Background(), []string{"--power-control", "automatic"}); err == nil ||
+		!strings.Contains(err.Error(), "power-control must be relay or manual") {
+		t.Fatalf("invalid power-control error = %v", err)
+	}
+	if err := run(context.Background(), []string{"--power-control", "manual"}); err != nil {
+		t.Fatalf("manual power-control validation: %v", err)
+	}
+}
+
+func TestEnabledCommandRejectsPowerControlDifferentFromAuthorizedPlanBeforeHardware(t *testing.T) {
+	restoreCommandGlobals(t)
+	effectiveUID = func() int { return 0 }
+	setImmutableTestGlobals(t)
+	plan, request := commandPlanAndRequest()
+	stubAuthorityResult(t, plan, request)
+	buildHardware = func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+		t.Fatal("power-control-mismatched plan reached hardware construction")
+		return nil, nil
+	}
+	directory := t.TempDir()
+	draftPath := writeJSON(t, directory, "draft.json", commandDraft(plan))
+	arguments := append(
+		commandMutationArguments(t, directory, draftPath, filepath.Join(directory, "journal.json")),
+		"--power-control", "manual",
+	)
+	if err := run(context.Background(), arguments); !errors.Is(err, laneguard.ErrPlanMismatch) {
+		t.Fatalf("mode-mismatched command error = %v, want plan mismatch", err)
+	}
+}
+
 func TestImmutableReleaseBindingUsesEveryLinkerValue(t *testing.T) {
 	restoreCommandGlobals(t)
 	setImmutableTestGlobals(t)
@@ -184,7 +219,7 @@ func TestOneShotCommandUsesDurableJournalAndExactReceiptRetryAvoidsMutation(t *t
 	restoreCommandGlobals(t)
 	effectiveUID = func() int { return 0 }
 	setImmutableTestGlobals(t)
-	plan, request := commandPlanAndRequest()
+	plan, request := commandPlanAndRequestForPowerControl(laneguard.PowerControlManual)
 	stubAuthorityResult(t, plan, request)
 	authorityCalls := 0
 	stubAuthority := requestAuthority
@@ -207,13 +242,15 @@ func TestOneShotCommandUsesDurableJournalAndExactReceiptRetryAvoidsMutation(t *t
 		return server, nil
 	}
 	buildHardware = func(config physicalrpi5.Config, dependencies physicalrpi5.Dependencies) (laneguard.Hardware, error) {
-		if config.Paths.RPIBootBinary != rpibootBinary || config.Paths.FreshCommitBundle != freshCommitBundle || !config.Paths.RequireNixStorePaths {
+		if config.Paths.RPIBootBinary != rpibootBinary || config.Paths.FreshCommitBundle != freshCommitBundle ||
+			!config.Paths.RequireNixStorePaths || config.PowerControl != physicalrpi5.PowerControlManual {
 			t.Fatalf("physical config = %#v", config)
 		}
 		if dependencies.Journal == nil || dependencies.Prompter != server {
 			t.Fatalf("physical dependencies = %#v", dependencies)
 		}
 		hardware.journal = dependencies.Journal
+		hardware.powerControl = laneguard.PowerControlMode(config.PowerControl)
 		return hardware, nil
 	}
 	directory := t.TempDir()
@@ -221,7 +258,7 @@ func TestOneShotCommandUsesDurableJournalAndExactReceiptRetryAvoidsMutation(t *t
 	journalPath := filepath.Join(directory, "journal.json")
 	var output bytes.Buffer
 	commandOutput = &output
-	arguments := commandMutationArguments(t, directory, draftPath, journalPath)
+	arguments := append(commandMutationArguments(t, directory, draftPath, journalPath), "--power-control", "manual")
 	if err := run(context.Background(), arguments); err != nil {
 		t.Fatalf("one-shot run: %v", err)
 	}
@@ -1183,13 +1220,24 @@ func recordCommandBootTransition(
 	action laneguard.HardwareAction,
 	ordinal int,
 	failed bool,
+	powerControl laneguard.PowerControlMode,
 ) (laneguard.BootTransitionOutcome, error) {
 	if journal == nil {
 		return laneguard.BootTransitionOutcome{}, errors.New("command fake has no shared journal")
 	}
 	started := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC).Add(time.Duration(ordinal) * time.Minute)
+	if powerControl == "" {
+		powerControl = laneguard.PowerControlRelay
+	}
+	var initialPowerOff laneguard.OperatorPowerProof
+	if powerControl == laneguard.PowerControlManual {
+		initialPowerOff = commandOperatorPowerProof(
+			"initial_power_off", started.Add(500*time.Millisecond), started.Add(time.Minute),
+		)
+	}
 	transition, err := journal.BeginBootTransition(laneguard.BeginBootTransitionRequest{
-		Action: action, StartedAt: started, RecordedAt: started.Add(2 * time.Second),
+		Action: action, PowerControlMode: powerControl, InitialPowerOffProof: initialPowerOff,
+		StartedAt: started, RecordedAt: started.Add(2 * time.Second),
 		PowerOffObservedAt: started.Add(time.Second), USBAbsentObservedAt: started.Add(2 * time.Second),
 		ColdIntervalEndsAt: started.Add(4 * time.Second), PromptID: "hold_prompt",
 		PromptDigest: commandDigest("a"), PromptExpiresAt: started.Add(2 * time.Minute),
@@ -1201,6 +1249,11 @@ func recordCommandBootTransition(
 		transition.Status = laneguard.BootTransitionAbortedSafeOff
 		transition.Failure = laneguard.BootTransitionFailureHardware
 		transition.SafeOffObservedAt = started.Add(3 * time.Second)
+		if powerControl == laneguard.PowerControlManual {
+			transition.FinalSafeOffProof = commandOperatorPowerProof(
+				"final_power_off", started.Add(2500*time.Millisecond), started.Add(time.Minute),
+			)
+		}
 		transition.UpdatedAt = transition.SafeOffObservedAt
 		if err := journal.PutBootTransition(transition); err != nil {
 			return laneguard.BootTransitionOutcome{}, err
@@ -1219,14 +1272,17 @@ func recordCommandBootTransition(
 	if err := journal.PutBootTransition(transition); err != nil {
 		return laneguard.BootTransitionOutcome{}, err
 	}
-	transition.Status = laneguard.BootTransitionPowerApplied
-	transition.PowerAppliedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
-	transition.UpdatedAt = transition.PowerAppliedAt
+	transition.Status = laneguard.BootTransitionPowerEstablished
+	transition.PowerEstablishedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
+	if powerControl == laneguard.PowerControlManual {
+		transition.PowerEstablishedAt = transition.OperatorAcknowledgedAt
+	}
+	transition.UpdatedAt = transition.PowerEstablishedAt
 	if err := journal.PutBootTransition(transition); err != nil {
 		return laneguard.BootTransitionOutcome{}, err
 	}
 	transition.Status = laneguard.BootTransitionModeObserved
-	transition.ModeObservedAt = transition.PowerAppliedAt.Add(time.Second)
+	transition.ModeObservedAt = transition.PowerEstablishedAt.Add(time.Second)
 	transition.ObservedMode = action.RequestedBootMode
 	transition.RPIBootSysfsPath = config.RPIBootSysfsPath
 	transition.RPIBootObservationMethod = laneguard.RPIBootObservationSysfsPoll
@@ -1259,6 +1315,12 @@ func recordCommandBootTransition(
 	if !transition.OperatorReleasedAt.IsZero() {
 		transition.SafeOffObservedAt = transition.OperatorReleasedAt.Add(time.Second)
 	}
+	if powerControl == laneguard.PowerControlManual {
+		transition.FinalSafeOffProof = commandOperatorPowerProof(
+			"final_power_off", transition.SafeOffObservedAt.Add(-500*time.Millisecond),
+			transition.SafeOffObservedAt.Add(time.Minute),
+		)
+	}
 	transition.CompletedAt = transition.SafeOffObservedAt
 	transition.UpdatedAt = transition.CompletedAt
 	evidence, err := transition.Evidence()
@@ -1275,7 +1337,18 @@ func recordCommandBootTransition(
 	return transition.Outcome()
 }
 
+func commandOperatorPowerProof(id string, acknowledgedAt, expiresAt time.Time) laneguard.OperatorPowerProof {
+	return laneguard.OperatorPowerProof{
+		PromptID: id, PromptDigest: commandDigest("d"), PromptExpiresAt: expiresAt,
+		Operator: laneguard.OperatorPeer{UID: 1000, GID: 4242, PID: 2999}, AcknowledgedAt: acknowledgedAt,
+	}
+}
+
 func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
+	return commandPlanAndRequestForPowerControl(laneguard.PowerControlRelay)
+}
+
+func commandPlanAndRequestForPowerControl(powerControlMode laneguard.PowerControlMode) (laneguard.Plan, laneguard.ExecuteRequest) {
 	prestate := laneguard.DirectState{
 		CustomerKeyHash:  zeroHash,
 		EEPROMHash:       commandDigest("f"),
@@ -1294,7 +1367,8 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 	observedOwnedState.EEPROMHashStatus = laneguard.EEPROMHashObserved
 	plan := laneguard.Plan{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: "development-station", LaneID: "lane-1",
-		TransactionID: "transaction-1", Release: commandReleaseBinding(), TargetFingerprint: "target-1", InitialObservationDigest: commandDigest("7"),
+		PowerControlMode: powerControlMode,
+		TransactionID:    "transaction-1", Release: commandReleaseBinding(), TargetFingerprint: "target-1", InitialObservationDigest: commandDigest("7"),
 		FenceEpoch: 1, ApprovalID: "approval-1", ApprovalExpiresAt: time.Now().UTC().Add(5 * time.Minute), IntentReceipt: "intent-1", IntentSequence: 1,
 		Operations: []laneguard.OperationSpec{
 			{
@@ -1436,6 +1510,7 @@ func commandLaneConfig() laneguard.Config {
 		SchemaVersion:     laneguard.ContractSchemaVersion,
 		StationID:         "development-station",
 		LaneID:            "lane-1",
+		PowerControlMode:  laneguard.PowerControlRelay,
 		RPIBootSysfsPath:  "/sys/bus/usb/devices/1-1",
 		UARTPath:          "/dev/serial/by-id/kaiba-target-uart",
 		PowerGPIO:         laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0"},
