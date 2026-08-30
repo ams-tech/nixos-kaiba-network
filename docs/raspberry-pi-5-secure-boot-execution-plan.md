@@ -659,26 +659,40 @@ shortened campaign from producing `security_applied`.
   compiler and lane both validate that pair; a root-edited draft cannot replace
   the independently approved digest or durable intent receipt.
 
-The release-bound `v1alpha4` plan and digest contract serializes fixed-order JSON
+The release-bound `v1alpha5` plan and digest contract serializes fixed-order JSON
 structs without whitespace. It deliberately supersedes the earlier pre-release
 contracts rather than changing canonical material under an existing version.
 Operation material contains `sequence`, `operation`,
 `classification`, `required_boot_mode`, `authorization_id`, then
-`customer_key_hash`, `eeprom_hash`, `security_state`, and `power_state` within
-`expected_prestate` and `expected_poststate`, followed by
+`customer_key_hash`, `eeprom_hash`, `eeprom_hash_status`, `security_state`, and
+`power_state` within `expected_prestate` and `expected_poststate`, followed by
 `maximum_duration_nanoseconds`; it excludes `operation_digest`.
+`observed` requires a canonical EEPROM digest. `unavailable` requires an empty
+digest and is accepted as the first fresh, all-zero-key prestate.
+`commit_attested` requires the release EEPROM digest and owned key hash, but it
+can be resolved only from a structured `fresh-commit-attestation/v1alpha1`
+whose target, key, EEPROM digest, `EEPROM_UPDATE=success`, and
+`SECURE_BOOT_PROVISION=success` fields match the plan exactly. The complete
+attestation is included in the operation-result binding digest. Operation 1
+ends in this state, operation 2 carries it through the signed cold boot, and
+operation 3 must replace it with a current `observed` EEPROM digest before the
+remaining campaign can proceed. An interrupted irreversible operation with no
+durable exact attestation can therefore never be classified as applied; when
+its original EEPROM was unavailable it also cannot be classified as
+confirmed-not-applied or retried.
 `required_boot_mode` is not caller policy: the closed compiler and guard policy
 requires `normal` for `cold_power_cycle` and `rpiboot` for each of the other six
 development operations. Plan material contains `schema_version`, `station_id`,
 `lane_id`, `transaction_id`, the six-field `release` binding,
-`target_fingerprint`, `fence_epoch`, canonical UTC `approval_expires_at`, and
-the ordered operation digests freshly derived from their bodies; it excludes
+`target_fingerprint`, `initial_observation_digest`, `fence_epoch`, canonical
+UTC `approval_expires_at`, and the ordered operation digests freshly derived
+from their bodies; it excludes
 `plan_digest`, `approval_id`, `intent_receipt`, and `intent_sequence`. Every
 release-binding field is a canonical lowercase SHA-256 value. The lowercase
 plan SHA-256 value is computed over the ASCII domain, one NUL byte, and the
 JSON bytes. The domains are
-`kaiba.provisioning.lane-guard.operation-digest.v1alpha4` and
-`kaiba.provisioning.lane-guard.plan-digest.v1alpha4`. `LoadPlan` snapshots the
+`kaiba.provisioning.lane-guard.operation-digest.v1alpha5` and
+`kaiba.provisioning.lane-guard.plan-digest.v1alpha5`. `LoadPlan` snapshots the
 caller-owned operation slice, validates this contract and every claimed plan
 and operation digest, and restores durable journal lockout state. It is a
 validation-only boundary and performs no target-facing I/O; `Execute` or
@@ -692,16 +706,16 @@ reconciliation cannot erase it, and persisted approvals fail closed if their
 lifetime exceeds 24 hours.
 
 The execute-once journal now uses the dedicated
-`lane-guard-attempt-store/v1alpha3` envelope,
-`lane-guard-attempt/v1alpha2` records, and current durable boot-transition
+`lane-guard-attempt-store/v1alpha4` envelope,
+`lane-guard-attempt/v1alpha3` records, and current durable boot-transition
 records. Every attempt persists the approval ID, current intent receipt,
 current intent sequence, phase-specific transition evidence, and a terminal
 distinction between verified-applied, confirmed-not-applied, and quarantined
 outcomes. Each terminal attempt is also published at a new digest-derived path
 as a root-owned, mode-0444 trusted receipt; caller-owned copies cannot enter
-the evidence workflow. The `v1alpha4` mode field changes every operation and
-plan digest, so older drafts, approvals, intents, requests, and attempts are
-not reusable.
+the evidence workflow. The `v1alpha5` EEPROM-hash availability and initial
+observation bindings change every operation and plan digest, so older drafts,
+approvals, intents, requests, and attempts are not reusable.
 
 There is deliberately no in-place journal migration. The current decoder
 rejects an older envelope. Before replacement, stop the lane and preserve its
@@ -905,7 +919,7 @@ terminal classification.
 - one fixed GPIO chip and line for that relay; and
 - a deterministic, directly observed way to select RPIBOOT versus normal boot.
 
-The `v1alpha4` lane contract carries a digest-bound `required_boot_mode`, and
+The `v1alpha5` lane contract carries a digest-bound `required_boot_mode`, and
 the sacrificial-development implementation now uses an explicit, durable,
 authenticated manual operator handshake. The guard proves relay release and
 USB absence, persists the requested transition and exact prompt, waits the

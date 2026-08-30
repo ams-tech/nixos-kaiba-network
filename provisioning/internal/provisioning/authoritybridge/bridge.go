@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	RequestSchemaVersion  = "provisioning.kaiba.network/authority-bridge-request/v1alpha3"
-	ResponseSchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha3"
+	RequestSchemaVersion  = "provisioning.kaiba.network/authority-bridge-request/v1alpha4"
+	ResponseSchemaVersion = "provisioning.kaiba.network/authority-bridge-response/v1alpha4"
 
 	// AuthorityReadTimeout is the maximum duration expected from each
 	// authenticated control or audit request. Network adapters must enforce

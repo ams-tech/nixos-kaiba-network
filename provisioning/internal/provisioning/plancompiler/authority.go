@@ -136,7 +136,8 @@ func bindWithActorPolicy(draft Draft, authority Authority, actors actorPolicy) (
 	target := transaction.Target
 	if target == nil || target.Fingerprint != plan.TargetFingerprint || target.FenceEpoch != plan.FenceEpoch ||
 		target.CustomerKeyHash != transaction.ExpectedPrestateCustomerKeyHash ||
-		target.CustomerKeyHash != plan.Operations[0].ExpectedPrestate.CustomerKeyHash || !validDigest(target.ObservationDigest) ||
+		target.CustomerKeyHash != plan.Operations[0].ExpectedPrestate.CustomerKeyHash ||
+		target.ObservationDigest != plan.InitialObservationDigest || !validDigest(target.ObservationDigest) ||
 		target.BoundAt.IsZero() || target.BoundAt.After(now) {
 		return BoundPlan{}, fmt.Errorf("%w: target binding", ErrAuthorityMismatch)
 	}
@@ -203,7 +204,8 @@ func (bound BoundPlan) ExecuteRequest() (laneguard.ExecuteRequest, error) {
 		StationID:     bound.plan.StationID, LaneID: bound.plan.LaneID,
 		TransactionID: bound.plan.TransactionID, PlanDigest: bound.plan.PlanDigest,
 		Release: bound.plan.Release, TargetFingerprint: bound.plan.TargetFingerprint,
-		FenceEpoch: bound.plan.FenceEpoch, ApprovalID: bound.plan.ApprovalID,
+		InitialObservationDigest: bound.plan.InitialObservationDigest,
+		FenceEpoch:               bound.plan.FenceEpoch, ApprovalID: bound.plan.ApprovalID,
 		ApprovalExpiresAt: bound.plan.ApprovalExpiresAt, IntentReceipt: bound.plan.IntentReceipt,
 		Sequence: operation.Sequence, OperationDigest: operation.OperationDigest,
 		AuthorizationID: operation.AuthorizationID, RequiredBootMode: operation.RequiredBootMode,

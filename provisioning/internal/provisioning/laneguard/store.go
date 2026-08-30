@@ -19,8 +19,8 @@ type AttemptStatus string
 const (
 	maximumLaneJournalBytes = 8 * 1024 * 1024
 
-	AttemptSchemaVersion      = "provisioning.kaiba.network/lane-guard-attempt/v1alpha2"
-	AttemptStoreSchemaVersion = "provisioning.kaiba.network/lane-guard-attempt-store/v1alpha3"
+	AttemptSchemaVersion      = "provisioning.kaiba.network/lane-guard-attempt/v1alpha3"
+	AttemptStoreSchemaVersion = "provisioning.kaiba.network/lane-guard-attempt-store/v1alpha4"
 
 	AttemptStarted             AttemptStatus = "started"
 	AttemptUncertain           AttemptStatus = "uncertain"
@@ -684,6 +684,27 @@ func validateAttempt(attempt Attempt) error {
 	}
 	if err := validateAttemptBootTransitionOutcomes(attempt); err != nil {
 		return err
+	}
+	attestation := attempt.Result.CommitAttestation
+	if attempt.Operation != OperationProgramCustomerKeyAndEEPROM {
+		if !attestation.IsZero() {
+			return errors.New("only the fresh-commit operation may carry a commit attestation")
+		}
+		return nil
+	}
+	if attempt.Status == AttemptVerified && attestation.IsZero() {
+		return errors.New("a verified fresh-commit attempt requires a commit attestation")
+	}
+	if attempt.Status == AttemptConfirmedNotApplied && !attestation.IsZero() {
+		return errors.New("a confirmed-not-applied fresh-commit attempt cannot carry a commit attestation")
+	}
+	if !attestation.IsZero() {
+		if err := attestation.Validate(); err != nil {
+			return err
+		}
+		if attestation.TargetFingerprint != attempt.TargetFingerprint {
+			return errors.New("fresh-commit attestation target does not match the attempt")
+		}
 	}
 	return nil
 }

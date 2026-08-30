@@ -61,7 +61,8 @@ func BindReconciliation(draft Draft, authority Authority) (BoundReconciliation, 
 	if target == nil || target.Fingerprint != plan.TargetFingerprint || target.FenceEpoch != plan.FenceEpoch ||
 		target.CustomerKeyHash != transaction.ExpectedPrestateCustomerKeyHash ||
 		target.CustomerKeyHash != plan.Operations[0].ExpectedPrestate.CustomerKeyHash ||
-		!validDigest(target.ObservationDigest) || target.BoundAt.IsZero() || target.BoundAt.After(now) {
+		target.ObservationDigest != plan.InitialObservationDigest || !validDigest(target.ObservationDigest) ||
+		target.BoundAt.IsZero() || target.BoundAt.After(now) {
 		return BoundReconciliation{}, reconciliationError("original target binding")
 	}
 
@@ -100,7 +101,8 @@ func BindReconciliation(draft Draft, authority Authority) (BoundReconciliation, 
 		StationID:     boundPlan.StationID, LaneID: boundPlan.LaneID,
 		TransactionID: boundPlan.TransactionID, PlanDigest: boundPlan.PlanDigest,
 		Release: boundPlan.Release, TargetFingerprint: boundPlan.TargetFingerprint,
-		FenceEpoch: boundPlan.FenceEpoch, ApprovalID: boundPlan.ApprovalID,
+		InitialObservationDigest: boundPlan.InitialObservationDigest,
+		FenceEpoch:               boundPlan.FenceEpoch, ApprovalID: boundPlan.ApprovalID,
 		ApprovalExpiresAt: boundPlan.ApprovalExpiresAt, IntentReceipt: boundPlan.IntentReceipt,
 		Sequence: operation.Sequence, OperationDigest: operation.OperationDigest,
 		AuthorizationID: operation.AuthorizationID, RequiredBootMode: operation.RequiredBootMode,

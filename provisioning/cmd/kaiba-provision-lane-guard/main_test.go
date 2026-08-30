@@ -32,6 +32,7 @@ type commandHardware struct {
 	closed       int
 	closeErr     error
 	observeErr   error
+	observeErrAt map[int]error
 	executeErr   error
 	poststate    laneguard.DirectState
 }
@@ -39,12 +40,16 @@ type commandHardware struct {
 func (hardware *commandHardware) Observe(_ context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.Observation, error) {
 	hardware.observations++
 	hardware.transitions++
+	hardwareErr := hardware.observeErr
+	if scheduledErr, ok := hardware.observeErrAt[hardware.observations]; ok {
+		hardwareErr = scheduledErr
+	}
 	outcome, transitionErr := recordCommandBootTransition(
-		hardware.journal, config, action, hardware.transitions, hardware.observeErr != nil,
+		hardware.journal, config, action, hardware.transitions, hardwareErr != nil,
 	)
 	observation := hardware.observation
 	observation.BootTransition = outcome
-	return observation, errors.Join(hardware.observeErr, transitionErr)
+	return observation, errors.Join(hardwareErr, transitionErr)
 }
 
 func (hardware *commandHardware) Execute(_ context.Context, config laneguard.Config, action laneguard.HardwareAction) (laneguard.OperationResult, error) {
@@ -52,9 +57,17 @@ func (hardware *commandHardware) Execute(_ context.Context, config laneguard.Con
 	hardware.transitions++
 	hardware.observation.State = hardware.poststate
 	outcome, transitionErr := recordCommandBootTransition(hardware.journal, config, action, hardware.transitions, hardware.executeErr != nil)
-	return laneguard.OperationResult{
+	result := laneguard.OperationResult{
 		OutputDigest: commandDigest("f"), Detail: "fake physical execution", BootTransition: outcome,
-	}, errors.Join(hardware.executeErr, transitionErr)
+	}
+	if action.Operation == laneguard.OperationProgramCustomerKeyAndEEPROM && hardware.executeErr == nil && transitionErr == nil {
+		result.CommitAttestation = laneguard.CommitAttestation{
+			SchemaVersion: laneguard.CommitAttestationSchemaVersion, TargetFingerprint: action.TargetFingerprint,
+			CustomerKeyHash: commandDigest("1"), EEPROMHash: commandDigest("e"),
+			EEPROMUpdateResult: "success", SecureBootProvisionResult: "success",
+		}
+	}
+	return result, errors.Join(hardware.executeErr, transitionErr)
 }
 
 func (hardware *commandHardware) Close() error {
@@ -356,6 +369,8 @@ func TestCommandReconcilesRestartWithModeAutoAndNoRedispatch(t *testing.T) {
 	effectiveUID = func() int { return 0 }
 	setImmutableTestGlobals(t)
 	plan, executeRequest := commandPlanAndRequest()
+	observedPoststate := plan.Operations[0].ExpectedPoststate
+	observedPoststate.EEPROMHashStatus = laneguard.EEPROMHashObserved
 	reconcileRequest := laneguard.ReconcileRequest{
 		SchemaVersion:   laneguard.ReconcileRequestSchemaVersion,
 		OriginalRequest: executeRequest,
@@ -388,8 +403,8 @@ func TestCommandReconcilesRestartWithModeAutoAndNoRedispatch(t *testing.T) {
 			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
 			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
 		},
-		poststate:  plan.Operations[0].ExpectedPoststate,
-		executeErr: errors.New("response lost after target commit"),
+		poststate:    observedPoststate,
+		observeErrAt: map[int]error{2: errors.New("post-commit observation lost")},
 	}
 	var adapterModes []string
 	buildHardware = func(config physicalrpi5.Config, dependencies physicalrpi5.Dependencies) (laneguard.Hardware, error) {
@@ -419,12 +434,59 @@ func TestCommandReconcilesRestartWithModeAutoAndNoRedispatch(t *testing.T) {
 	if authorityCalls != 4 || len(adapterModes) != 2 || adapterModes[0] != physicalrpi5.ModeFresh || adapterModes[1] != physicalrpi5.ModeAuto {
 		t.Fatalf("dispatch = authority:%d modes:%#v", authorityCalls, adapterModes)
 	}
-	if hardware.executions != 1 || hardware.observations != 2 {
+	if hardware.executions != 1 || hardware.observations != 3 {
 		t.Fatalf("reconciliation redispatch/double observation: executions=%d observations=%d", hardware.executions, hardware.observations)
 	}
 	entries, err = os.ReadDir(filepath.Join(directory, "attempts"))
 	if err != nil || len(entries) != 2 {
 		t.Fatalf("execute and reconciliation publications = %v, %v", entries, err)
+	}
+}
+
+func TestTerminalPublicationRejectsCommitAttestationOutsideApprovedRelease(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*laneguard.CommitAttestation)
+	}{
+		{"customer key", func(attestation *laneguard.CommitAttestation) { attestation.CustomerKeyHash = commandDigest("9") }},
+		{"EEPROM", func(attestation *laneguard.CommitAttestation) { attestation.EEPROMHash = commandDigest("8") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			restoreCommandGlobals(t)
+			effectiveUID = func() int { return 0 }
+			setImmutableTestGlobals(t)
+			plan, request := commandPlanAndRequest()
+			stubAuthorityResult(t, plan, request)
+			attempt := commandBoundAttempt(plan, request.Sequence, laneguard.AttemptVerified)
+			test.mutate(&attempt.Result.CommitAttestation)
+			journal := &seededCommandJournal{MemoryStore: laneguard.NewMemoryStore(), attempt: attempt}
+			openLaneJournal = func(string) (laneJournal, error) { return journal, nil }
+			listenOperatorPrompt = func(operatorprompt.Config) (operatorPromptServer, error) {
+				t.Fatal("invalid terminal commit reached prompt setup")
+				return nil, nil
+			}
+			buildHardware = func(physicalrpi5.Config, physicalrpi5.Dependencies) (laneguard.Hardware, error) {
+				t.Fatal("invalid terminal commit reached hardware construction")
+				return nil, nil
+			}
+			writeAttemptEvidence = func(string, []byte) error {
+				t.Fatal("invalid terminal commit was published")
+				return nil
+			}
+
+			directory := t.TempDir()
+			err := run(context.Background(), commandMutationArguments(
+				t, directory, writeJSON(t, directory, "draft.json", commandDraft(plan)), filepath.Join(directory, "journal.json"),
+			))
+			if !errors.Is(err, laneguard.ErrPlanMismatch) || !strings.Contains(err.Error(), "fresh-commit attestation differs") {
+				t.Fatalf("terminal publication error = %v", err)
+			}
+			entries, readErr := os.ReadDir(filepath.Join(directory, "attempts"))
+			if readErr != nil || len(entries) != 0 || journal.closeCalls != 1 {
+				t.Fatalf("invalid terminal receipt/close state = %v, %v, close=%d", entries, readErr, journal.closeCalls)
+			}
+		})
 	}
 }
 
@@ -537,6 +599,8 @@ func TestUncertainReconciliationRetryReobservesWithoutExecuting(t *testing.T) {
 	effectiveUID = func() int { return 0 }
 	setImmutableTestGlobals(t)
 	plan, executeRequest := commandPlanAndRequest()
+	observedPoststate := plan.Operations[0].ExpectedPoststate
+	observedPoststate.EEPROMHashStatus = laneguard.EEPROMHashObserved
 	reconcileRequest := commandReconcileRequest(plan, executeRequest)
 
 	// Produce a fully valid durable AttemptUncertain, then make one read-only
@@ -549,8 +613,8 @@ func TestUncertainReconciliationRetryReobservesWithoutExecuting(t *testing.T) {
 			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
 			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
 		},
-		poststate:  plan.Operations[0].ExpectedPoststate,
-		executeErr: errors.New("response lost after target commit"),
+		poststate:    plan.Operations[0].ExpectedPoststate,
+		observeErrAt: map[int]error{2: errors.New("post-commit observation lost")},
 	}
 	initialGuard, err := laneguard.New(commandLaneConfig(), initialHardware, memory)
 	if err != nil {
@@ -592,7 +656,7 @@ func TestUncertainReconciliationRetryReobservesWithoutExecuting(t *testing.T) {
 	retryHardware := &commandHardware{
 		observation: laneguard.Observation{
 			EligibleTargets: 1, RPIBootSysfsPath: "/sys/bus/usb/devices/1-1",
-			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
+			TargetFingerprint: plan.TargetFingerprint, State: observedPoststate,
 		},
 	}
 	hardwareBuilds := 0
@@ -730,6 +794,9 @@ func TestAttemptDestinationIsDigestBoundAndUnsafePathsFailBeforeHardware(t *test
 	restoreCommandGlobals(t)
 	setImmutableTestGlobals(t)
 	effectiveUID = func() int { return 0 }
+	if attemptPublicationIdentitySchemaVersion != "kaiba.provisioning.lane-attempt-publication/v1alpha2" {
+		t.Fatalf("attempt publication identity schema = %q", attemptPublicationIdentitySchemaVersion)
+	}
 	plan, request := commandPlanAndRequest()
 	reconcile := laneguard.ReconcileRequest{
 		SchemaVersion: laneguard.ReconcileRequestSchemaVersion, OriginalRequest: request,
@@ -1085,7 +1152,7 @@ func sameOptionalError(got, want error) bool {
 func commandBoundAttempt(plan laneguard.Plan, sequence uint32, status laneguard.AttemptStatus) laneguard.Attempt {
 	operation := plan.Operations[sequence-1]
 	now := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)
-	return laneguard.Attempt{
+	attempt := laneguard.Attempt{
 		SchemaVersion: laneguard.AttemptSchemaVersion,
 		Key:           laneguard.AttemptJournalKey(plan, sequence),
 		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest,
@@ -1094,6 +1161,20 @@ func commandBoundAttempt(plan laneguard.Plan, sequence uint32, status laneguard.
 		Sequence: sequence, Operation: operation.Operation, OperationDigest: operation.OperationDigest,
 		Status: status, StartedAt: now, UpdatedAt: now,
 	}
+	switch status {
+	case laneguard.AttemptVerified:
+		attempt.ObservedState = operation.ExpectedPoststate
+		if operation.Operation == laneguard.OperationProgramCustomerKeyAndEEPROM {
+			attempt.Result.CommitAttestation = laneguard.CommitAttestation{
+				SchemaVersion: laneguard.CommitAttestationSchemaVersion, TargetFingerprint: plan.TargetFingerprint,
+				CustomerKeyHash: plan.Release.ExpectedCustomerKeyHash, EEPROMHash: plan.Release.ExpectedEEPROMDigest,
+				EEPROMUpdateResult: "success", SecureBootProvisionResult: "success",
+			}
+		}
+	case laneguard.AttemptConfirmedNotApplied:
+		attempt.ObservedState = operation.ExpectedPrestate
+	}
+	return attempt
 }
 
 func recordCommandBootTransition(
@@ -1195,54 +1276,68 @@ func recordCommandBootTransition(
 }
 
 func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
-	prestate := laneguard.DirectState{CustomerKeyHash: zeroHash, EEPROMHash: commandDigest("f"), SecurityState: "fresh", PowerState: "powered_off"}
-	poststate := laneguard.DirectState{CustomerKeyHash: commandDigest("1"), EEPROMHash: commandDigest("e"), SecurityState: "owned", PowerState: "powered_off"}
+	prestate := laneguard.DirectState{
+		CustomerKeyHash:  zeroHash,
+		EEPROMHash:       commandDigest("f"),
+		EEPROMHashStatus: laneguard.EEPROMHashObserved,
+		SecurityState:    "fresh",
+		PowerState:       "powered_off",
+	}
+	commitAttestedState := laneguard.DirectState{
+		CustomerKeyHash:  commandDigest("1"),
+		EEPROMHash:       commandDigest("e"),
+		EEPROMHashStatus: laneguard.EEPROMHashCommitAttested,
+		SecurityState:    "owned",
+		PowerState:       "powered_off",
+	}
+	observedOwnedState := commitAttestedState
+	observedOwnedState.EEPROMHashStatus = laneguard.EEPROMHashObserved
 	plan := laneguard.Plan{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: "development-station", LaneID: "lane-1",
-		TransactionID: "transaction-1", Release: commandReleaseBinding(), TargetFingerprint: "target-1",
+		TransactionID: "transaction-1", Release: commandReleaseBinding(), TargetFingerprint: "target-1", InitialObservationDigest: commandDigest("7"),
 		FenceEpoch: 1, ApprovalID: "approval-1", ApprovalExpiresAt: time.Now().UTC().Add(5 * time.Minute), IntentReceipt: "intent-1", IntentSequence: 1,
 		Operations: []laneguard.OperationSpec{
 			{
 				Sequence: 1, Operation: laneguard.OperationProgramCustomerKeyAndEEPROM,
 				Classification: laneguard.ClassIrreversible, RequiredBootMode: laneguard.BootModeRPIBoot,
 				AuthorizationID: "authorization-1", ExpectedPrestate: prestate,
-				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+				ExpectedPoststate: commitAttestedState, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 2, Operation: laneguard.OperationColdPowerCycle,
 				Classification: laneguard.ClassReversible, RequiredBootMode: laneguard.BootModeNormal,
-				AuthorizationID: "authorization-2", ExpectedPrestate: poststate,
-				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+				AuthorizationID: "authorization-2", ExpectedPrestate: commitAttestedState,
+				ExpectedPoststate: commitAttestedState, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 3, Operation: laneguard.OperationOwnedReadback,
 				Classification: laneguard.ClassReadOnly, RequiredBootMode: laneguard.BootModeRPIBoot,
-				AuthorizationID: "authorization-3", ExpectedPrestate: poststate,
-				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+				AuthorizationID: "authorization-3", ExpectedPrestate: commitAttestedState,
+				ExpectedPoststate: observedOwnedState, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 4, Operation: laneguard.OperationTestOwnedRecovery,
 				Classification: laneguard.ClassReversible, RequiredBootMode: laneguard.BootModeRPIBoot,
-				AuthorizationID: "authorization-4", ExpectedPrestate: poststate,
-				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+				AuthorizationID: "authorization-4", ExpectedPrestate: observedOwnedState,
+				ExpectedPoststate: observedOwnedState, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 5, Operation: laneguard.OperationPostRecoveryReadback,
 				Classification: laneguard.ClassReadOnly, RequiredBootMode: laneguard.BootModeRPIBoot,
-				AuthorizationID: "authorization-5", ExpectedPrestate: poststate,
-				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+				AuthorizationID: "authorization-5", ExpectedPrestate: observedOwnedState,
+				ExpectedPoststate: observedOwnedState, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 6, Operation: laneguard.OperationTestNegativeBoot,
 				Classification: laneguard.ClassReversible, RequiredBootMode: laneguard.BootModeRPIBoot,
-				AuthorizationID: "authorization-6", ExpectedPrestate: poststate,
-				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+				AuthorizationID: "authorization-6", ExpectedPrestate: observedOwnedState,
+				ExpectedPoststate: observedOwnedState, MaximumDuration: time.Minute,
 			},
 			{
 				Sequence: 7, Operation: laneguard.OperationTestRootIntegrity,
 				Classification: laneguard.ClassReversible, RequiredBootMode: laneguard.BootModeRPIBoot,
-				AuthorizationID: "authorization-7", ExpectedPrestate: poststate,
-				ExpectedPoststate: poststate, MaximumDuration: time.Minute,
+				AuthorizationID: "authorization-7", ExpectedPrestate: observedOwnedState,
+				ExpectedPoststate: observedOwnedState, MaximumDuration: time.Minute,
 			},
 		},
 	}
@@ -1254,7 +1349,7 @@ func commandPlanAndRequest() (laneguard.Plan, laneguard.ExecuteRequest) {
 	request := laneguard.ExecuteRequest{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
 		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest, Release: plan.Release, TargetFingerprint: plan.TargetFingerprint,
-		FenceEpoch: plan.FenceEpoch, ApprovalID: plan.ApprovalID, ApprovalExpiresAt: plan.ApprovalExpiresAt, IntentReceipt: plan.IntentReceipt,
+		InitialObservationDigest: plan.InitialObservationDigest, FenceEpoch: plan.FenceEpoch, ApprovalID: plan.ApprovalID, ApprovalExpiresAt: plan.ApprovalExpiresAt, IntentReceipt: plan.IntentReceipt,
 		Sequence: 1, OperationDigest: plan.Operations[0].OperationDigest,
 		AuthorizationID: plan.Operations[0].AuthorizationID, RequiredBootMode: plan.Operations[0].RequiredBootMode, ExpectedPrestate: prestate,
 		ClaimExpiresAt: time.Now().Add(10 * time.Minute),

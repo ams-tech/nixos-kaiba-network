@@ -124,6 +124,9 @@ func TestBinderRejectsTamperedOrAuthoritativeDraftSnapshot(t *testing.T) {
 		"operation body": func(request *BridgeRequest) {
 			request.DraftSnapshot.Operations[0].MaximumDuration++
 		},
+		"initial observation": func(request *BridgeRequest) {
+			request.DraftSnapshot.InitialObservationDigest = bridgeDigest("f")
+		},
 		"required boot mode": func(request *BridgeRequest) {
 			request.DraftSnapshot.Operations[0].RequiredBootMode = laneguard.BootModeNormal
 		},
@@ -165,15 +168,15 @@ func TestBinderRejectsTamperedOrAuthoritativeDraftSnapshot(t *testing.T) {
 	}
 }
 
-func TestBridgeSchemaVersionsTrackDigestBoundBootModeWireChange(t *testing.T) {
-	if RequestSchemaVersion != "provisioning.kaiba.network/authority-bridge-request/v1alpha3" ||
-		ResponseSchemaVersion != "provisioning.kaiba.network/authority-bridge-response/v1alpha3" {
+func TestBridgeSchemaVersionsTrackObservationBoundPlanWireChange(t *testing.T) {
+	if RequestSchemaVersion != "provisioning.kaiba.network/authority-bridge-request/v1alpha4" ||
+		ResponseSchemaVersion != "provisioning.kaiba.network/authority-bridge-response/v1alpha4" {
 		t.Fatalf("authority bridge schemas = %q / %q", RequestSchemaVersion, ResponseSchemaVersion)
 	}
 
 	fixture := newBridgeFixture(t)
 	request := cloneBridgeRequest(fixture.request)
-	request.SchemaVersion = "provisioning.kaiba.network/authority-bridge-request/v1alpha2"
+	request.SchemaVersion = "provisioning.kaiba.network/authority-bridge-request/v1alpha3"
 	binder := Binder{
 		Control: controlReaderFunc(func(context.Context, string) (controlplane.Transaction, error) {
 			t.Fatal("previous wire schema reached the authority source")
@@ -185,6 +188,17 @@ func TestBridgeSchemaVersionsTrackDigestBoundBootModeWireChange(t *testing.T) {
 		}),
 	}
 	if _, err := binder.Bind(context.Background(), request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Bind() error = %v", err)
+	}
+}
+
+func TestBinderRejectsControlTargetObservationThatDiffersFromApprovedPlan(t *testing.T) {
+	fixture := newBridgeFixture(t)
+	changed := fixture
+	changed.transaction = cloneBridgeTransaction(t, fixture.transaction)
+	changed.transaction.Target.ObservationDigest = bridgeDigest("f")
+	binder := fixedBinder(changed, changed.records)
+	if _, err := binder.Bind(context.Background(), changed.request); !errors.Is(err, ErrAuthorityRejected) || !errors.Is(err, plancompiler.ErrAuthorityMismatch) {
 		t.Fatalf("Bind() error = %v", err)
 	}
 }
@@ -529,10 +543,10 @@ func newBridgeFixture(t *testing.T) bridgeFixture {
 	}
 	draft, err := plancompiler.BuildDraft(plancompiler.DraftInput{
 		StationID: "station-bridge", LaneID: "lane-bridge", TransactionID: "transaction-bridge",
-		Release: release, TargetFingerprint: bridgeDigest("7"), FenceEpoch: 1,
+		Release: release, TargetFingerprint: bridgeDigest("7"), InitialObservationDigest: bridgeDigest("a"), FenceEpoch: 1,
 		ApprovalExpiresAt: now.Add(30 * time.Minute),
 		InitialState: laneguard.DirectState{
-			CustomerKeyHash: plancompiler.ZeroCustomerKeyHash, EEPROMHash: bridgeDigest("8"),
+			CustomerKeyHash: plancompiler.ZeroCustomerKeyHash, EEPROMHash: bridgeDigest("8"), EEPROMHashStatus: laneguard.EEPROMHashObserved,
 			SecurityState: "fresh", PowerState: "powered_off",
 		},
 		AuthorizationIDs: [7]string{"authorization-1", "authorization-2", "authorization-3", "authorization-4", "authorization-5", "authorization-6", "authorization-7"},

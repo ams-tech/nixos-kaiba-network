@@ -487,6 +487,130 @@ func TestRPIBootTransitionPersistsBeforePromptsAndReturnsJournalOutcome(t *testi
 	}
 }
 
+func TestRPIBootReadbackReportsEEPROMHashAvailability(t *testing.T) {
+	t.Run("fresh metadata omits EEPROM hash", func(t *testing.T) {
+		environment := newEnvironment(t, ModeFresh)
+		environment.runner.outputs[environment.adapter.config.Paths.FreshReadbackBundle] =
+			metadataWithoutEEPROM(zeroCustomerKey, false, expectedSerial)
+		environment.gpio.on = func() { environment.filesystem.set(exactTarget()) }
+		environment.gpio.off = func() { environment.filesystem.set(map[string][2]string{}) }
+
+		observation, err := environment.adapter.Observe(
+			context.Background(),
+			environment.lane,
+			testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if observation.State.EEPROMHashStatus != laneguard.EEPROMHashUnavailable || observation.State.EEPROMHash != "" {
+			t.Fatalf("fresh omitted EEPROM state = %#v, want unavailable with an empty hash", observation.State)
+		}
+		if strings.HasPrefix(observation.State.EEPROMHash, "sha256:") {
+			t.Fatalf("fresh omitted EEPROM hash was synthesized: %q", observation.State.EEPROMHash)
+		}
+	})
+
+	t.Run("fresh metadata observes EEPROM hash", func(t *testing.T) {
+		environment := newEnvironment(t, ModeFresh)
+		environment.gpio.on = func() { environment.filesystem.set(exactTarget()) }
+		environment.gpio.off = func() { environment.filesystem.set(map[string][2]string{}) }
+
+		observation, err := environment.adapter.Observe(
+			context.Background(),
+			environment.lane,
+			testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if observation.State.EEPROMHashStatus != laneguard.EEPROMHashObserved || observation.State.EEPROMHash != "sha256:"+strings.Repeat("f", 64) {
+			t.Fatalf("fresh observed EEPROM state = %#v", observation.State)
+		}
+	})
+
+	t.Run("owned metadata omits EEPROM hash", func(t *testing.T) {
+		environment := newEnvironment(t, ModeOwned)
+		environment.runner.outputs[environment.adapter.config.Paths.OwnedReadbackBundle] =
+			metadataWithoutEEPROM(expectedKey, false, expectedSerial)
+		environment.gpio.on = func() { environment.filesystem.set(exactTarget()) }
+		environment.gpio.off = func() { environment.filesystem.set(map[string][2]string{}) }
+
+		result, err := environment.adapter.Execute(
+			context.Background(),
+			environment.lane,
+			testAction(laneguard.HardwarePhaseExecute, laneguard.OperationOwnedReadback),
+		)
+		if err != nil {
+			t.Fatalf("owned omitted EEPROM readback: %v", err)
+		}
+		if result.BootTransition.Reference.Status != laneguard.BootTransitionCompleted {
+			t.Fatalf("owned omitted EEPROM outcome = %#v", result.BootTransition.Reference)
+		}
+		if environment.adapter.directState.EEPROMHashStatus != laneguard.EEPROMHashUnavailable ||
+			environment.adapter.directState.EEPROMHash != "" {
+			t.Fatalf("owned omitted EEPROM state = %#v", environment.adapter.directState)
+		}
+	})
+}
+
+func TestUnavailableMetadataCommitCanReachSignedColdBoot(t *testing.T) {
+	environment := newEnvironment(t, ModeFresh)
+	environment.runner.outputs[environment.adapter.config.Paths.FreshReadbackBundle] =
+		metadataWithoutEEPROM(zeroCustomerKey, false, expectedSerial)
+	environment.runner.outputs[environment.adapter.config.Paths.OwnedReadbackBundle] =
+		metadataWithoutEEPROM(expectedKey, false, expectedSerial)
+	environment.gpio.on = func() { environment.filesystem.set(exactTarget()) }
+	environment.gpio.off = func() { environment.filesystem.set(map[string][2]string{}) }
+
+	preCommit, err := environment.adapter.Observe(
+		context.Background(), environment.lane,
+		testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationProgramCustomerKeyAndEEPROM),
+	)
+	if err != nil || preCommit.State.EEPROMHashStatus != laneguard.EEPROMHashUnavailable {
+		t.Fatalf("fresh pre-observation = %#v, %v", preCommit, err)
+	}
+	commit, err := environment.adapter.Execute(
+		context.Background(), environment.lane,
+		testAction(laneguard.HardwarePhaseExecute, laneguard.OperationProgramCustomerKeyAndEEPROM),
+	)
+	if err != nil || commit.CommitAttestation.IsZero() {
+		t.Fatalf("fresh commit = %#v, %v", commit, err)
+	}
+	postCommit, err := environment.adapter.Observe(
+		context.Background(), environment.lane,
+		testAction(laneguard.HardwarePhasePostObservation, laneguard.OperationProgramCustomerKeyAndEEPROM),
+	)
+	if err != nil || postCommit.State.CustomerKeyHash != "sha256:"+expectedKey ||
+		postCommit.State.EEPROMHashStatus != laneguard.EEPROMHashUnavailable {
+		t.Fatalf("owned post-commit observation = %#v, %v", postCommit, err)
+	}
+
+	preBoot, err := environment.adapter.Observe(
+		context.Background(), environment.lane,
+		testAction(laneguard.HardwarePhasePreObservation, laneguard.OperationColdPowerCycle),
+	)
+	if err != nil || preBoot.State.EEPROMHashStatus != laneguard.EEPROMHashUnavailable {
+		t.Fatalf("signed-boot pre-observation = %#v, %v", preBoot, err)
+	}
+	environment.gpio.on = func() { environment.filesystem.set(map[string][2]string{}) }
+	boot, err := environment.adapter.Execute(
+		context.Background(), environment.lane,
+		testAction(laneguard.HardwarePhaseExecute, laneguard.OperationColdPowerCycle),
+	)
+	if err != nil || boot.BootTransition.Reference.Status != laneguard.BootTransitionCompleted {
+		t.Fatalf("signed cold boot = %#v, %v", boot, err)
+	}
+	environment.gpio.on = func() { environment.filesystem.set(exactTarget()) }
+	postBoot, err := environment.adapter.Observe(
+		context.Background(), environment.lane,
+		testAction(laneguard.HardwarePhasePostObservation, laneguard.OperationColdPowerCycle),
+	)
+	if err != nil || postBoot.State.EEPROMHashStatus != laneguard.EEPROMHashUnavailable {
+		t.Fatalf("signed-boot post-observation = %#v, %v", postBoot, err)
+	}
+}
+
 func TestNormalTransitionArmsUARTAndWatcherBeforePower(t *testing.T) {
 	environment := newEnvironment(t, ModeOwned)
 	target := targetObservation()
@@ -884,10 +1008,30 @@ func TestImmutablePayloadSemanticsRemainFailClosed(t *testing.T) {
 		environment.runner.errors[environment.adapter.config.Paths.FreshCommitBundle] = errors.New("late USB close error")
 		action := testAction(laneguard.HardwarePhaseExecute, laneguard.OperationProgramCustomerKeyAndEEPROM)
 		result, err := environment.adapter.Execute(context.Background(), environment.lane, action)
-		if err != nil || result.OutputDigest == "" || environment.adapter.mode != ModeOwned {
+		wantAttestation := laneguard.CommitAttestation{
+			SchemaVersion:             laneguard.CommitAttestationSchemaVersion,
+			TargetFingerprint:         expectedFingerprint,
+			CustomerKeyHash:           "sha256:" + expectedKey,
+			EEPROMHash:                "sha256:" + expectedEEPROM,
+			EEPROMUpdateResult:        "success",
+			SecureBootProvisionResult: "success",
+		}
+		if err != nil || result.OutputDigest == "" || environment.adapter.mode != ModeOwned || result.CommitAttestation != wantAttestation {
 			t.Fatalf("commit result = %#v, mode=%s, error=%v", result, environment.adapter.mode, err)
 		}
 		assertOutcomeEqualsJournal(t, environment.journal, result.BootTransition, action)
+	})
+	t.Run("commit metadata omission never creates an attestation", func(t *testing.T) {
+		environment := newEnvironment(t, ModeFresh)
+		environment.gpio.on = func() { environment.filesystem.set(exactTarget()) }
+		environment.gpio.off = func() { environment.filesystem.set(map[string][2]string{}) }
+		environment.runner.outputs[environment.adapter.config.Paths.FreshCommitBundle] =
+			metadataWithoutEEPROM(expectedKey, true, expectedSerial)
+		action := testAction(laneguard.HardwarePhaseExecute, laneguard.OperationProgramCustomerKeyAndEEPROM)
+		result, err := environment.adapter.Execute(context.Background(), environment.lane, action)
+		if !errors.Is(err, ErrMetadataMismatch) || !result.CommitAttestation.IsZero() || environment.adapter.mode != ModeFresh {
+			t.Fatalf("incomplete commit metadata result = %#v, mode=%s, error=%v", result, environment.adapter.mode, err)
+		}
 	})
 	t.Run("bounded RPIBOOT output", func(t *testing.T) {
 		environment := newEnvironment(t, ModeFresh)
@@ -1188,6 +1332,11 @@ func metadata(customerKey, eeprom string, commit bool, serial string) string {
 		operationFields = `,"EEPROM_UPDATE":"success","SECURE_BOOT_PROVISION":"success"`
 	}
 	return fmt.Sprintf(`{"USER_SERIAL_NUM":%q,"MAC_ADDR":"2C:CF:67:70:76:F3","EEPROM_HASH":%q,"CUSTOMER_KEY_HASH":%q,"BOOT_ROM":"0000000A","BOARD_ATTR":"00000000","USER_BOARDREV":"B04170","JTAG_LOCKED":"0","SIGNATURE_MODE":"0","MAC_WIFI_ADDR":"2C:CF:67:70:76:F4","MAC_BT_ADDR":"2C:CF:67:70:76:F5","FACTORY_UUID":"001000911006186073"%s}`, serial, eeprom, customerKey, operationFields)
+}
+
+func metadataWithoutEEPROM(customerKey string, commit bool, serial string) string {
+	withEEPROM := metadata(customerKey, expectedEEPROM, commit, serial)
+	return strings.Replace(withEEPROM, `,"EEPROM_HASH":"`+expectedEEPROM+`"`, "", 1)
 }
 
 func signedEvidence(signed, digest string) string {

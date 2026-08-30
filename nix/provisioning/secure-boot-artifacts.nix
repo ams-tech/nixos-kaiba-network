@@ -217,7 +217,7 @@ pkgs.runCommand name
     sanitized_cmdline="$(paste -sd ' ' "$TMPDIR/sanitized-cmdline")"
     chmod u+w "$active_cmdline"
     printf '%s %s\n' "$sanitized_cmdline" \
-      "ro root=/dev/mapper/root rootfstype=ext4 rd.systemd.verity=1 roothash=$root_hash systemd.verity_root_data=${dataDevice} systemd.verity_root_hash=${hashDevice}" \
+      "ro root=fstab rd.systemd.verity=1 roothash=$root_hash systemd.verity_root_data=${dataDevice} systemd.verity_root_hash=${hashDevice}" \
       > "$active_cmdline"
     chmod 0444 "$active_cmdline"
 

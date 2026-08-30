@@ -357,19 +357,18 @@ let
         }
 
         require_exact_parameter ro
-        require_exact_parameter 'root=/dev/mapper/root'
-        require_exact_parameter 'rootfstype=ext4'
+        require_exact_parameter 'root=fstab'
         require_exact_parameter 'rd.systemd.verity=1'
         require_exact_parameter "roothash=$root_hash"
         require_exact_parameter "systemd.verity_root_data=$data_device"
         require_exact_parameter "systemd.verity_root_hash=$hash_device"
         require_unique_prefix 'root='
-        require_unique_prefix 'rootfstype='
         require_unique_prefix 'rd.systemd.verity='
         require_unique_prefix 'roothash='
         require_unique_prefix 'systemd.verity_root_data='
         require_unique_prefix 'systemd.verity_root_hash='
         require_absent_parameter rw
+        require_absent_prefix 'rootfstype='
         require_absent_prefix 'systemd.verity='
         require_absent_prefix 'systemd.verity_root_options='
         require_absent_prefix 'rd.systemd.verity_root_data='

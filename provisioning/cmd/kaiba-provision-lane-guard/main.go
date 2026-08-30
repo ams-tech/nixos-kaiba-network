@@ -335,6 +335,11 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if found && !attemptMatchesAuthenticatedPlan(durable, plan, originalRequest.Sequence) {
 		return fmt.Errorf("%w: durable attempt differs from the authenticated operation", laneguard.ErrPlanMismatch)
 	}
+	if found {
+		if err := laneguard.ValidateAttemptForPlan(plan, durable); err != nil {
+			return fmt.Errorf("%w: durable attempt evidence is invalid: %v", laneguard.ErrPlanMismatch, err)
+		}
+	}
 	destinationExists, err := inspectAttemptDestination(attemptPath, durable, found)
 	if err != nil {
 		return err
@@ -414,6 +419,9 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	}
 	if !attemptMatchesAuthenticatedPlan(durable, plan, originalRequest.Sequence) {
 		return errors.Join(err, fmt.Errorf("%w: reloaded durable attempt differs from the authenticated operation; receipt not published", laneguard.ErrPlanMismatch))
+	}
+	if validateErr := laneguard.ValidateAttemptForPlan(plan, durable); validateErr != nil {
+		return errors.Join(err, fmt.Errorf("%w: reloaded durable attempt evidence is invalid; receipt not published: %v", laneguard.ErrPlanMismatch, validateErr))
 	}
 	if !isPublishableAttemptStatus(durable.Status) {
 		return errors.Join(err, fmt.Errorf(
@@ -535,7 +543,7 @@ func attemptStatusError(mode string, status laneguard.AttemptStatus) error {
 	}
 }
 
-const attemptPublicationIdentitySchemaVersion = "kaiba.provisioning.lane-attempt-publication/v1alpha1"
+const attemptPublicationIdentitySchemaVersion = "kaiba.provisioning.lane-attempt-publication/v1alpha2"
 
 func plannedAttemptEvidencePath(directory, mode string, execute laneguard.ExecuteRequest, reconcile laneguard.ReconcileRequest) (string, error) {
 	if directory == "" || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {

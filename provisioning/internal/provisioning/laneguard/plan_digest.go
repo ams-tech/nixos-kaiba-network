@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	operationDigestDomain = "kaiba.provisioning.lane-guard.operation-digest.v1alpha4"
-	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha4"
+	operationDigestDomain = "kaiba.provisioning.lane-guard.operation-digest.v1alpha5"
+	planDigestDomain      = "kaiba.provisioning.lane-guard.plan-digest.v1alpha5"
 )
 
 type operationDigestMaterial struct {
@@ -28,15 +28,16 @@ type operationDigestMaterial struct {
 }
 
 type planDigestMaterial struct {
-	SchemaVersion     string                 `json:"schema_version"`
-	StationID         string                 `json:"station_id"`
-	LaneID            string                 `json:"lane_id"`
-	TransactionID     string                 `json:"transaction_id"`
-	Release           releasebinding.Binding `json:"release"`
-	TargetFingerprint string                 `json:"target_fingerprint"`
-	FenceEpoch        uint64                 `json:"fence_epoch"`
-	ApprovalExpiresAt string                 `json:"approval_expires_at"`
-	OperationDigests  []string               `json:"operation_digests"`
+	SchemaVersion            string                 `json:"schema_version"`
+	StationID                string                 `json:"station_id"`
+	LaneID                   string                 `json:"lane_id"`
+	TransactionID            string                 `json:"transaction_id"`
+	Release                  releasebinding.Binding `json:"release"`
+	TargetFingerprint        string                 `json:"target_fingerprint"`
+	InitialObservationDigest string                 `json:"initial_observation_digest"`
+	FenceEpoch               uint64                 `json:"fence_epoch"`
+	ApprovalExpiresAt        string                 `json:"approval_expires_at"`
+	OperationDigests         []string               `json:"operation_digests"`
 }
 
 // CanonicalDigestMaterial returns the deterministic operation representation
@@ -86,15 +87,16 @@ func (plan Plan) CanonicalDigestMaterial() ([]byte, error) {
 		operationDigests[index] = digest
 	}
 	encoded, err := json.Marshal(planDigestMaterial{
-		SchemaVersion:     plan.SchemaVersion,
-		StationID:         plan.StationID,
-		LaneID:            plan.LaneID,
-		TransactionID:     plan.TransactionID,
-		Release:           plan.Release,
-		TargetFingerprint: plan.TargetFingerprint,
-		FenceEpoch:        plan.FenceEpoch,
-		ApprovalExpiresAt: approvalExpiresAt,
-		OperationDigests:  operationDigests,
+		SchemaVersion:            plan.SchemaVersion,
+		StationID:                plan.StationID,
+		LaneID:                   plan.LaneID,
+		TransactionID:            plan.TransactionID,
+		Release:                  plan.Release,
+		TargetFingerprint:        plan.TargetFingerprint,
+		InitialObservationDigest: plan.InitialObservationDigest,
+		FenceEpoch:               plan.FenceEpoch,
+		ApprovalExpiresAt:        approvalExpiresAt,
+		OperationDigests:         operationDigests,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode canonical plan digest material: %w", err)

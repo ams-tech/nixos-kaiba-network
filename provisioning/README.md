@@ -126,8 +126,8 @@ and initial contents are not trust inputs. See the
 [target-media staging contracts](../docs/target-media-staging-prototype.md).
 
 The current file journal accepts only
-`lane-guard-attempt-store/v1alpha3` envelopes containing
-`lane-guard-attempt/v1alpha2` attempts and current durable boot-transition
+`lane-guard-attempt-store/v1alpha4` envelopes containing
+`lane-guard-attempt/v1alpha3` attempts and current durable boot-transition
 records. Older nonempty journals are not migrated or replayed: remove the lane
 from service and resolve the target externally as a reconciliation or
 quarantine case before replacing the deployment. Only a journal positively

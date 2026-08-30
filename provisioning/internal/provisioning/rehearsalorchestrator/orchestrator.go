@@ -237,18 +237,21 @@ func newFixture(config Config) fixture {
 		ExpectedBootImageDigest:     fixtureDigest(id, "boot-image"),
 	}
 	fresh := laneguard.DirectState{
-		CustomerKeyHash: plancompiler.ZeroCustomerKeyHash,
-		EEPROMHash:      fixtureDigest(id, "fresh-eeprom"),
-		SecurityState:   "fresh",
-		PowerState:      "powered_off",
+		CustomerKeyHash:  plancompiler.ZeroCustomerKeyHash,
+		EEPROMHashStatus: laneguard.EEPROMHashObserved,
+		EEPROMHash:       fixtureDigest(id, "fresh-eeprom"),
+		SecurityState:    "fresh",
+		PowerState:       "powered_off",
 	}
 	stationID := "station-" + id
 	laneID := "lane-" + id
 	transactionID := "transaction-" + id
+	targetObservation := fixtureDigest(id, "target-observation")
 	draft, err := plancompiler.BuildDraft(plancompiler.DraftInput{
 		StationID: stationID, LaneID: laneID, TransactionID: transactionID,
 		Release: release, TargetFingerprint: fixtureDigest(id, "target"), FenceEpoch: 1,
-		ApprovalExpiresAt: config.Now.UTC().Add(30 * time.Minute), InitialState: fresh,
+		InitialObservationDigest: targetObservation,
+		ApprovalExpiresAt:        config.Now.UTC().Add(30 * time.Minute), InitialState: fresh,
 		AuthorizationIDs: [7]string{
 			"software-auth-1", "software-auth-2", "software-auth-3", "software-auth-4",
 			"software-auth-5", "software-auth-6", "software-auth-7",
@@ -269,7 +272,7 @@ func newFixture(config Config) fixture {
 		stationID: stationID, laneID: laneID, transactionID: transactionID,
 		assetID: "asset-" + id, logicalID: "device-" + id, profileID: "rpi5-software-rehearsal",
 		policyDigest: fixtureDigest(id, "policy"), targetFingerprint: fixtureDigest(id, "target"),
-		targetObservation: fixtureDigest(id, "target-observation"), release: release, draft: draft,
+		targetObservation: targetObservation, release: release, draft: draft,
 		approvalID:  "approval-" + id,
 		operationID: "operation-1-" + id, operationNames: operationNames,
 	}

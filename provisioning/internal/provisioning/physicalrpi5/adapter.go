@@ -767,11 +767,19 @@ func (adapter *Adapter) commitLocked(ctx context.Context, lane laneguard.Config,
 	adapter.target = &observation
 	adapter.mode = ModeOwned
 	adapter.directState = directState(observation, "rpiboot")
+	attestation := laneguard.CommitAttestation{
+		SchemaVersion:             laneguard.CommitAttestationSchemaVersion,
+		TargetFingerprint:         observation.TargetFingerprint,
+		CustomerKeyHash:           "sha256:" + observation.CustomerKeyHash,
+		EEPROMHash:                "sha256:" + observation.EEPROMHash,
+		EEPROMUpdateResult:        strings.ToLower(observation.UpstreamFields["EEPROM_UPDATE"]),
+		SecureBootProvisionResult: strings.ToLower(observation.UpstreamFields["SECURE_BOOT_PROVISION"]),
+	}
 	detail := "fresh commit metadata and direct postcondition verified"
 	if commandErr != nil {
 		detail = "fresh commit command reported an error, but complete authoritative metadata verified the postcondition"
 	}
-	return laneguard.OperationResult{OutputDigest: digestBytes(output), Detail: detail}, nil
+	return laneguard.OperationResult{OutputDigest: digestBytes(output), Detail: detail, CommitAttestation: attestation}, nil
 }
 
 func (adapter *Adapter) readbackLocked(ctx context.Context, lane laneguard.Config, expectedFingerprint, bundle, mode string) (laneguard.OperationResult, error) {
@@ -796,7 +804,8 @@ func (adapter *Adapter) readbackLocked(ctx context.Context, lane laneguard.Confi
 			return laneguard.OperationResult{}, fmt.Errorf("%w: fresh readback has a programmed customer key", ErrMetadataMismatch)
 		}
 	case ModeOwned:
-		if observation.CustomerKeyHash != adapter.config.ExpectedCustomerKeyHash || observation.EEPROMHash != adapter.config.ExpectedEEPROMHash {
+		if observation.CustomerKeyHash != adapter.config.ExpectedCustomerKeyHash ||
+			(observation.EEPROMHash != "" && observation.EEPROMHash != adapter.config.ExpectedEEPROMHash) {
 			return laneguard.OperationResult{}, fmt.Errorf("%w: owned key or EEPROM digest differs", ErrMetadataMismatch)
 		}
 	default:
@@ -840,7 +849,7 @@ func (adapter *Adapter) preflightRPIBootIdentityLocked(ctx context.Context, lane
 		return fmt.Errorf("%w: fresh identity preflight observed a programmed customer key", laneguard.ErrTargetContinuity)
 	}
 	if mode == ModeOwned && (observation.CustomerKeyHash != adapter.config.ExpectedCustomerKeyHash ||
-		observation.EEPROMHash != adapter.config.ExpectedEEPROMHash) {
+		(observation.EEPROMHash != "" && observation.EEPROMHash != adapter.config.ExpectedEEPROMHash)) {
 		return fmt.Errorf("%w: owned identity preflight key or EEPROM digest differs", laneguard.ErrTargetContinuity)
 	}
 	return nil
@@ -1133,10 +1142,16 @@ func directState(observation rpi5.Observation, powerState string) laneguard.Dire
 	if observation.CustomerKeyHash == zeroCustomerKey {
 		securityState = "fresh"
 	}
-	return laneguard.DirectState{
-		CustomerKeyHash: "sha256:" + observation.CustomerKeyHash, EEPROMHash: "sha256:" + observation.EEPROMHash,
-		SecurityState: securityState, PowerState: powerState,
+	state := laneguard.DirectState{
+		CustomerKeyHash:  "sha256:" + observation.CustomerKeyHash,
+		EEPROMHashStatus: laneguard.EEPROMHashUnavailable,
+		SecurityState:    securityState, PowerState: powerState,
 	}
+	if observation.EEPROMHash != "" {
+		state.EEPROMHashStatus = laneguard.EEPROMHashObserved
+		state.EEPROMHash = "sha256:" + observation.EEPROMHash
+	}
+	return state
 }
 
 func digestBytes(value []byte) string {

@@ -22,10 +22,10 @@ const directoryOpenFlags = syscall.O_RDONLY | syscall.O_CLOEXEC | syscall.O_NOFO
 // raw syscalls here, next to the only code which needs them, instead of making
 // evidence publication depend on pathname-based convenience wrappers.
 const (
-	atEmptyPath       = 0x1000
-	atSymlinkFollow   = 0x400
-	oPath             = 0x200000 // Linux O_PATH, absent from some syscall versions.
-	oTmpfile          = 0x400000 | syscall.O_DIRECTORY
+	atEmptyPath     = 0x1000
+	atSymlinkFollow = 0x400
+	oPath           = 0x200000 // Linux O_PATH, absent from some syscall versions.
+	oTmpfile        = 0x400000 | syscall.O_DIRECTORY
 )
 
 func WriteCanonicalNew(path string, data []byte) error {

@@ -24,7 +24,7 @@ var (
 )
 
 const (
-	prestateDigestDomain = "kaiba.provisioning.plan-compiler.prestate.v1alpha1"
+	prestateDigestDomain = "kaiba.provisioning.plan-compiler.prestate.v1alpha2"
 	ZeroCustomerKeyHash  = controlplane.UnownedCustomerKeyHash
 )
 
@@ -32,16 +32,17 @@ const (
 // names, classifications, sequence numbers, and prestate chaining are fixed by
 // BuildDraft rather than supplied by a caller.
 type DraftInput struct {
-	StationID         string
-	LaneID            string
-	TransactionID     string
-	Release           releasebinding.Binding
-	TargetFingerprint string
-	FenceEpoch        uint64
-	ApprovalExpiresAt time.Time
-	InitialState      laneguard.DirectState
-	AuthorizationIDs  [7]string
-	MaximumDurations  [7]time.Duration
+	StationID                string
+	LaneID                   string
+	TransactionID            string
+	Release                  releasebinding.Binding
+	TargetFingerprint        string
+	InitialObservationDigest string
+	FenceEpoch               uint64
+	ApprovalExpiresAt        time.Time
+	InitialState             laneguard.DirectState
+	AuthorizationIDs         [7]string
+	MaximumDurations         [7]time.Duration
 }
 
 // Draft is an immutable, non-executable plan snapshot. ApprovalID and
@@ -70,8 +71,8 @@ func BuildDraft(input DraftInput) (Draft, error) {
 	if !identifier.MatchString(input.StationID) || !identifier.MatchString(input.LaneID) || !identifier.MatchString(input.TransactionID) {
 		return Draft{}, fmt.Errorf("%w: station, lane, or transaction identity is invalid", ErrInvalidDraft)
 	}
-	if !validDigest(input.TargetFingerprint) || input.FenceEpoch == 0 {
-		return Draft{}, fmt.Errorf("%w: target fingerprint or fence epoch is invalid", ErrInvalidDraft)
+	if !validDigest(input.TargetFingerprint) || !validDigest(input.InitialObservationDigest) || input.FenceEpoch == 0 {
+		return Draft{}, fmt.Errorf("%w: target fingerprint, initial observation digest, or fence epoch is invalid", ErrInvalidDraft)
 	}
 	if err := input.Release.Validate(); err != nil {
 		return Draft{}, fmt.Errorf("%w: release binding: %v", ErrInvalidDraft, err)
@@ -88,23 +89,24 @@ func BuildDraft(input DraftInput) (Draft, error) {
 	if input.InitialState.CustomerKeyHash != ZeroCustomerKeyHash || input.InitialState.SecurityState != "fresh" || input.InitialState.PowerState != "powered_off" {
 		return Draft{}, fmt.Errorf("%w: initial state must be a fresh, completely powered-off target", ErrInvalidDraft)
 	}
-	expectedOwnedState := laneguard.DirectState{
-		CustomerKeyHash: input.Release.ExpectedCustomerKeyHash,
-		EEPROMHash:      input.Release.ExpectedEEPROMDigest,
-		SecurityState:   "owned",
-		PowerState:      "powered_off",
+	commitAttestedState := laneguard.DirectState{
+		CustomerKeyHash: input.Release.ExpectedCustomerKeyHash, EEPROMHash: input.Release.ExpectedEEPROMDigest,
+		EEPROMHashStatus: laneguard.EEPROMHashCommitAttested, SecurityState: "owned", PowerState: "powered_off",
 	}
+	observedOwnedState := commitAttestedState
+	observedOwnedState.EEPROMHashStatus = laneguard.EEPROMHashObserved
 
 	plan := laneguard.Plan{
-		SchemaVersion:     laneguard.ContractSchemaVersion,
-		StationID:         input.StationID,
-		LaneID:            input.LaneID,
-		TransactionID:     input.TransactionID,
-		Release:           input.Release,
-		TargetFingerprint: input.TargetFingerprint,
-		FenceEpoch:        input.FenceEpoch,
-		ApprovalExpiresAt: input.ApprovalExpiresAt.UTC(),
-		Operations:        make([]laneguard.OperationSpec, len(operations)),
+		SchemaVersion:            laneguard.ContractSchemaVersion,
+		StationID:                input.StationID,
+		LaneID:                   input.LaneID,
+		TransactionID:            input.TransactionID,
+		Release:                  input.Release,
+		TargetFingerprint:        input.TargetFingerprint,
+		InitialObservationDigest: input.InitialObservationDigest,
+		FenceEpoch:               input.FenceEpoch,
+		ApprovalExpiresAt:        input.ApprovalExpiresAt.UTC(),
+		Operations:               make([]laneguard.OperationSpec, len(operations)),
 	}
 	prestate := input.InitialState
 	for index, policy := range operations {
@@ -117,6 +119,10 @@ func BuildDraft(input DraftInput) (Draft, error) {
 		// The physical adapter's observation boundary always removes power
 		// before returning. Operation-specific boot and recovery evidence is
 		// carried in the operation result, not in this direct state chain.
+		poststate := observedOwnedState
+		if index < 2 {
+			poststate = commitAttestedState
+		}
 		plan.Operations[index] = laneguard.OperationSpec{
 			Sequence:          uint32(index + 1),
 			Operation:         policy.operation,
@@ -124,10 +130,10 @@ func BuildDraft(input DraftInput) (Draft, error) {
 			RequiredBootMode:  policy.requiredBootMode,
 			AuthorizationID:   input.AuthorizationIDs[index],
 			ExpectedPrestate:  prestate,
-			ExpectedPoststate: expectedOwnedState,
+			ExpectedPoststate: poststate,
 			MaximumDuration:   input.MaximumDurations[index],
 		}
-		prestate = expectedOwnedState
+		prestate = poststate
 	}
 	derived, err := plan.WithDerivedDigests()
 	if err != nil {
@@ -155,16 +161,17 @@ func DraftFromSnapshot(snapshot laneguard.Plan) (Draft, error) {
 		maximumDurations[index] = operation.MaximumDuration
 	}
 	restored, err := BuildDraft(DraftInput{
-		StationID:         snapshot.StationID,
-		LaneID:            snapshot.LaneID,
-		TransactionID:     snapshot.TransactionID,
-		Release:           snapshot.Release,
-		TargetFingerprint: snapshot.TargetFingerprint,
-		FenceEpoch:        snapshot.FenceEpoch,
-		ApprovalExpiresAt: snapshot.ApprovalExpiresAt,
-		InitialState:      snapshot.Operations[0].ExpectedPrestate,
-		AuthorizationIDs:  authorizationIDs,
-		MaximumDurations:  maximumDurations,
+		StationID:                snapshot.StationID,
+		LaneID:                   snapshot.LaneID,
+		TransactionID:            snapshot.TransactionID,
+		Release:                  snapshot.Release,
+		TargetFingerprint:        snapshot.TargetFingerprint,
+		InitialObservationDigest: snapshot.InitialObservationDigest,
+		FenceEpoch:               snapshot.FenceEpoch,
+		ApprovalExpiresAt:        snapshot.ApprovalExpiresAt,
+		InitialState:             snapshot.Operations[0].ExpectedPrestate,
+		AuthorizationIDs:         authorizationIDs,
+		MaximumDurations:         maximumDurations,
 	})
 	if err != nil {
 		return Draft{}, err
@@ -178,7 +185,7 @@ func DraftFromSnapshot(snapshot laneguard.Plan) (Draft, error) {
 func sameDraftSnapshot(left, right laneguard.Plan) bool {
 	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID ||
 		left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release ||
-		left.TargetFingerprint != right.TargetFingerprint || left.FenceEpoch != right.FenceEpoch ||
+		left.TargetFingerprint != right.TargetFingerprint || left.InitialObservationDigest != right.InitialObservationDigest || left.FenceEpoch != right.FenceEpoch ||
 		left.ApprovalExpiresAt != right.ApprovalExpiresAt || left.ApprovalID != right.ApprovalID ||
 		left.IntentReceipt != right.IntentReceipt || left.IntentSequence != right.IntentSequence ||
 		len(left.Operations) != len(right.Operations) {
@@ -193,11 +200,8 @@ func sameDraftSnapshot(left, right laneguard.Plan) bool {
 }
 
 func validateState(state laneguard.DirectState) error {
-	if !validDigest(state.CustomerKeyHash) || !validDigest(state.EEPROMHash) {
-		return fmt.Errorf("%w: direct-state key and EEPROM hashes must be canonical digests", ErrInvalidDraft)
-	}
-	if state.SecurityState == "" || state.PowerState == "" {
-		return fmt.Errorf("%w: direct-state security and power fields must not be empty", ErrInvalidDraft)
+	if err := state.Validate(); err != nil {
+		return fmt.Errorf("%w: direct state: %v", ErrInvalidDraft, err)
 	}
 	return nil
 }

@@ -3844,7 +3844,7 @@ let
           ${secureBootFixtureA}/nvme/root-hash.img \
           "$root_hash"
         mtype -i ${secureBootFixtureA}/unsigned/boot.img ::cmdline.txt \
-          | grep -F "root=/dev/mapper/root rootfstype=ext4 rd.systemd.verity=1 roothash=$root_hash"
+          | grep -F "root=fstab rd.systemd.verity=1 roothash=$root_hash"
         mtype -i ${secureBootFixtureA}/unsigned/boot.img ::cmdline.txt \
           > "$TMPDIR/secure-boot-cmdline.txt"
         grep -F \
@@ -3855,6 +3855,10 @@ let
           "$TMPDIR/secure-boot-cmdline.txt"
         if grep -F '/dev/nvme' "$TMPDIR/secure-boot-cmdline.txt"; then
           echo 'secure-boot command line contains an enumeration-dependent NVMe path' >&2
+          exit 1
+        fi
+        if grep -Eq '(^|[[:space:]])rootfstype=' "$TMPDIR/secure-boot-cmdline.txt"; then
+          echo 'secure-boot command line bypasses the sealed initrd fstab filesystem type' >&2
           exit 1
         fi
         mtype -i ${secureBootFixtureA}/unsigned/boot.img ::kaiba-root-integrity.json \

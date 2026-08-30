@@ -79,6 +79,7 @@ type fakeHardware struct {
 	journal         Journal
 	observation     Observation
 	observeErr      error
+	observeErrAt    map[int]error
 	executeErr      error
 	executeCount    int
 	observeCount    int
@@ -96,6 +97,7 @@ type fakeHardware struct {
 func (hardware *fakeHardware) Observe(ctx context.Context, config Config, action HardwareAction) (Observation, error) {
 	hardware.mu.Lock()
 	hardware.observeCount++
+	observeCount := hardware.observeCount
 	hardware.transitionCount++
 	ordinal := hardware.transitionCount
 	hardware.actions = append(hardware.actions, action)
@@ -104,6 +106,9 @@ func (hardware *fakeHardware) Observe(ctx context.Context, config Config, action
 	}
 	observation := hardware.observation
 	hardwareErr := hardware.observeErr
+	if scheduledErr, ok := hardware.observeErrAt[observeCount]; ok {
+		hardwareErr = scheduledErr
+	}
 	mutate := hardware.mutateOutcome
 	wait := hardware.waitObserve
 	hardware.mu.Unlock()
@@ -147,7 +152,15 @@ func (hardware *fakeHardware) Execute(ctx context.Context, config Config, action
 	if mutate != nil {
 		mutate(action, &outcome)
 	}
-	return OperationResult{OutputDigest: digest("f"), Detail: "fake result", BootTransition: outcome}, errors.Join(err, transitionErr)
+	result := OperationResult{OutputDigest: digest("f"), Detail: "fake result", BootTransition: outcome}
+	if action.Operation == OperationProgramCustomerKeyAndEEPROM && err == nil && transitionErr == nil {
+		result.CommitAttestation = CommitAttestation{
+			SchemaVersion: CommitAttestationSchemaVersion, TargetFingerprint: action.TargetFingerprint,
+			CustomerKeyHash: digest("4"), EEPROMHash: digest("5"),
+			EEPROMUpdateResult: "success", SecureBootProvisionResult: "success",
+		}
+	}
+	return result, errors.Join(err, transitionErr)
 }
 
 func recordFakeBootTransition(journal Journal, config Config, action HardwareAction, ordinal int, failed bool) (BootTransitionOutcome, error) {
@@ -477,11 +490,13 @@ func TestGuardNeverRepeatsUncertainIrreversibleOperation(t *testing.T) {
 		t.Fatalf("uncertain operation executed %d times", hardware.executeCount)
 	}
 
-	// The fake changed to the approved poststate before losing its response;
-	// direct reconciliation can therefore verify the attempt without replay.
+	// The fake changed to the approved EEPROM and key before losing its response,
+	// but those bytes cannot recreate the commit response's success fields.
 	hardware.executeErr = nil
+	hardware.observation.State.EEPROMHashStatus = EEPROMHashObserved
 	reconciled, err := guard.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
-	if err != nil || reconciled.Status != AttemptVerified {
+	if !errors.Is(err, ErrReconciliationRequired) || reconciled.Status != AttemptUncertain ||
+		reconciled.Result.CommitAttestation != (CommitAttestation{}) {
 		t.Fatalf("reconcile = %#v, %v", reconciled, err)
 	}
 	if hardware.executeCount != 1 {
@@ -629,6 +644,187 @@ func TestReconcileConfirmsExactOriginalPrestateWithoutRedispatch(t *testing.T) {
 	}
 }
 
+func TestReconcileKeepsUnavailableInitialEEPROMPrestateUncertain(t *testing.T) {
+	config := testConfig()
+	planBody := testPlanBody()
+	planBody.Operations[0].ExpectedPrestate.EEPROMHash = ""
+	planBody.Operations[0].ExpectedPrestate.EEPROMHashStatus = EEPROMHashUnavailable
+	plan := deriveTestPlan(planBody)
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	hardware := &fakeHardware{
+		journal: store,
+		observation: Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+		},
+		after:      map[Operation]DirectState{plan.Operations[0].Operation: plan.Operations[0].ExpectedPrestate},
+		executeErr: errors.New("response lost after EEPROM might have changed"),
+	}
+	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	original := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), original); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("uncertain execute = %v", err)
+	}
+	attempt, err := guard.Reconcile(context.Background(), reconcileRequest(plan, original, now.Add(10*time.Minute)))
+	if !errors.Is(err, ErrReconciliationRequired) || attempt.Status != AttemptUncertain || attempt.ObservedState != plan.Operations[0].ExpectedPrestate {
+		t.Fatalf("unavailable-prestate reconciliation = %#v, %v", attempt, err)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("reconciliation redispatched hardware %d times", hardware.executeCount)
+	}
+	persisted, found, getErr := store.Get(attempt.Key)
+	if getErr != nil || !found || persisted != attempt {
+		t.Fatalf("persisted unavailable-prestate attempt = %#v, %t, %v", persisted, found, getErr)
+	}
+}
+
+func TestCommitAttestationResolvesUnavailableReadbackAcrossOperationRestart(t *testing.T) {
+	config := testConfig()
+	planBody := testPlanBody()
+	planBody.Operations[0].ExpectedPrestate.EEPROMHash = ""
+	planBody.Operations[0].ExpectedPrestate.EEPROMHashStatus = EEPROMHashUnavailable
+	plan := deriveTestPlan(planBody)
+	ownedUnavailable := plan.Operations[0].ExpectedPoststate
+	ownedUnavailable.EEPROMHash = ""
+	ownedUnavailable.EEPROMHashStatus = EEPROMHashUnavailable
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	hardware := &fakeHardware{
+		journal: store,
+		observation: Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+		},
+		after: map[Operation]DirectState{
+			OperationProgramCustomerKeyAndEEPROM: ownedUnavailable,
+			OperationColdPowerCycle:              ownedUnavailable,
+		},
+	}
+	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute)))
+	if err != nil || commit.Status != AttemptVerified || commit.ObservedState != plan.Operations[0].ExpectedPoststate ||
+		commit.Result.CommitAttestation != expectedCommitAttestation(plan) {
+		t.Fatalf("commit-attested operation 1 = %#v, %v", commit, err)
+	}
+
+	restarted, nextPlan := loadTestIntent(t, config, hardware, store, plan, 2, now)
+	coldBoot, err := restarted.Execute(context.Background(), requestFor(nextPlan, 2, now.Add(10*time.Minute)))
+	if err != nil || coldBoot.Status != AttemptVerified || coldBoot.ObservedState != nextPlan.Operations[1].ExpectedPoststate {
+		t.Fatalf("restart operation 2 = %#v, %v", coldBoot, err)
+	}
+	if hardware.executeCount != 2 {
+		t.Fatalf("hardware executions = %d, want one commit and one cold boot", hardware.executeCount)
+	}
+}
+
+func TestResolveEEPROMProofNeverTrustsRawCommitAttestedStatus(t *testing.T) {
+	plan := testPlan()
+	expected := plan.Operations[0].ExpectedPoststate
+	if resolved, matches, inconclusive := resolveEEPROMProof(expected, expected, CommitAttestation{}); matches || !inconclusive || resolved != expected {
+		t.Fatalf("unattested raw commit claim = %#v, matches=%t inconclusive=%t", resolved, matches, inconclusive)
+	}
+	if resolved, matches, inconclusive := resolveEEPROMProof(expected, expected, expectedCommitAttestation(plan)); !matches || inconclusive || resolved != expected {
+		t.Fatalf("exact attested commit claim = %#v, matches=%t inconclusive=%t", resolved, matches, inconclusive)
+	}
+	observed := expected
+	observed.EEPROMHashStatus = EEPROMHashObserved
+	if resolved, matches, inconclusive := resolveEEPROMProof(expected, observed, CommitAttestation{}); matches || !inconclusive || resolved != observed {
+		t.Fatalf("unattested exact EEPROM observation = %#v, matches=%t inconclusive=%t", resolved, matches, inconclusive)
+	}
+	if resolved, matches, inconclusive := resolveEEPROMProof(expected, observed, expectedCommitAttestation(plan)); !matches || inconclusive || resolved != expected {
+		t.Fatalf("attested exact EEPROM observation = %#v, matches=%t inconclusive=%t", resolved, matches, inconclusive)
+	}
+}
+
+func TestOperationThreeReconciliationPrefersObservedPoststateOverAttestedPrestate(t *testing.T) {
+	guard, hardware, store, plan, now := newTestGuard(t)
+	commit, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute)))
+	if err != nil || commit.Status != AttemptVerified || commit.Result.CommitAttestation.IsZero() {
+		t.Fatalf("operation 1 = %#v, %v", commit, err)
+	}
+
+	guard, plan = loadTestIntent(t, testConfig(), hardware, store, plan, 2, now)
+	coldBoot, err := guard.Execute(context.Background(), requestFor(plan, 2, now.Add(10*time.Minute)))
+	if err != nil || coldBoot.Status != AttemptVerified {
+		t.Fatalf("operation 2 = %#v, %v", coldBoot, err)
+	}
+
+	hardware.after[OperationOwnedReadback] = plan.Operations[2].ExpectedPoststate
+	guard, plan = loadTestIntent(t, testConfig(), hardware, store, plan, 3, now)
+	hardware.executeErr = errors.New("owned-readback response lost after observation")
+	request := requestFor(plan, 3, now.Add(10*time.Minute))
+	uncertain, err := guard.Execute(context.Background(), request)
+	if !errors.Is(err, ErrReconciliationRequired) || uncertain.Status != AttemptUncertain {
+		t.Fatalf("uncertain operation 3 = %#v, %v", uncertain, err)
+	}
+
+	hardware.executeErr = nil
+	reconciled, err := guard.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
+	if err != nil || reconciled.Status != AttemptVerified || reconciled.ObservedState != plan.Operations[2].ExpectedPoststate {
+		t.Fatalf("reconciled operation 3 = %#v, %v", reconciled, err)
+	}
+	if hardware.executeCount != 3 {
+		t.Fatalf("operation 3 reconciliation redispatched hardware; executions=%d", hardware.executeCount)
+	}
+}
+
+func TestOwnedUnavailableReconciliationWithoutCommitAttestationNeverRedispatches(t *testing.T) {
+	config := testConfig()
+	planBody := testPlanBody()
+	planBody.Operations[0].ExpectedPrestate.EEPROMHash = ""
+	planBody.Operations[0].ExpectedPrestate.EEPROMHashStatus = EEPROMHashUnavailable
+	plan := deriveTestPlan(planBody)
+	ownedUnavailable := plan.Operations[0].ExpectedPoststate
+	ownedUnavailable.EEPROMHash = ""
+	ownedUnavailable.EEPROMHashStatus = EEPROMHashUnavailable
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	hardware := &fakeHardware{
+		journal: store,
+		observation: Observation{
+			EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath,
+			TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate,
+		},
+		after:      map[Operation]DirectState{OperationProgramCustomerKeyAndEEPROM: ownedUnavailable},
+		executeErr: errors.New("fresh-commit response was lost"),
+	}
+	guard, err := NewWithClock(config, hardware, store, fakeClock{now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.LoadPlan(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("ambiguous commit = %v", err)
+	}
+	attempt, err := guard.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
+	if !errors.Is(err, ErrReconciliationRequired) || attempt.Status != AttemptUncertain ||
+		attempt.Result.CommitAttestation != (CommitAttestation{}) || attempt.ObservedState != ownedUnavailable {
+		t.Fatalf("owned unavailable reconciliation = %#v, %v", attempt, err)
+	}
+	if replay, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) || replay != attempt {
+		t.Fatalf("ambiguous execute replay = %#v, %v", replay, err)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("ambiguous commit was redispatched %d times", hardware.executeCount)
+	}
+}
+
 func TestGuardRejectsExpiredApprovalBeforeObservationHardwareOrJournal(t *testing.T) {
 	guard, hardware, _, plan, _ := newTestGuard(t)
 	journal := &countingStore{}
@@ -650,11 +846,12 @@ func TestGuardRejectsExpiredApprovalBeforeObservationHardwareOrJournal(t *testin
 
 func TestGuardAllowsReconciliationAfterApprovalExpiry(t *testing.T) {
 	guard, hardware, _, plan, now := newTestGuard(t)
-	hardware.executeErr = errors.New("response lost after command")
+	hardware.observeErrAt = map[int]error{2: errors.New("post-commit observation lost")}
 	request := requestFor(plan, 1, now.Add(10*time.Minute))
 	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
 		t.Fatalf("uncertain execute error = %v", err)
 	}
+	hardware.observation.State.EEPROMHashStatus = EEPROMHashObserved
 
 	guard.clock = fakeClock{now: plan.ApprovalExpiresAt.Add(time.Second)}
 	reconciled, err := guard.Reconcile(context.Background(), reconcileRequest(plan, request, plan.ApprovalExpiresAt.Add(10*time.Minute)))
@@ -666,17 +863,39 @@ func TestGuardAllowsReconciliationAfterApprovalExpiry(t *testing.T) {
 	}
 }
 
+func TestReconcileNeverConfirmsFreshCommitNotAppliedAfterAttestedResponse(t *testing.T) {
+	guard, hardware, _, plan, now := newTestGuard(t)
+	hardware.observeErrAt = map[int]error{2: errors.New("post-commit observation lost")}
+	request := requestFor(plan, 1, now.Add(10*time.Minute))
+	uncertain, err := guard.Execute(context.Background(), request)
+	if !errors.Is(err, ErrReconciliationRequired) || uncertain.Status != AttemptUncertain || uncertain.Result.CommitAttestation.IsZero() {
+		t.Fatalf("attested uncertain execute = %#v, %v", uncertain, err)
+	}
+
+	hardware.observation.State = plan.Operations[0].ExpectedPrestate
+	reconciled, err := guard.Reconcile(context.Background(), reconcileRequest(plan, request, now.Add(10*time.Minute)))
+	if !errors.Is(err, ErrReconciliationRequired) || reconciled.Status != AttemptUncertain ||
+		reconciled.Result.CommitAttestation != uncertain.Result.CommitAttestation {
+		t.Fatalf("conflicting prestate reconciliation = %#v, %v", reconciled, err)
+	}
+	if hardware.executeCount != 1 {
+		t.Fatalf("conflicting reconciliation redispatched hardware; count = %d", hardware.executeCount)
+	}
+}
+
 func TestRestartLoadsUncertainAttemptForObservationOnly(t *testing.T) {
 	guard, hardware, store, plan, now := newTestGuard(t)
-	hardware.executeErr = errors.New("response lost after command")
+	hardware.observeErrAt = map[int]error{2: errors.New("post-commit observation lost")}
 	request := requestFor(plan, 1, now.Add(10*time.Minute))
 	if _, err := guard.Execute(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
 		t.Fatalf("first execute = %v", err)
 	}
 
+	observedPoststate := plan.Operations[0].ExpectedPoststate
+	observedPoststate.EEPROMHashStatus = EEPROMHashObserved
 	restartedHardware := &fakeHardware{observation: Observation{
 		EligibleTargets: 1, RPIBootSysfsPath: testConfig().RPIBootSysfsPath,
-		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
+		TargetFingerprint: plan.TargetFingerprint, State: observedPoststate,
 	}}
 	restartedHardware.journal = store
 	restarted, err := NewWithClock(testConfig(), restartedHardware, store, fakeClock{now})
@@ -762,7 +981,7 @@ func TestReconcileRequiresFreshBoundClaimBeforeObservation(t *testing.T) {
 
 func TestRestartReconcilesOriginalPlanAfterClaimTransfersLanes(t *testing.T) {
 	guard, hardware, store, plan, now := newTestGuard(t)
-	hardware.executeErr = errors.New("response lost after command")
+	hardware.observeErrAt = map[int]error{2: errors.New("post-commit observation lost")}
 	original := requestFor(plan, 1, now.Add(10*time.Minute))
 	if _, err := guard.Execute(context.Background(), original); !errors.Is(err, ErrReconciliationRequired) {
 		t.Fatal(err)
@@ -771,9 +990,11 @@ func TestRestartReconcilesOriginalPlanAfterClaimTransfersLanes(t *testing.T) {
 	currentConfig := testConfig()
 	currentConfig.StationID = "station-2"
 	currentConfig.LaneID = "lane-2"
+	observedPoststate := plan.Operations[0].ExpectedPoststate
+	observedPoststate.EEPROMHashStatus = EEPROMHashObserved
 	restartedHardware := &fakeHardware{observation: Observation{
 		EligibleTargets: 1, RPIBootSysfsPath: currentConfig.RPIBootSysfsPath,
-		TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPoststate,
+		TargetFingerprint: plan.TargetFingerprint, State: observedPoststate,
 	}}
 	restartedHardware.journal = store
 	restarted, err := NewWithClock(currentConfig, restartedHardware, store, fakeClock{now})
@@ -893,12 +1114,6 @@ func TestRestartRejectsAuthorityRolledBackBehindVerifiedJournal(t *testing.T) {
 func TestReconcileKeepsIndistinguishableOperationUncertain(t *testing.T) {
 	config := testConfig()
 	plan := testPlan()
-	plan.Operations[1].ExpectedPoststate = plan.Operations[1].ExpectedPrestate
-	for index := 2; index < len(plan.Operations); index++ {
-		plan.Operations[index].ExpectedPrestate = plan.Operations[1].ExpectedPoststate
-		plan.Operations[index].ExpectedPoststate = plan.Operations[1].ExpectedPoststate
-	}
-	plan = deriveTestPlan(plan)
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	hardware := &fakeHardware{
 		observation: Observation{EligibleTargets: 1, RPIBootSysfsPath: config.RPIBootSysfsPath, TargetFingerprint: plan.TargetFingerprint, State: plan.Operations[0].ExpectedPrestate},
@@ -1032,6 +1247,7 @@ func TestGuardRejectsStaleBindingsBeforeHardware(t *testing.T) {
 		{"expected EEPROM", func(request *ExecuteRequest) { request.Release.ExpectedEEPROMDigest = digest("9") }},
 		{"expected boot image", func(request *ExecuteRequest) { request.Release.ExpectedBootImageDigest = digest("9") }},
 		{"target", func(request *ExecuteRequest) { request.TargetFingerprint = "other-target" }},
+		{"initial observation", func(request *ExecuteRequest) { request.InitialObservationDigest = digest("9") }},
 		{"fence", func(request *ExecuteRequest) { request.FenceEpoch++ }},
 		{"approval", func(request *ExecuteRequest) { request.ApprovalID = "other-approval" }},
 		{"approval expiry", func(request *ExecuteRequest) { request.ApprovalExpiresAt = request.ApprovalExpiresAt.Add(time.Second) }},
@@ -1387,7 +1603,7 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
-	action := testHardwareAction(HardwarePhasePreObservation, OperationProgramCustomerKeyAndEEPROM)
+	action := testHardwareAction(HardwarePhasePreObservation, OperationColdPowerCycle)
 	action.TransactionID = "transaction"
 	action.PlanDigest = digest("a")
 	action.TargetFingerprint = "target"
@@ -1400,7 +1616,7 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 		SchemaVersion: AttemptSchemaVersion, Key: "transaction/" + digest("a") + "/1/1",
 		TransactionID: "transaction", PlanDigest: digest("a"), TargetFingerprint: "target",
 		FenceEpoch: 1, ApprovalID: "approval", IntentReceipt: "intent", IntentSequence: 1,
-		Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM,
+		Sequence: 1, Operation: OperationColdPowerCycle,
 		OperationDigest: digest("b"), Status: AttemptStarted, StartedAt: now, UpdatedAt: now,
 		ObservedState: DirectState{SecurityState: "fresh"}, PreObservationTransition: preObservation, Detail: "started",
 	}
@@ -1432,10 +1648,93 @@ func TestFileStorePersistsExecuteOnceTerminalRecord(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsIncoherentTerminalFreshCommitAttestations(t *testing.T) {
+	guard, _, store, plan, now := newTestGuard(t)
+	verified, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute)))
+	if err != nil || verified.Status != AttemptVerified || verified.Result.CommitAttestation.IsZero() {
+		t.Fatalf("verified fresh commit = %#v, %v", verified, err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Attempt)
+		want   string
+	}{
+		{
+			name: "verified without attestation",
+			mutate: func(attempt *Attempt) {
+				attempt.Result.CommitAttestation = CommitAttestation{}
+			},
+			want: "requires a commit attestation",
+		},
+		{
+			name: "verified with another target",
+			mutate: func(attempt *Attempt) {
+				attempt.Result.CommitAttestation.TargetFingerprint = "another-target"
+			},
+			want: "target does not match",
+		},
+		{
+			name: "confirmed not applied with attestation",
+			mutate: func(attempt *Attempt) {
+				attempt.Status = AttemptConfirmedNotApplied
+			},
+			want: "cannot carry a commit attestation",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed := verified
+			test.mutate(&changed)
+			if err := store.Put(changed); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("store error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadPlanRejectsCurrentSchemaVerifiedCommitOutsideApprovedRelease(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*CommitAttestation)
+	}{
+		{"customer key", func(attestation *CommitAttestation) { attestation.CustomerKeyHash = digest("9") }},
+		{"EEPROM", func(attestation *CommitAttestation) { attestation.EEPROMHash = digest("8") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			guard, hardware, store, plan, now := newTestGuard(t)
+			verified, err := guard.Execute(context.Background(), requestFor(plan, 1, now.Add(10*time.Minute)))
+			if err != nil || verified.Status != AttemptVerified {
+				t.Fatalf("verified fresh commit = %#v, %v", verified, err)
+			}
+			test.mutate(&verified.Result.CommitAttestation)
+			verified.Result = bindOperationResult(plan, plan.Operations[0], verified.Result)
+			if err := validateAttempt(verified); err != nil {
+				t.Fatalf("valid-shaped current-schema attempt = %v", err)
+			}
+			store.mu.Lock()
+			store.attempts[verified.Key] = verified
+			store.mu.Unlock()
+
+			restarted, err := NewWithClock(testConfig(), hardware, store, fakeClock{now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := restarted.LoadPlan(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "fresh-commit attestation differs") {
+				t.Fatalf("LoadPlan error = %v, want plan-mismatched commit attestation", err)
+			}
+			if hardware.observeCount != 2 || hardware.executeCount != 1 {
+				t.Fatalf("LoadPlan reached hardware: observations=%d executions=%d", hardware.observeCount, hardware.executeCount)
+			}
+		})
+	}
+}
+
 func TestFileStoreRejectsPreAttemptStoreSchema(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "attempts.json")
-	if err := os.WriteFile(path, []byte(`{"schema_version":"provisioning.kaiba.network/lane-guard-attempt-store/v1alpha2","attempts":{},"boot_transitions":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema_version":"provisioning.kaiba.network/lane-guard-attempt-store/v1alpha3","attempts":{},"boot_transitions":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := NewFileStore(path)
@@ -1451,7 +1750,7 @@ func TestFileStoreRejectsPreAttemptStoreSchema(t *testing.T) {
 	}
 
 	oldAttemptPath := filepath.Join(directory, "old-attempt.json")
-	oldAttempt := `{"schema_version":"` + AttemptStoreSchemaVersion + `","attempts":{"legacy":{"schema_version":"provisioning.kaiba.network/lane-guard-attempt/v1alpha1","key":"legacy"}},"boot_transitions":{}}`
+	oldAttempt := `{"schema_version":"` + AttemptStoreSchemaVersion + `","attempts":{"legacy":{"schema_version":"provisioning.kaiba.network/lane-guard-attempt/v1alpha2","key":"legacy"}},"boot_transitions":{}}`
 	if err := os.WriteFile(oldAttemptPath, []byte(oldAttempt), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1539,23 +1838,23 @@ func deriveTestPlan(plan Plan) Plan {
 }
 
 func testPlanBody() Plan {
-	zero := DirectState{CustomerKeyHash: strings.Repeat("0", 64), EEPROMHash: "sha256:factory", SecurityState: "fresh", PowerState: "rpiboot"}
-	owned := DirectState{CustomerKeyHash: strings.Repeat("1", 64), EEPROMHash: digest("e"), SecurityState: "owned", PowerState: "rpiboot"}
-	booted := owned
-	booted.PowerState = "signed_os"
+	zero := DirectState{CustomerKeyHash: unownedCustomerKeyHash, EEPROMHash: digest("d"), EEPROMHashStatus: EEPROMHashObserved, SecurityState: "fresh", PowerState: "powered_off"}
+	attested := DirectState{CustomerKeyHash: digest("4"), EEPROMHash: digest("5"), EEPROMHashStatus: EEPROMHashCommitAttested, SecurityState: "owned", PowerState: "powered_off"}
+	observed := attested
+	observed.EEPROMHashStatus = EEPROMHashObserved
 	return Plan{
 		SchemaVersion: ContractSchemaVersion, StationID: "station-1", LaneID: "lane-1",
-		TransactionID: "transaction-1", Release: testReleaseBinding(), TargetFingerprint: "target-1",
+		TransactionID: "transaction-1", Release: testReleaseBinding(), TargetFingerprint: "target-1", InitialObservationDigest: digest("7"),
 		FenceEpoch: 7, ApprovalID: "approval-1",
 		ApprovalExpiresAt: time.Date(2026, 8, 16, 12, 0, 0, 123456789, time.UTC), IntentReceipt: "receipt-1", IntentSequence: 1,
 		Operations: []OperationSpec{
-			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: owned, MaximumDuration: time.Minute},
-			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, RequiredBootMode: BootModeNormal, AuthorizationID: "authorization-2", ExpectedPrestate: owned, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 3, Operation: OperationOwnedReadback, Classification: ClassReadOnly, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-3", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 4, Operation: OperationTestOwnedRecovery, Classification: ClassReversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-4", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 5, Operation: OperationPostRecoveryReadback, Classification: ClassReadOnly, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-5", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 6, Operation: OperationTestNegativeBoot, Classification: ClassReversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-6", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
-			{Sequence: 7, Operation: OperationTestRootIntegrity, Classification: ClassReversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-7", ExpectedPrestate: booted, ExpectedPoststate: booted, MaximumDuration: time.Minute},
+			{Sequence: 1, Operation: OperationProgramCustomerKeyAndEEPROM, Classification: ClassIrreversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-1", ExpectedPrestate: zero, ExpectedPoststate: attested, MaximumDuration: time.Minute},
+			{Sequence: 2, Operation: OperationColdPowerCycle, Classification: ClassReversible, RequiredBootMode: BootModeNormal, AuthorizationID: "authorization-2", ExpectedPrestate: attested, ExpectedPoststate: attested, MaximumDuration: time.Minute},
+			{Sequence: 3, Operation: OperationOwnedReadback, Classification: ClassReadOnly, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-3", ExpectedPrestate: attested, ExpectedPoststate: observed, MaximumDuration: time.Minute},
+			{Sequence: 4, Operation: OperationTestOwnedRecovery, Classification: ClassReversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-4", ExpectedPrestate: observed, ExpectedPoststate: observed, MaximumDuration: time.Minute},
+			{Sequence: 5, Operation: OperationPostRecoveryReadback, Classification: ClassReadOnly, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-5", ExpectedPrestate: observed, ExpectedPoststate: observed, MaximumDuration: time.Minute},
+			{Sequence: 6, Operation: OperationTestNegativeBoot, Classification: ClassReversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-6", ExpectedPrestate: observed, ExpectedPoststate: observed, MaximumDuration: time.Minute},
+			{Sequence: 7, Operation: OperationTestRootIntegrity, Classification: ClassReversible, RequiredBootMode: BootModeRPIBoot, AuthorizationID: "authorization-7", ExpectedPrestate: observed, ExpectedPoststate: observed, MaximumDuration: time.Minute},
 		},
 	}
 }
@@ -1566,7 +1865,7 @@ func requestFor(plan Plan, sequence uint32, expiry time.Time) ExecuteRequest {
 		SchemaVersion: ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
 		TransactionID: plan.TransactionID, PlanDigest: plan.PlanDigest,
 		Release:           plan.Release,
-		TargetFingerprint: plan.TargetFingerprint, FenceEpoch: plan.FenceEpoch,
+		TargetFingerprint: plan.TargetFingerprint, InitialObservationDigest: plan.InitialObservationDigest, FenceEpoch: plan.FenceEpoch,
 		ApprovalID: plan.ApprovalID, ApprovalExpiresAt: plan.ApprovalExpiresAt, IntentReceipt: plan.IntentReceipt,
 		Sequence: sequence, OperationDigest: operation.OperationDigest,
 		AuthorizationID: operation.AuthorizationID, RequiredBootMode: operation.RequiredBootMode,
