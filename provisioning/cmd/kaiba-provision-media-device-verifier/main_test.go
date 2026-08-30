@@ -12,7 +12,13 @@ import (
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/mediacontract"
 )
 
-func init() { requireApprovedPlan = func(mediacontract.Plan) error { return nil } }
+func init() {
+	requireApprovedPlan = func(mediacontract.Plan) error { return nil }
+	hardwareConfigurationID = "hardware-configuration:test-station:1"
+	expectedHostname = "test-station"
+	targetDevicePath = "/dev/sda"
+	hostname = func() (string, error) { return "test-station", nil }
+}
 
 func TestCommandExposesOnlyReadOnlyProductionVerification(t *testing.T) {
 	originalUID, originalPlan, originalReadStage, originalParseStage := effectiveUID, loadPlan, readStageReceipt, parseStageReceipt
@@ -40,7 +46,7 @@ func TestCommandExposesOnlyReadOnlyProductionVerification(t *testing.T) {
 		}
 		return mediacontract.StageReceipt{}, nil
 	}
-	verifyAndEncodeDevice = func(context.Context, mediacontract.Plan, mediacontract.StageReceipt) ([]byte, error) {
+	verifyAndEncodeDevice = func(context.Context, mediacontract.Plan, mediacontract.StageReceipt, configuredStation) ([]byte, error) {
 		return []byte("{\"verification_mode\":\"independent_read_only_device\"}"), nil
 	}
 	validateEvidence = func(string) error { return nil }
@@ -85,6 +91,22 @@ func TestCommandRequiresRootBeforeReadingEvidence(t *testing.T) {
 	}
 }
 
+func TestExecutionHostMismatchFailsBeforeReadingEvidence(t *testing.T) {
+	originalUID, originalHostname, originalPlan := effectiveUID, hostname, loadPlan
+	t.Cleanup(func() { effectiveUID, hostname, loadPlan = originalUID, originalHostname, originalPlan })
+	effectiveUID = func() int { return 0 }
+	hostname = func() (string, error) { return "malak", nil }
+	loadPlan = func(string) (mediacontract.Plan, error) {
+		t.Fatal("loadPlan called on the wrong execution host")
+		return mediacontract.Plan{}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"verify", "--plan", "/evidence/plan.json", "--stage-receipt", "/evidence/stage.json", "--receipt", "/evidence/verify.json"}, &stdout, &stderr)
+	if code != exitInvalid || stdout.Len() != 0 || !strings.Contains(stderr.String(), "bound to execution host") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestVerificationFailurePublishesNothing(t *testing.T) {
 	originalUID, originalPlan, originalReadStage, originalParseStage := effectiveUID, loadPlan, readStageReceipt, parseStageReceipt
 	originalVerify, originalValidate, originalWrite := verifyAndEncodeDevice, validateEvidence, writeEvidence
@@ -98,7 +120,7 @@ func TestVerificationFailurePublishesNothing(t *testing.T) {
 	parseStageReceipt = func([]byte, mediacontract.Plan) (mediacontract.StageReceipt, error) {
 		return mediacontract.StageReceipt{}, nil
 	}
-	verifyAndEncodeDevice = func(context.Context, mediacontract.Plan, mediacontract.StageReceipt) ([]byte, error) {
+	verifyAndEncodeDevice = func(context.Context, mediacontract.Plan, mediacontract.StageReceipt, configuredStation) ([]byte, error) {
 		return nil, errors.New("full media tampered")
 	}
 	validateEvidence = func(string) error { return nil }

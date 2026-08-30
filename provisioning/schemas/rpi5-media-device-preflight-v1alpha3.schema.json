@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://provisioning.kaiba.network/schemas/rpi5-media-device-preflight-v1alpha3.schema.json",
+  "title": "Kaiba Raspberry Pi 5 operational media-device preflight v1alpha3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "evidence_mode",
+    "plan_digest",
+    "target",
+    "hardware_configuration_id",
+    "execution_hostname",
+    "requested_device_selector",
+    "resolved_device_path",
+    "attachment_boot_id",
+    "attachment_sequence",
+    "target_whole_device",
+    "target_geometry_verified",
+    "sources_verified",
+    "target_usage_clear",
+    "target_locked",
+    "write_performed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-media-device-preflight/v1alpha3"
+    },
+    "status": { "const": "validated_no_write" },
+    "evidence_mode": { "const": "device_preflight" },
+    "plan_digest": { "$ref": "#/definitions/digest" },
+    "target": { "$ref": "#/definitions/target_binding" },
+    "hardware_configuration_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "execution_hostname": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "requested_device_selector": {
+      "type": "string",
+      "pattern": "^/dev/(?:[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}|disk/by-path/[A-Za-z0-9][A-Za-z0-9._:+-]{0,254})$"
+    },
+    "resolved_device_path": {
+      "type": "string",
+      "pattern": "^/dev/[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}$"
+    },
+    "attachment_boot_id": { "$ref": "#/definitions/guid" },
+    "attachment_sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "target_whole_device": { "const": true },
+    "target_geometry_verified": { "const": true },
+    "sources_verified": { "const": true },
+    "target_usage_clear": { "const": true },
+    "target_locked": { "const": true },
+    "write_performed": { "const": false }
+  },
+  "definitions": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "guid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": { "const": "00000000-0000-0000-0000-000000000000" }
+    },
+    "target_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "size_bytes",
+        "logical_sector_size_bytes"
+      ],
+      "properties": {
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 8388608,
+          "maximum": 9223372036854775807,
+          "multipleOf": 512
+        },
+        "logical_sector_size_bytes": { "const": 512 }
+      }
+    }
+  }
+}

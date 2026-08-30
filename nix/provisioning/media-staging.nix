@@ -27,10 +27,15 @@ let
     value:
     builtins.isString value
     && (
-      builtins.match "/dev/[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}" value != null
+      canonicalImmediateDevice value
       || builtins.match "/dev/disk/by-path/[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}" value != null
     )
     && builtins.match ".*-part[0-9]+" value == null;
+  canonicalImmediateDevice =
+    value:
+    builtins.isString value && builtins.match "/dev/[A-Za-z0-9][A-Za-z0-9._:+-]{0,254}" value != null;
+  canonicalHostname =
+    value: builtins.isString value && builtins.match "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?" value != null;
   canonicalGUID =
     value:
     builtins.isString value
@@ -66,24 +71,54 @@ let
       "transactionID must be one canonical lowercase identifier";
     assert lib.assertMsg (builtins.isAttrs hardwareConfiguration)
       "hardwareConfiguration must be one typed hardware configuration";
+    assert lib.assertMsg
+      (
+        builtins.attrNames hardwareConfiguration == [
+          "configurationID"
+          "executionHost"
+          "schemaVersion"
+          "targetMedia"
+        ]
+      )
+      "hardwareConfiguration must contain exactly schemaVersion, configurationID, executionHost, and targetMedia";
     assert lib.assertMsg (
-      builtins.attrNames hardwareConfiguration == [
-        "configurationID"
-        "schemaVersion"
-        "targetMedia"
-      ]
-    ) "hardwareConfiguration must contain exactly schemaVersion, configurationID, and targetMedia";
-    assert lib.assertMsg (
-      hardwareConfiguration.schemaVersion == "kaiba.provisioning.hardware-configuration/v1alpha1"
-    ) "hardwareConfiguration must use the supported v1alpha1 schema";
+      hardwareConfiguration.schemaVersion == "kaiba.provisioning.hardware-configuration/v1alpha2"
+    ) "hardwareConfiguration must use the supported v1alpha2 schema";
     assert lib.assertMsg (canonicalIdentifier hardwareConfiguration.configurationID)
       "hardwareConfiguration.configurationID must be one canonical lowercase identifier";
     assert lib.assertMsg (
+      builtins.isAttrs hardwareConfiguration.executionHost
+      && builtins.attrNames hardwareConfiguration.executionHost == [ "hostname" ]
+      && canonicalHostname hardwareConfiguration.executionHost.hostname
+    ) "hardwareConfiguration.executionHost must contain exactly one canonical lowercase hostname";
+    assert lib.assertMsg (
       builtins.isAttrs hardwareConfiguration.targetMedia
-      && builtins.attrNames hardwareConfiguration.targetMedia == [ "devicePath" ]
-    ) "hardwareConfiguration.targetMedia must contain exactly devicePath";
+      &&
+        builtins.attrNames hardwareConfiguration.targetMedia == [
+          "devicePath"
+          "protectedDevicePaths"
+        ]
+    ) "hardwareConfiguration.targetMedia must contain exactly devicePath and protectedDevicePaths";
     assert lib.assertMsg (canonicalSelectedDevice hardwareConfiguration.targetMedia.devicePath)
       "hardwareConfiguration.targetMedia.devicePath must be one configured raw /dev node or /dev/disk/by-path selector";
+    assert lib.assertMsg
+      (
+        builtins.isList hardwareConfiguration.targetMedia.protectedDevicePaths
+        && builtins.length hardwareConfiguration.targetMedia.protectedDevicePaths <= 16
+        && lib.all canonicalImmediateDevice hardwareConfiguration.targetMedia.protectedDevicePaths
+        &&
+          lib.unique hardwareConfiguration.targetMedia.protectedDevicePaths
+          == hardwareConfiguration.targetMedia.protectedDevicePaths
+        &&
+          lib.sort builtins.lessThan hardwareConfiguration.targetMedia.protectedDevicePaths
+          == hardwareConfiguration.targetMedia.protectedDevicePaths
+        && !(builtins.elem hardwareConfiguration.targetMedia.devicePath hardwareConfiguration.targetMedia.protectedDevicePaths)
+      )
+      "hardwareConfiguration protected device paths must be a sorted unique list of at most 16 immediate /dev nodes excluding the target selector";
+    assert lib.assertMsg (
+      hardwareConfiguration.executionHost.hostname != "malak"
+      || builtins.elem "/dev/nvme0n1" hardwareConfiguration.targetMedia.protectedDevicePaths
+    ) "every malak hardware configuration must protect /dev/nvme0n1";
     assert lib.assertMsg (builtins.isAttrs target) "target must be the typed per-run geometry";
     assert lib.assertMsg (
       builtins.attrNames target == [
@@ -104,6 +139,9 @@ let
     ) "bootFilesystemSizeMiB must be an integer from 64 through 256";
     let
       hardwareConfigurationID = hardwareConfiguration.configurationID;
+      expectedHostname = hardwareConfiguration.executionHost.hostname;
+      protectedDevicePaths = hardwareConfiguration.targetMedia.protectedDevicePaths;
+      protectedDevicePathsCSV = lib.concatStringsSep "," protectedDevicePaths;
       targetDevicePath = hardwareConfiguration.targetMedia.devicePath;
       targetGeometry = {
         inherit (target) logicalSectorSizeBytes sizeBytes;
@@ -654,13 +692,18 @@ let
         "-X=main.mtypePath=${fixedMType}/bin/mtype"
       ];
       selectedDeviceLDFlag = "-X=main.targetDevicePath=${targetDevicePath}";
+      stationPolicyLDFlags = [
+        "-X=main.hardwareConfigurationID=${hardwareConfigurationID}"
+        "-X=main.expectedHostname=${expectedHostname}"
+        "-X=main.protectedDevicePathsCSV=${protectedDevicePathsCSV}"
+      ];
 
       deviceStager = pkgs.buildGoModule {
         pname = "${name}-device-stager";
         inherit version;
         src = moduleRoot;
         subPackages = [ "cmd/kaiba-provision-media-device-stager" ];
-        ldflags = commonAssetLDFlags ++ [ selectedDeviceLDFlag ];
+        ldflags = commonAssetLDFlags ++ [ selectedDeviceLDFlag ] ++ stationPolicyLDFlags;
         vendorHash = null;
         doCheck = false;
         passthru.kaibaMediaDeviceStager = {
@@ -668,8 +711,10 @@ let
           blockDeviceWriteCapable = true;
           configuredSelectorMode = "operational_path_not_media_identity";
           fixtureModeAvailable = false;
+          executionHostBound = true;
           inherit hardwareConfigurationID;
           mutationScope = "one_linker_fixed_operational_device_path";
+          protectedDeviceCount = builtins.length protectedDevicePaths;
           oneTimeSettingCapable = false;
           otpCapable = false;
           eepromProgrammingCapable = false;
@@ -686,7 +731,7 @@ let
         inherit version;
         src = moduleRoot;
         subPackages = [ "cmd/kaiba-provision-media-device-verifier" ];
-        ldflags = verifierLDFlags ++ [ selectedDeviceLDFlag ];
+        ldflags = verifierLDFlags ++ [ selectedDeviceLDFlag ] ++ stationPolicyLDFlags;
         vendorHash = null;
         doCheck = false;
         passthru.kaibaMediaDeviceVerifier = {
@@ -694,6 +739,7 @@ let
           blockDeviceReadCapable = true;
           blockDeviceWriteCapable = false;
           configuredSelectorMode = "operational_path_not_media_identity";
+          executionHostBound = true;
           inherit hardwareConfigurationID;
           independentAttachmentRequired = true;
           releaseLineageVerifier = verifiedSignedRelease;

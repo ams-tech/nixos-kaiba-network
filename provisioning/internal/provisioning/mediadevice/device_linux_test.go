@@ -5,6 +5,7 @@ package mediadevice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,54 @@ func TestHashRangeIsExactAndContextAware(t *testing.T) {
 	}
 	if _, err := HashRange(context.Background(), reader, 0, 100); err == nil {
 		t.Fatal("HashRange accepted a short reader")
+	}
+}
+
+func TestStationPolicyBindsHostAndFailsClosedOnProtectedPaths(t *testing.T) {
+	originalInspect := inspectProtectedDevice
+	t.Cleanup(func() { inspectProtectedDevice = originalInspect })
+	policy, err := NewStationPolicy("malak", "/dev/nvme0n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.ValidateHost("malak"); err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.ValidateHost("kaiba-rpi5-provisioner"); err == nil || !strings.Contains(err.Error(), "bound to execution host") {
+		t.Fatalf("host mismatch error = %v", err)
+	}
+	facts := mediainventory.TargetFacts{RequestedPath: "/dev/nvme0n1", ResolvedPath: "/dev/nvme0n1", DeviceNumber: 1}
+	if err := policy.ValidateTarget(facts); err == nil || !strings.Contains(err.Error(), "protected by station policy") {
+		t.Fatalf("protected target error = %v", err)
+	}
+	inspectProtectedDevice = func(path string) (uint64, error) {
+		if path != "/dev/nvme0n1" {
+			t.Fatalf("protected path = %q", path)
+		}
+		return 23, nil
+	}
+	facts = mediainventory.TargetFacts{RequestedPath: "/dev/disk/by-path/platform-reader", ResolvedPath: "/dev/sda", DeviceNumber: 23}
+	if err := policy.ValidateTarget(facts); err == nil || !strings.Contains(err.Error(), "resolves to station-protected device") {
+		t.Fatalf("protected device-number error = %v", err)
+	}
+	inspectProtectedDevice = func(string) (uint64, error) { return 0, os.ErrNotExist }
+	if err := policy.ValidateTarget(facts); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing protected device error = %v", err)
+	}
+	inspectProtectedDevice = func(string) (uint64, error) {
+		return 0, errors.New("path is not one direct block-device node")
+	}
+	if err := policy.ValidateTarget(facts); err == nil || !strings.Contains(err.Error(), "not one direct block-device node") {
+		t.Fatalf("non-block protected device error = %v", err)
+	}
+	for _, invalid := range []struct{ host, paths string }{
+		{"Malak", ""},
+		{"malak", "/dev/disk/by-path/example"},
+		{"malak", "/dev/nvme0n1,/dev/nvme0n1"},
+	} {
+		if _, err := NewStationPolicy(invalid.host, invalid.paths); err == nil {
+			t.Fatalf("NewStationPolicy(%q, %q) accepted invalid policy", invalid.host, invalid.paths)
+		}
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,6 +32,87 @@ const (
 	defaultBufferBytes   = 1024 * 1024
 	maximumSysfsBytes    = 4096
 )
+
+var stationHostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+var inspectProtectedDevice = func(path string) (uint64, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice != 0 || stat.Rdev == 0 {
+		return 0, errors.New("path is not one direct block-device node")
+	}
+	return uint64(stat.Rdev), nil
+}
+
+// StationPolicy is linker-fixed operational policy for the host which is
+// allowed to run a specialized media binary. ProtectedDevicePaths are direct
+// host device nodes which must never identify the selected target.
+type StationPolicy struct {
+	ExpectedHostname     string
+	ProtectedDevicePaths []string
+}
+
+func NewStationPolicy(expectedHostname, protectedDevicePathsCSV string) (StationPolicy, error) {
+	if !stationHostnamePattern.MatchString(expectedHostname) {
+		return StationPolicy{}, errors.New("linker-fixed execution hostname is not canonical")
+	}
+	policy := StationPolicy{ExpectedHostname: expectedHostname}
+	if protectedDevicePathsCSV == "" {
+		return policy, nil
+	}
+	seen := make(map[string]struct{})
+	for _, path := range strings.Split(protectedDevicePathsCSV, ",") {
+		if len(policy.ProtectedDevicePaths) == 16 {
+			return StationPolicy{}, errors.New("linker-fixed protected device list exceeds 16 entries")
+		}
+		name := strings.TrimPrefix(path, "/dev/")
+		if !strings.HasPrefix(path, "/dev/") || name == "" || name == "." || strings.Contains(name, "/") || strings.ContainsAny(name, " \t\r\n") || filepath.Clean(path) != path {
+			return StationPolicy{}, errors.New("linker-fixed protected device path must be one immediate clean /dev node")
+		}
+		if _, duplicate := seen[path]; duplicate {
+			return StationPolicy{}, errors.New("linker-fixed protected device paths contain a duplicate")
+		}
+		if len(policy.ProtectedDevicePaths) != 0 && policy.ProtectedDevicePaths[len(policy.ProtectedDevicePaths)-1] > path {
+			return StationPolicy{}, errors.New("linker-fixed protected device paths are not sorted")
+		}
+		seen[path] = struct{}{}
+		policy.ProtectedDevicePaths = append(policy.ProtectedDevicePaths, path)
+	}
+	return policy, nil
+}
+
+func (policy StationPolicy) ValidateHost(actualHostname string) error {
+	if actualHostname != policy.ExpectedHostname {
+		return fmt.Errorf("media binary is bound to execution host %q, current host is %q", policy.ExpectedHostname, actualHostname)
+	}
+	return nil
+}
+
+// ValidateTarget rejects a selected attachment which is any linker-protected
+// host device. A missing, replaced, symlinked, or non-block protected path also
+// fails closed: the independent system-disk barrier must be observable before
+// a destructive target is opened.
+func (policy StationPolicy) ValidateTarget(facts mediainventory.TargetFacts) error {
+	if facts.DeviceNumber == 0 || facts.ResolvedPath == "" {
+		return errors.New("selected target has no pinned block-device identity")
+	}
+	for _, path := range policy.ProtectedDevicePaths {
+		if facts.RequestedPath == path || facts.ResolvedPath == path {
+			return fmt.Errorf("selected target is protected by station policy: %s", path)
+		}
+		deviceNumber, err := inspectProtectedDevice(path)
+		if err != nil {
+			return fmt.Errorf("inspect station-protected device %q: %w", path, err)
+		}
+		if deviceNumber == facts.DeviceNumber {
+			return fmt.Errorf("selected target resolves to station-protected device %s", path)
+		}
+	}
+	return nil
+}
 
 type Inspector struct {
 	Inventory mediainventory.Inventory

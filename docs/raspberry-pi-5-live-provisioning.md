@@ -42,9 +42,12 @@ Boot-media hardware identity is deliberately outside this policy. NVMe model,
 serial, WWID, and `/dev/disk/by-id` are neither boot-trust inputs nor persistent
 plan or evidence fields. The station's versioned, typed hardware configuration
 supplies one linker-fixed raw whole-device or `/dev/disk/by-path` selector only
-as local operational configuration. The checked-in sacrificial-development
-configuration selects `/dev/nvme0n1`; neither that selector nor its
-configuration ID enters canonical plans, receipts, or evidence. The media tools
+as local operational configuration. The hostname-bound `malak` configuration
+selects its fixed USB-reader by-path and protects malak's `/dev/nvme0n1`; the
+separate Pi-local configuration selects `/dev/nvme0n1` only on
+`kaiba-rpi5-provisioner`. A mandatory operational preflight binds that choice
+and the current attachment before writable open; those fields do not enter
+canonical plans or the stage, verification, and final receipts. The media tools
 still reject partitions, mounts, root/system/swap devices, holders, and slaves;
 check exact per-run capacity and a 512-byte logical sector for layout
 compatibility; and pin the opened attachment within each operation. They do not
@@ -190,12 +193,12 @@ commit.
 The production-media factory derives a plan-specialized device stager and an
 independent verifier from that verified release and exact per-run layout
 geometry. It consumes the selector through the typed hardware configuration
-and fixes it outside its canonical plan, receipts, and evidence. The tools can
-write and cold-read the manifest-bound boot, root-data, and root-hash bytes, but
-that cold readback proves expected contents on a fresh attachment, not
-continuity of one physical medium. The repository has not recorded that
-physical campaign or a live signed boot. The lane guard and loopback UI still
-do not stage media themselves.
+and fixes it outside its canonical plan and receipt chain while recording it in
+the mandatory operational preflight. The tools can write and cold-read the
+manifest-bound boot, root-data, and root-hash bytes, but that cold readback
+proves expected contents on a fresh attachment, not continuity of one physical
+medium. The repository has not recorded that physical campaign or a live signed
+boot. The lane guard and loopback UI still do not stage media themselves.
 
 ## Nix entry points
 
@@ -238,11 +241,12 @@ That exception contains no credential or signing authority and is not approved
 for production. A separate checked-in public-only hardware configuration under
 [`provisioning/config/hardware`](../provisioning/config/hardware/) selects the
 sacrificial station's target-media path; that path is operational wiring and is
-not copied into plans, receipts, or evidence. Production target-media hardware
-configurations, signer metadata, EEPROM digests, physical USB/UART/GPIO
-selectors, TLS credentials, approvals, grants, and recovery bundles remain
-external deployment inputs. Generic signer and lane-guard packages still fail
-closed until constructed through their factories.
+copied only into the station-local operational preflight, not canonical plans or
+the receipt chain. Production target-media hardware configurations, signer
+metadata, EEPROM digests, physical USB/UART/GPIO selectors, TLS credentials,
+approvals, grants, and recovery bundles remain external deployment inputs.
+Generic signer and lane-guard packages still fail closed until constructed
+through their factories.
 
 ## Station and control-plane state
 
@@ -1269,11 +1273,14 @@ five live gates remain:
    [Ubuntu development signing ceremony](ubuntu-rpi5-development-signing-ceremony.md)
    for the software-only signing and assembly portion. This is a development
    release, not a production release.
-2. Use the typed sacrificial hardware configuration to stage the approved
-   layout on the actual fixed `/dev/nvme0n1`, remove power and reattach it, and
-   complete independent cold readback of every manifest-bound byte and
-   dm-verity result. Record content evidence only: do not verify or retain NVMe
-   model, serial, WWID, `/dev/disk/by-id`, or any other boot-media identity.
+2. Select the typed hardware configuration for the machine that actually runs
+   the writer. On `malak`, use only its fixed USB-reader configuration; use the
+   Pi-local `/dev/nvme0n1` configuration only on `kaiba-rpi5-provisioner` while
+   that Pi is booted from a separate medium. Review the mandatory attachment-
+   bound preflight, stage the approved layout, remove power and reattach the
+   medium, and complete independent cold readback of every manifest-bound byte
+   and dm-verity result. Record content evidence only: do not verify or retain
+   NVMe model, serial, WWID, `/dev/disk/by-id`, or any other boot-media identity.
 3. Qualify the actual UART adapter's voltage, ground, settings, isolation, and
    stable `/dev/serial/by-id` identity, then prove bounded capture on the fixed
    lane. This pre-SB-08 work does not claim signed-system-image enforcement;

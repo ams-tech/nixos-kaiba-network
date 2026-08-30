@@ -117,11 +117,17 @@ the full GPT/FAT/root/verity layout, and a plan-specialized writer/verifier pair
 with `lib.mkRpi5ProductionMedia`. The station-local raw whole-device or
 `/dev/disk/by-path` selector comes from the versioned, typed catalog in
 `config/hardware/` and is linker-fixed into the writer and verifier. The
-catalog is exposed as `lib.hardwareConfigurations`; its checked-in
-`raspberryPi5SacrificialDevelopment` entry selects `/dev/nvme0n1`. The selector
-and hardware-configuration ID are absent from canonical plans, receipts, and
-evidence; storage model, serial, WWID, `/dev/disk/by-id`, physical sector size,
-and initial contents are not trust inputs. See the
+catalog is exposed as `lib.hardwareConfigurations`. It has no generic
+sacrificial-device entry: callers must choose either the `malak` USB/SD-reader
+configuration or the Pi-local NVMe configuration. The former is hostname-bound
+to `malak`, selects its fixed `/dev/disk/by-path` USB topology, and treats
+`/dev/nvme0n1` as protected. The latter is hostname-bound to
+`kaiba-rpi5-provisioner` and selects `/dev/nvme0n1` for a Pi booted from a
+separate medium. The execution-host binding, selector, resolved device, and
+attachment tuple appear in the mandatory station-local operational preflight;
+they remain absent from canonical plans and the stage, verification, and final
+receipt chain. Storage model, serial, WWID, `/dev/disk/by-id`, physical sector
+size, and initial contents are not trust inputs. See the
 [signed-boot workflow](../docs/raspberry-pi-5-signed-boot-workflow.md) and
 [target-media staging contracts](../docs/target-media-staging-prototype.md).
 

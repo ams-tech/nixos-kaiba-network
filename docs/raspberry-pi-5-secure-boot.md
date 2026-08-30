@@ -105,12 +105,15 @@ posture nor the intended production chain authenticates an NVMe model, serial,
 WWID, or `/dev/disk/by-id` value. The provisioning writer uses exact per-run
 capacity and a 512-byte logical sector only to construct and safely write the
 layout. Its station-local raw-device selector comes from a versioned, typed
-hardware configuration; the checked-in sacrificial-development configuration
-selects `/dev/nvme0n1`, but neither its selector nor configuration ID appears in
-canonical plans, receipts, or evidence. Trust in the running system must
-eventually come from observing and enforcing the signed boot and root-integrity
-chain, not from identifying the medium. That live enforcement remains a later
-hardware goal for the current development milestone.
+hardware configuration. The `malak` configuration is hostname-bound to its
+fixed USB-reader by-path and explicitly protects malak's `/dev/nvme0n1`; the
+separate Pi-local configuration selects `/dev/nvme0n1` only on
+`kaiba-rpi5-provisioner`. The mandatory operational preflight binds the
+configuration, hostname, selector, resolved node, and current attachment, but
+none of them appears in canonical plans or the receipt chain. Trust in the
+running system must eventually come from observing and enforcing the signed boot
+and root-integrity chain, not from identifying the medium. That live enforcement
+remains a later hardware goal for the current development milestone.
 
 The development boot order and unlocked VideoCore JTAG are **not
 production-ready**. Production values for both are undecided and require

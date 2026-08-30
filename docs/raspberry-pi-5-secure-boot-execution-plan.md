@@ -134,11 +134,14 @@ exact-board checks:
 Boot-media hardware identity is not part of this posture. NVMe model, serial,
 WWID, and `/dev/disk/by-id` are neither boot-trust inputs nor persistent plan or
 evidence fields. A versioned, typed hardware configuration supplies the
-station-local selector; the checked-in sacrificial-development configuration
-selects `/dev/nvme0n1`, but neither that selector nor its configuration ID enters
-canonical plans, receipts, or evidence. The media writer retains only runtime
-overwrite-safety and layout-compatibility checks. Offline signature and
-release-lineage verification remain software foundations; observing and
+station-local selector. The `malak` configuration is hostname-bound to its
+fixed USB-reader by-path and protects malak's `/dev/nvme0n1`; a separate
+Pi-local configuration selects `/dev/nvme0n1` only on
+`kaiba-rpi5-provisioner`. The mandatory operational preflight binds that
+configuration and current attachment before any writable open; those fields
+remain outside canonical plans and the receipt chain. The media writer retains
+only runtime overwrite-safety and layout-compatibility checks. Offline signature
+and release-lineage verification remain software foundations; observing and
 enforcing a live signed-system boot is a later hardware gate.
 
 The development boot order and unlocked VideoCore JTAG posture are **not
@@ -224,10 +227,10 @@ four-file FAT containing `boot.img`, `boot.sig`, `config.txt`, and
 `kaiba-media-binding.json`, root-data and root-hash partitions, zero padding and
 tail, and both GPT copies. A station-local raw whole-device or
 `/dev/disk/by-path` selector comes from the typed hardware configuration and is
-absent from the canonical plan, receipts, and evidence; model, serial, WWID,
-`/dev/disk/by-id`, physical sector size, and initial contents are not bound. The
-factory emits a
-plan-specialized device writer, a separate read-only verifier, and canonical
+recorded in the operational preflight but absent from the canonical plan and
+receipt chain; model, serial, WWID, `/dev/disk/by-id`, physical sector size, and
+initial contents are not bound. The factory emits a plan-specialized device
+writer, a separate read-only verifier, and canonical
 stage, verification, manual cold-power, and final receipt contracts. The
 software check independently validates GPT, FAT, offline release/signature
 lineage, full-media digests, and dm-verity using a regular file; it does not
@@ -574,8 +577,9 @@ physical gates below are completed.
   device.
 - [x] Source the station-local selector from a versioned, typed hardware
   configuration while keeping its selector and configuration ID out of the
-  canonical plan, receipts, and evidence. Permit only a configured immediate
-  raw whole-device node or `/dev/disk/by-path` selector; reject
+  canonical plan and receipt chain while recording them in the mandatory
+  operational preflight. Permit only a configured immediate raw whole-device
+  node or `/dev/disk/by-path` selector; reject
   `/dev/disk/by-id` and never collect or reconcile model, serial, or WWID.
 - [x] Implement a staging tool or frozen procedure that requires explicit
   destructive authorization; rejects a partition, mounted, root, system, or
