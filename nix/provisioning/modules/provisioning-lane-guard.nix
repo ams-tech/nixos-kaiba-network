@@ -30,6 +30,8 @@ let
   stateDirectory = "kaiba-provision-lane-guard";
   stateRoot = "/var/lib/${stateDirectory}";
   attemptDirectory = "${stateRoot}/attempts";
+  gpioPersistenceParameter = "/sys/module/pinctrl_rp1/parameters/persist_gpio_outputs";
+  relayPowerControl = cfg.powerControl == "relay";
   defaultOperatorPackage = (import ../packages.nix { inherit pkgs lib; }).laneOperator;
   # This source must be a native executable: shells intentionally drop an
   # inherited setgid identity unless privileged mode is requested. The NixOS
@@ -76,6 +78,35 @@ let
     cfg.draftPath
   ];
 
+  gpioSetPackage =
+    if cfg.package == null then null else cfg.package.kaibaPhysicalLaneGuard.gpioSet or null;
+  gpioReleasePolicyCheckArgs = [
+    (getExe' pkgs.gnugrep "grep")
+    "--fixed-strings"
+    "--line-regexp"
+    "N"
+    gpioPersistenceParameter
+  ];
+  gpioInactiveArgs =
+    if gpioSetPackage == null || !relayPowerControl then
+      [ ]
+    else
+      [
+        "${gpioSetPackage}/bin/gpioset"
+        "--chip"
+        cfg.gpioChip
+        "--consumer"
+        "kaiba-provision-lane-guard-inactive"
+      ]
+      ++ optional cfg.gpioActiveLow "--active-low"
+      ++ [
+        "--hold-period"
+        "100ms"
+        "--toggle"
+        "0"
+        "${toString cfg.gpioOffset}=0"
+      ];
+
   isCleanStatePath =
     path:
     let
@@ -108,10 +139,8 @@ let
         cfg.rpibootSysfsPath
         "--uart"
         cfg.uartPath
-        "--gpio-chip"
-        cfg.gpioChip
-        "--gpio-offset"
-        (toString cfg.gpioOffset)
+        "--power-control"
+        cfg.powerControl
         "--lease-safety-margin"
         "${toString bridgeCfg.leaseSafetyMarginSeconds}s"
         "--journal"
@@ -129,7 +158,13 @@ let
         "--mode"
         cfg.mode
       ]
-      ++ optional cfg.gpioActiveLow "--gpio-active-low"
+      ++ lib.optionals relayPowerControl [
+        "--gpio-chip"
+        cfg.gpioChip
+        "--gpio-offset"
+        (toString cfg.gpioOffset)
+      ]
+      ++ optional (relayPowerControl && cfg.gpioActiveLow) "--gpio-active-low"
       ++ optional cfg.enableMutations "--enable-mutations";
 in
 {
@@ -214,6 +249,25 @@ in
       type = types.strMatching "/dev/serial/by-id/[A-Za-z0-9][A-Za-z0-9._:+-]*";
       default = "/dev/serial/by-id/kaiba-target-uart";
       description = "Exact persistent by-id symlink for the lane's target UART.";
+    };
+
+    powerControl = mkOption {
+      type = types.enum [
+        "relay"
+        "manual"
+      ];
+      default = "relay";
+      description = ''
+        Fixed target-power mechanism for this lane. The default relay mode
+        requires the qualified GPIO-controlled normally-off relay and retains
+        every GPIO release-policy, pre-start, post-stop, and device-access
+        boundary. Manual mode delegates only the physical connect/disconnect
+        actions to authenticated operator prompts and grants the service no
+        GPIO device access. It is a development-only deviation with no
+        automated electrical fail-off: after abrupt process or station loss,
+        the operator must remove target power before reconciliation can
+        establish a terminal state.
+      '';
     };
 
     gpioChip = mkOption {
@@ -305,6 +359,20 @@ in
             services.kaiba-provisioning-lane-guard.package must be produced by
             lib.mkRpi5PhysicalLaneGuard; the generic unlinked lane-guard binary
             has no immutable rpiboot, gpioset, or verified-release lineage.
+          '';
+        }
+        {
+          assertion =
+            cfg.package == null
+            || (
+              gpioSetPackage != null
+              && lib.isDerivation gpioSetPackage
+              && hasPrefix "${builtins.storeDir}/" (toString gpioSetPackage)
+            );
+          message = ''
+            services.kaiba-provisioning-lane-guard.package must bind the exact
+            immutable libgpiod package used for active and inactive relay
+            control.
           '';
         }
         {
@@ -421,7 +489,19 @@ in
           User = "root";
           Group = operatorGroup;
           SupplementaryGroups = optional cfg.enableMutations bridgeClientGroup;
+          # Relay mode refuses kernels that retain an output after its
+          # character-device owner exits and establishes logical inactive
+          # before startup and after every main-process exit. Manual mode has
+          # no GPIO command or device permission; its disconnect evidence is
+          # collected through the authenticated operator-prompt path during a
+          # live service. A hard process or station failure cannot actuate
+          # manual power and leaves restart reconciliation to the operator.
+          ExecStartPre = lib.optionals relayPowerControl [
+            (utils.escapeSystemdExecArgs gpioReleasePolicyCheckArgs)
+            (utils.escapeSystemdExecArgs gpioInactiveArgs)
+          ];
           ExecStart = utils.escapeSystemdExecArgs args;
+          ExecStopPost = if relayPowerControl then utils.escapeSystemdExecArgs gpioInactiveArgs else [ ];
           StateDirectory = [
             stateDirectory
             "${stateDirectory}/attempts"
@@ -436,21 +516,28 @@ in
           # setup and cancellation-independent safe relay release plus
           # terminal journal persistence.
           TimeoutStartSec = "65min";
-          # The adapter gets a 30-second cancellation-independent window to
-          # release the relay and prove USB disappearance. Give systemd enough
-          # margin to persist the resulting terminal transition as well.
-          TimeoutStopSec = "45s";
+          # During graceful cancellation the adapter gets a cancellation-
+          # independent safe-off window: 30 seconds for relay release, or the
+          # full advertised two-minute manual disconnect prompt plus bounded
+          # USB disappearance. Give systemd enough margin to persist the
+          # terminal transition. SIGKILL and station power loss cannot perform
+          # a manual action.
+          TimeoutStopSec = if relayPowerControl then "45s" else "3min";
           KillMode = "control-group";
 
-          # GPIO and UART are exact device nodes. USB bus numbers and device
-          # numbers are dynamic, so the USB character-device class is the
-          # narrowest cgroup rule with which libusb/rpiboot can operate.
+          # Relay GPIO and UART are exact device nodes. Manual mode omits GPIO
+          # entirely. USB bus and device numbers are dynamic, so the USB
+          # character-device class is the narrowest cgroup rule with which
+          # libusb/rpiboot can operate.
           DevicePolicy = "closed";
-          DeviceAllow = [
-            "${cfg.gpioChip} rw"
-            "${cfg.uartPath} r"
-            "char-usb_device rw"
-          ];
+          DeviceAllow =
+            lib.optionals relayPowerControl [
+              "${cfg.gpioChip} rw"
+            ]
+            ++ [
+              "${cfg.uartPath} r"
+              "char-usb_device rw"
+            ];
           PrivateDevices = false;
 
           ReadOnlyPaths = [ cfg.draftPath ];

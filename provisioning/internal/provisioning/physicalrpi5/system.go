@@ -133,20 +133,30 @@ type GPIO interface {
 	AcquirePower(context.Context, laneguard.GPIODescriptor) (PowerLease, error)
 }
 
+// PowerLease may be returned together with an AcquirePower error when the
+// acquisition failed and explicit inactive cleanup still requires a retry.
 type PowerLease interface {
 	Release() error
 }
 
 // ExecGPIO starts one build-pinned libgpiod 2.x gpioset process. By default
 // gpioset holds the requested line until it exits. --banner provides a bounded
-// acquisition acknowledgement; Pdeathsig makes process death de-energize the
-// station's qualified normally-off relay.
+// acquisition acknowledgement; Pdeathsig bounds the asserted holder's lifetime
+// if its parent dies. A normal Release explicitly drives logical inactive.
 type ExecGPIO struct {
 	Binary string
 }
 
+const (
+	gpioHolderStopTimeout  = 2 * time.Second
+	gpioInactiveRunTimeout = 2 * time.Second
+	gpioInactiveHoldPeriod = "100ms"
+	gpioActiveConsumer     = "kaiba-provision-lane-guard"
+	gpioInactiveConsumer   = "kaiba-provision-lane-guard-inactive"
+)
+
 func (gpio ExecGPIO) AcquirePower(ctx context.Context, descriptor laneguard.GPIODescriptor) (PowerLease, error) {
-	arguments := []string{"--banner", "--chip", descriptor.ChipPath, "--consumer", "kaiba-provision-lane-guard"}
+	arguments := []string{"--banner", "--chip", descriptor.ChipPath, "--consumer", gpioActiveConsumer}
 	if descriptor.ActiveLow {
 		arguments = append(arguments, "--active-low")
 	}
@@ -162,7 +172,11 @@ func (gpio ExecGPIO) AcquirePower(ctx context.Context, descriptor laneguard.GPIO
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("start persistent gpioset: %w", err)
 	}
-	lease := &execPowerLease{command: command}
+	lease := &execPowerLease{
+		binary:     gpio.Binary,
+		descriptor: descriptor,
+		command:    command,
+	}
 	acknowledgement := make(chan error, 1)
 	go func() {
 		line, readErr := bufio.NewReader(io.LimitReader(stdout, 4097)).ReadString('\n')
@@ -179,64 +193,201 @@ func (gpio ExecGPIO) AcquirePower(ctx context.Context, descriptor laneguard.GPIO
 	select {
 	case err := <-acknowledgement:
 		if err != nil {
-			_ = lease.Release()
-			return nil, fmt.Errorf("persistent gpioset did not acknowledge line acquisition: %w", err)
+			return finishFailedGPIOAcquire(lease,
+				fmt.Errorf("persistent gpioset did not acknowledge line acquisition: %w", err))
 		}
 		return lease, nil
 	case <-ctx.Done():
-		_ = lease.Release()
-		return nil, fmt.Errorf("wait for persistent gpioset line acquisition: %w", ctx.Err())
+		return finishFailedGPIOAcquire(lease,
+			fmt.Errorf("wait for persistent gpioset line acquisition: %w", ctx.Err()))
 	}
 }
 
+func finishFailedGPIOAcquire(lease *execPowerLease, acquireErr error) (PowerLease, error) {
+	cleanupErr := lease.Release()
+	var pending PowerLease
+	if lease.cleanupPending() {
+		pending = lease
+	}
+	return pending, errors.Join(acquireErr, wrapGPIOCleanupError(cleanupErr))
+}
+
+func wrapGPIOCleanupError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("GPIO cleanup after acquisition failure: %w", err)
+}
+
 type execPowerLease struct {
-	mu       sync.Mutex
-	command  *exec.Cmd
-	released bool
+	mu                  sync.Mutex
+	binary              string
+	descriptor          laneguard.GPIODescriptor
+	command             *exec.Cmd
+	holderWait          chan error
+	holderWaitStarted   bool
+	holderStopAttempted bool
+	holderTermSignaled  bool
+	holderKillSignaled  bool
+	holderDone          bool
+	holderErr           error
+	released            bool
 }
 
 func (lease *execPowerLease) Release() error {
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
 	if lease.released {
-		return nil
+		return lease.holderErr
 	}
-	lease.released = true
-	signalErr := error(nil)
+	if !lease.holderDone {
+		reaped, holderErr := lease.stopAndReapHolder()
+		lease.holderErr = errors.Join(lease.holderErr, holderErr)
+		lease.holderDone = reaped
+	}
+	inactiveErr := lease.driveInactive()
+	if lease.holderDone && inactiveErr == nil {
+		lease.released = true
+	}
+	return errors.Join(lease.holderErr, inactiveErr)
+}
+
+func (lease *execPowerLease) cleanupPending() bool {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	return !lease.released
+}
+
+func (lease *execPowerLease) ensureHolderWaiter() {
+	if lease.holderWaitStarted {
+		return
+	}
+	lease.holderWait = make(chan error, 1)
+	lease.holderWaitStarted = true
+	go func() { lease.holderWait <- lease.command.Wait() }()
+}
+
+func (lease *execPowerLease) stopAndReapHolder() (bool, error) {
+	lease.ensureHolderWaiter()
+	if lease.holderStopAttempted {
+		if waitErr, ready := lease.pollHolderWait(); ready {
+			return true, lease.classifyHolderWait(waitErr)
+		}
+	}
+	lease.holderStopAttempted = true
+
+	var holderErrors []error
+	var signalErr error
 	if lease.command.Process != nil {
 		signalErr = lease.command.Process.Signal(syscall.SIGTERM)
+	} else {
+		signalErr = errors.New("persistent gpioset has no process")
 	}
-	waited := make(chan error, 1)
-	go func() { waited <- lease.command.Wait() }()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	var waitErr error
+	if signalErr == nil {
+		lease.holderTermSignaled = true
+	} else if !lease.expectedProcessDone(signalErr) {
+		holderErrors = append(holderErrors,
+			fmt.Errorf("persistent gpioset exited before requested release: %w", signalErr))
+	}
+
+	if waitErr, reaped := lease.awaitHolderWait(gpioHolderStopTimeout); reaped {
+		return true, errors.Join(errors.Join(holderErrors...), lease.classifyHolderWait(waitErr))
+	}
+	holderErrors = append(holderErrors,
+		errors.New("persistent gpioset ignored SIGTERM and required SIGKILL"))
+
+	if lease.command.Process != nil {
+		killErr := lease.command.Process.Kill()
+		if killErr == nil {
+			lease.holderKillSignaled = true
+		} else if !lease.expectedProcessDone(killErr) {
+			holderErrors = append(holderErrors, fmt.Errorf("kill persistent gpioset: %w", killErr))
+		}
+	}
+	if waitErr, reaped := lease.awaitHolderWait(gpioHolderStopTimeout); reaped {
+		return true, errors.Join(errors.Join(holderErrors...), lease.classifyHolderWait(waitErr))
+	}
+	holderErrors = append(holderErrors,
+		errors.New("timed out reaping persistent gpioset after SIGKILL"))
+	return false, errors.Join(holderErrors...)
+}
+
+func (lease *execPowerLease) expectedProcessDone(err error) bool {
+	return errors.Is(err, os.ErrProcessDone) && (lease.holderTermSignaled || lease.holderKillSignaled)
+}
+
+func (lease *execPowerLease) pollHolderWait() (error, bool) {
 	select {
-	case waitErr = <-waited:
+	case waitErr := <-lease.holderWait:
+		return waitErr, true
+	default:
+		return nil, false
+	}
+}
+
+func (lease *execPowerLease) awaitHolderWait(timeout time.Duration) (error, bool) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case waitErr := <-lease.holderWait:
+		return waitErr, true
 	case <-timer.C:
-		if lease.command.Process != nil {
-			_ = lease.command.Process.Kill()
-		}
-		waitErr = <-waited
-		if signalErr == nil {
-			signalErr = errors.New("persistent gpioset ignored SIGTERM and required SIGKILL")
-		}
+		return nil, false
 	}
-	if signalErr != nil {
-		if waitErr != nil {
-			return errors.Join(fmt.Errorf("persistent gpioset exited before requested release: %w", signalErr), waitErr)
-		}
-		return fmt.Errorf("persistent gpioset exited before requested release: %w", signalErr)
+}
+
+func (lease *execPowerLease) classifyHolderWait(waitErr error) error {
+	if waitErr == nil {
+		// Pinned gpioset 2.2.4 has no SIGTERM handler; requested termination
+		// therefore reports a signaled WaitStatus. Status zero means the holder
+		// stopped independently and continuity was lost before release.
+		return errors.New("persistent gpioset exited unexpectedly with status 0")
 	}
-	if waitErr != nil {
-		var exitError *exec.ExitError
-		if !errors.As(waitErr, &exitError) || exitError.ProcessState == nil {
-			return fmt.Errorf("reap persistent gpioset: %w", waitErr)
+	var exitError *exec.ExitError
+	if !errors.As(waitErr, &exitError) || exitError.ProcessState == nil {
+		return fmt.Errorf("reap persistent gpioset: %w", waitErr)
+	}
+	status, ok := exitError.ProcessState.Sys().(syscall.WaitStatus)
+	normalTermination := ok && status.Signaled() && status.Signal() == syscall.SIGTERM && lease.holderTermSignaled
+	forcedTermination := ok && status.Signaled() && status.Signal() == syscall.SIGKILL && lease.holderKillSignaled
+	if !normalTermination && !forcedTermination {
+		return fmt.Errorf("persistent gpioset exited unexpectedly: %w", waitErr)
+	}
+	return nil
+}
+
+func (lease *execPowerLease) driveInactive() error {
+	arguments := []string{
+		"--chip", lease.descriptor.ChipPath,
+		"--consumer", gpioInactiveConsumer,
+	}
+	if lease.descriptor.ActiveLow {
+		arguments = append(arguments, "--active-low")
+	}
+	// libgpiod 2.2.4 treats a sole zero toggle period as an instruction to
+	// exit without toggling. The hold period therefore keeps the line at its
+	// initial logical inactive value for a bounded interval before release.
+	arguments = append(arguments,
+		"--hold-period", gpioInactiveHoldPeriod,
+		"--toggle", "0",
+		strconv.FormatUint(uint64(lease.descriptor.Offset), 10)+"=0",
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), gpioInactiveRunTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, lease.binary, arguments...)
+	stderr := &boundedDiagnostic{maximum: 4096}
+	command.Stderr = stderr
+	err := command.Run()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		timeoutErr := fmt.Errorf("drive GPIO line explicitly inactive: %w", ctxErr)
+		if err != nil {
+			return errors.Join(timeoutErr, fmt.Errorf("inactive gpioset process: %w", err))
 		}
-		status, ok := exitError.ProcessState.Sys().(syscall.WaitStatus)
-		if !ok || !status.Signaled() || status.Signal() != syscall.SIGTERM {
-			return fmt.Errorf("persistent gpioset exited unexpectedly: %w", waitErr)
-		}
+		return timeoutErr
+	}
+	if err != nil {
+		return fmt.Errorf("drive GPIO line explicitly inactive: %w", err)
 	}
 	return nil
 }
@@ -263,7 +414,7 @@ func (diagnostic *boundedDiagnostic) Write(value []byte) (int, error) {
 // UART captures a bounded byte stream after opening the fixed adapter and
 // before Trigger powers or boots the target.
 type UART interface {
-	Capture(context.Context, string, []byte, int, func() error) ([]byte, error)
+	Capture(context.Context, string, []byte, int, time.Duration, func() error) ([]byte, error)
 }
 
 // FileUART owns the serial settings for the duration of one capture. It fixes
@@ -340,7 +491,10 @@ func raw115200(settings syscall.Termios) syscall.Termios {
 	return settings
 }
 
-func (uart FileUART) Capture(ctx context.Context, path string, marker []byte, maximum int, trigger func() error) (result []byte, resultErr error) {
+func (uart FileUART) Capture(ctx context.Context, path string, marker []byte, maximum int, captureTimeout time.Duration, trigger func() error) (result []byte, resultErr error) {
+	if captureTimeout <= 0 {
+		return nil, errors.New("UART capture timeout must be positive")
+	}
 	device := uart.device
 	if device == nil {
 		device = linuxUARTDevice{}
@@ -372,6 +526,8 @@ func (uart FileUART) Capture(ctx context.Context, path string, marker []byte, ma
 	if err := trigger(); err != nil {
 		return nil, err
 	}
+	captureCtx, cancelCapture := context.WithTimeout(ctx, captureTimeout)
+	defer cancelCapture()
 	interval := uart.PollInterval
 	if interval <= 0 {
 		interval = 10 * time.Millisecond
@@ -394,11 +550,11 @@ func (uart FileUART) Capture(ctx context.Context, path string, marker []byte, ma
 		}
 		timer := time.NewTimer(interval)
 		select {
-		case <-ctx.Done():
+		case <-captureCtx.Done():
 			if !timer.Stop() {
 				<-timer.C
 			}
-			return nil, ctx.Err()
+			return nil, captureCtx.Err()
 		case <-timer.C:
 		}
 	}

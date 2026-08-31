@@ -185,6 +185,7 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	laneID := flags.String("lane-id", "lane-1", "fixed lane identity")
 	usbPath := flags.String("rpiboot-sysfs", "/sys/bus/usb/devices/1-1", "fixed RPIBOOT sysfs path")
 	uartPath := flags.String("uart", "/dev/serial/by-id/kaiba-target-uart", "fixed target UART path")
+	powerControl := flags.String("power-control", "relay", "fixed target-power mechanism: relay or manual")
 	gpioChip := flags.String("gpio-chip", "/dev/gpiochip0", "fixed power-relay GPIO chip")
 	gpioOffset := flags.Uint64("gpio-offset", 0, "fixed power-relay GPIO line offset")
 	gpioActiveLow := flags.Bool("gpio-active-low", false, "treat the power-relay line as active-low")
@@ -205,12 +206,16 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	if *powerControl != "relay" && *powerControl != "manual" {
+		return errors.New("power-control must be relay or manual")
+	}
 	if *gpioOffset > math.MaxUint32 {
 		return errors.New("GPIO offset exceeds uint32")
 	}
 	laneConfig := laneguard.Config{
 		SchemaVersion: laneguard.ContractSchemaVersion,
 		StationID:     *stationID, LaneID: *laneID,
+		PowerControlMode: laneguard.PowerControlMode(*powerControl),
 		RPIBootSysfsPath: *usbPath, UARTPath: *uartPath,
 		PowerGPIO:         laneguard.GPIODescriptor{ChipPath: *gpioChip, Offset: uint32(*gpioOffset), ActiveLow: *gpioActiveLow},
 		LeaseSafetyMargin: *leaseMargin,
@@ -367,9 +372,13 @@ func run(ctx context.Context, arguments []string) (resultErr error) {
 		initialMode = physicalrpi5.ModeOwned
 	}
 	physicalConfig := physicalrpi5.Config{
-		Paths:       immutablePaths,
-		InitialMode: initialMode, ExpectedCustomerKeyHash: expectedCustomerKeyHash,
+		Paths:        immutablePaths,
+		PowerControl: *powerControl,
+		InitialMode:  initialMode, ExpectedCustomerKeyHash: expectedCustomerKeyHash,
 		ExpectedEEPROMHash: expectedEEPROMHash, ExpectedBootImageDigest: expectedBootImageDigest,
+	}
+	if laneguard.PowerControlMode(physicalConfig.PowerControl) != laneConfig.PowerControlMode {
+		return errors.New("physical adapter power control differs from the authorized lane mode")
 	}
 	promptServer, err := listenOperatorPrompt(operatorprompt.Config{
 		SocketPath: *operatorSocket, AllowedPrimaryGID: operatorGID,

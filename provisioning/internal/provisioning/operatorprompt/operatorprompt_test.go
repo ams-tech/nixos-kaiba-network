@@ -29,6 +29,7 @@ func TestPromptBindsExactActionInstructionsKindAndExpiry(t *testing.T) {
 	mutations := []func(*Prompt){
 		func(value *Prompt) { value.Instructions += " now" },
 		func(value *Prompt) { value.Action.TransactionID = "different" },
+		func(value *Prompt) { value.Action.PowerControlMode = laneguard.PowerControlManual },
 		func(value *Prompt) { value.Kind = KindReleaseBOOTSEL },
 		func(value *Prompt) { value.ExpiresAt = value.ExpiresAt.Add(time.Second) },
 	}
@@ -48,6 +49,60 @@ func TestPromptBindsExactActionInstructionsKindAndExpiry(t *testing.T) {
 	}
 	if _, err := New(action, KindHoldBOOTSEL, "prompt", "unsafe\x1b[2J", time.Now().Add(time.Minute)); err == nil {
 		t.Fatal("terminal control sequence accepted in instructions")
+	}
+}
+
+func TestPowerPromptKindsHaveClosedBootModePolicy(t *testing.T) {
+	relayRPIBoot := testAction(laneguard.BootModeRPIBoot)
+	relayNormal := testAction(laneguard.BootModeNormal)
+	manualRPIBoot := relayRPIBoot
+	manualRPIBoot.PowerControlMode = laneguard.PowerControlManual
+	manualNormal := relayNormal
+	manualNormal.PowerControlMode = laneguard.PowerControlManual
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	tests := []struct {
+		name    string
+		action  laneguard.HardwareAction
+		kind    Kind
+		wantErr bool
+	}{
+		{name: "disconnect manual rpiboot", action: manualRPIBoot, kind: KindDisconnectPower},
+		{name: "disconnect manual normal", action: manualNormal, kind: KindDisconnectPower},
+		{name: "connect manual rpiboot", action: manualRPIBoot, kind: KindConnectRPIBootPower},
+		{name: "connect manual normal", action: manualNormal, kind: KindConnectNormalPower},
+		{name: "release manual rpiboot", action: manualRPIBoot, kind: KindReleaseBOOTSEL},
+		{name: "reject manual disconnect for relay", action: relayRPIBoot, kind: KindDisconnectPower, wantErr: true},
+		{name: "reject manual rpiboot connection for relay", action: relayRPIBoot, kind: KindConnectRPIBootPower, wantErr: true},
+		{name: "reject manual normal connection for relay", action: relayNormal, kind: KindConnectNormalPower, wantErr: true},
+		{name: "reject relay hold for manual", action: manualRPIBoot, kind: KindHoldBOOTSEL, wantErr: true},
+		{name: "reject relay no-action for manual", action: manualNormal, kind: KindNormalNoAction, wantErr: true},
+		{name: "reject rpiboot connection for normal", action: manualNormal, kind: KindConnectRPIBootPower, wantErr: true},
+		{name: "reject normal connection for rpiboot", action: manualRPIBoot, kind: KindConnectNormalPower, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prompt, err := New(test.action, test.kind, "power-prompt", "Perform the exact displayed target-power action.", expiresAt)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("New() accepted %s for requested mode %s", test.kind, test.action.RequestedBootMode)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := prompt.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			changed := prompt
+			changed.Kind = KindHoldBOOTSEL
+			if changed.Kind == prompt.Kind {
+				changed.Kind = KindDisconnectPower
+			}
+			if err := changed.Validate(); err == nil {
+				t.Fatal("changing the authenticated power prompt kind retained a valid digest")
+			}
+		})
 	}
 }
 
@@ -397,7 +452,8 @@ func testAction(mode laneguard.BootMode) laneguard.HardwareAction {
 	return laneguard.HardwareAction{
 		SchemaVersion: laneguard.BootTransitionActionSchemaVersion,
 		StationID:     "station", LaneID: "lane", TransactionID: "transaction",
-		PlanDigest: digest("a"), TargetFingerprint: "target", FenceEpoch: 1,
+		PowerControlMode: laneguard.PowerControlRelay,
+		PlanDigest:       digest("a"), TargetFingerprint: "target", FenceEpoch: 1,
 		ApprovalID: "approval", IntentReceipt: "intent", IntentSequence: 1, Sequence: 1,
 		Operation: operation, OperationDigest: digest("b"), AuthorizationID: "authorization",
 		Phase: laneguard.HardwarePhaseExecute, OperationRequiredBootMode: mode, RequestedBootMode: mode,

@@ -48,6 +48,7 @@ func TestHappyPathBuildsExactPlanAndBindsCurrentRequest(t *testing.T) {
 	}
 	config := laneguard.Config{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
+		PowerControlMode: plan.PowerControlMode,
 		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", UARTPath: "/dev/serial/by-id/compiler-test",
 		PowerGPIO: laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17},
 	}
@@ -117,6 +118,7 @@ func TestBoundPlanLoadsOpaquePlanAndExecutesCurrentRequestThroughPublicAPI(t *te
 	draftSnapshot := fixture.draft.Snapshot()
 	config := laneguard.Config{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: request.StationID, LaneID: request.LaneID,
+		PowerControlMode: draftSnapshot.PowerControlMode,
 		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", UARTPath: "/dev/serial/by-id/compiler-public-api",
 		PowerGPIO: laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17}, LeaseSafetyMargin: 30 * time.Second,
 	}
@@ -164,6 +166,7 @@ func TestGuardRejectsSynthesizedLaterSequenceWhenBoundEnvelopeIsPreserved(t *tes
 	request.ExpectedPrestate = later.ExpectedPrestate
 	config := laneguard.Config{
 		SchemaVersion: laneguard.ContractSchemaVersion, StationID: plan.StationID, LaneID: plan.LaneID,
+		PowerControlMode: plan.PowerControlMode,
 		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", UARTPath: "/dev/serial/by-id/compiler-test",
 		PowerGPIO: laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17},
 	}
@@ -267,6 +270,7 @@ func TestBuildDraftRejectsMalformedInputs(t *testing.T) {
 	base := testDraftInput(testNow())
 	tests := map[string]func(*DraftInput){
 		"identity":            func(value *DraftInput) { value.StationID = "bad id" },
+		"power control mode":  func(value *DraftInput) { value.PowerControlMode = "" },
 		"target":              func(value *DraftInput) { value.TargetFingerprint = "bad" },
 		"initial observation": func(value *DraftInput) { value.InitialObservationDigest = "bad" },
 		"fence":               func(value *DraftInput) { value.FenceEpoch = 0 },
@@ -288,6 +292,33 @@ func TestBuildDraftRejectsMalformedInputs(t *testing.T) {
 				t.Fatalf("BuildDraft() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestBuildDraftBindsPowerControlModeIntoSnapshotAndPlanDigest(t *testing.T) {
+	relayInput := testDraftInput(testNow())
+	relay, err := BuildDraft(relayInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manualInput := relayInput
+	manualInput.PowerControlMode = laneguard.PowerControlManual
+	manual, err := BuildDraft(manualInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relay.Snapshot().PowerControlMode != laneguard.PowerControlRelay || manual.Snapshot().PowerControlMode != laneguard.PowerControlManual {
+		t.Fatalf("compiled power modes = relay:%q manual:%q", relay.Snapshot().PowerControlMode, manual.Snapshot().PowerControlMode)
+	}
+	if relay.PlanDigest() == manual.PlanDigest() {
+		t.Fatal("changing relay to manual did not change the v1alpha6 plan digest")
+	}
+	restored, err := DraftFromSnapshot(manual.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Snapshot().PowerControlMode != laneguard.PowerControlManual {
+		t.Fatalf("restored manual mode = %q", restored.Snapshot().PowerControlMode)
 	}
 }
 
@@ -403,7 +434,10 @@ func TestDraftFromSnapshotReconstructsOnlyAuthorityFreePolicyPlan(t *testing.T) 
 	}
 
 	tests := map[string]func(*laneguard.Plan){
-		"approval":        func(value *laneguard.Plan) { value.ApprovalID = "approval-forbidden" },
+		"approval": func(value *laneguard.Plan) { value.ApprovalID = "approval-forbidden" },
+		"power control mode": func(value *laneguard.Plan) {
+			value.PowerControlMode = laneguard.PowerControlManual
+		},
 		"intent receipt":  func(value *laneguard.Plan) { value.IntentReceipt = digest("f") },
 		"intent sequence": func(value *laneguard.Plan) { value.IntentSequence = 1 },
 		"initial observation": func(value *laneguard.Plan) {
@@ -600,6 +634,7 @@ func TestBindReconciliationSeparatesOriginalAttemptFromCurrentClaim(t *testing.T
 	config := laneguard.Config{
 		SchemaVersion: laneguard.ContractSchemaVersion,
 		StationID:     request.Claim.StationID, LaneID: request.Claim.LaneID,
+		PowerControlMode: plan.PowerControlMode,
 		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", UARTPath: "/dev/serial/by-id/reconciliation-test",
 		PowerGPIO: laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17},
 	}
@@ -866,7 +901,8 @@ func (hardware *boundPlanTestHardware) Execute(_ context.Context, config lanegua
 func recordBoundPlanBootTransition(journal laneguard.Journal, config laneguard.Config, action laneguard.HardwareAction, ordinal int) (laneguard.BootTransitionOutcome, error) {
 	started := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC).Add(time.Duration(ordinal) * time.Minute)
 	transition, err := journal.BeginBootTransition(laneguard.BeginBootTransitionRequest{
-		Action: action, StartedAt: started, RecordedAt: started.Add(2 * time.Second),
+		Action: action, PowerControlMode: laneguard.PowerControlRelay,
+		StartedAt: started, RecordedAt: started.Add(2 * time.Second),
 		PowerOffObservedAt: started.Add(time.Second), USBAbsentObservedAt: started.Add(2 * time.Second),
 		ColdIntervalEndsAt: started.Add(4 * time.Second), PromptID: "hold_prompt",
 		PromptDigest: digest("a"), PromptExpiresAt: started.Add(2 * time.Minute),
@@ -886,14 +922,14 @@ func recordBoundPlanBootTransition(journal laneguard.Journal, config laneguard.C
 	if err := journal.PutBootTransition(transition); err != nil {
 		return laneguard.BootTransitionOutcome{}, err
 	}
-	transition.Status = laneguard.BootTransitionPowerApplied
-	transition.PowerAppliedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
-	transition.UpdatedAt = transition.PowerAppliedAt
+	transition.Status = laneguard.BootTransitionPowerEstablished
+	transition.PowerEstablishedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
+	transition.UpdatedAt = transition.PowerEstablishedAt
 	if err := journal.PutBootTransition(transition); err != nil {
 		return laneguard.BootTransitionOutcome{}, err
 	}
 	transition.Status = laneguard.BootTransitionModeObserved
-	transition.ModeObservedAt = transition.PowerAppliedAt.Add(time.Second)
+	transition.ModeObservedAt = transition.PowerEstablishedAt.Add(time.Second)
 	transition.ObservedMode = action.RequestedBootMode
 	transition.RPIBootSysfsPath = config.RPIBootSysfsPath
 	transition.RPIBootObservationMethod = laneguard.RPIBootObservationSysfsPoll
@@ -1070,7 +1106,8 @@ func testDraftInput(now time.Time) DraftInput {
 	}
 	return DraftInput{
 		StationID: "station-fixture", LaneID: "lane-fixture", TransactionID: "transaction-fixture",
-		Release: release, TargetFingerprint: digest("4"), InitialObservationDigest: digest("5"), FenceEpoch: 1,
+		PowerControlMode: laneguard.PowerControlRelay,
+		Release:          release, TargetFingerprint: digest("4"), InitialObservationDigest: digest("5"), FenceEpoch: 1,
 		ApprovalExpiresAt: now.Add(30 * time.Minute), InitialState: fresh,
 		AuthorizationIDs: [7]string{
 			"authorization-1", "authorization-2", "authorization-3", "authorization-4",

@@ -60,7 +60,8 @@ func newWorkflowFixture(t *testing.T) workflowFixture {
 		input: DraftInput{
 			SchemaVersion: DraftInputSchemaVersion,
 			StationID:     "station-production-1", LaneID: "lane-1", TransactionID: "transaction-1",
-			AssetID: "asset-1", IntendedLogicalID: "kaiba-1", ProfileID: "rpi5-production",
+			PowerControlMode: laneguard.PowerControlRelay,
+			AssetID:          "asset-1", IntendedLogicalID: "kaiba-1", ProfileID: "rpi5-production",
 			PolicyDigest: testDigest("1"),
 			Release: releasebinding.Binding{
 				SignedReleaseManifestDigest: testDigest("2"), LaneGuardPackageDigest: testDigest("3"),
@@ -1224,6 +1225,7 @@ func TestExactCommittedApplyReplaysSkipExpiredClaimPreflight(t *testing.T) {
 
 func TestDraftInputRejectsAmbiguousOrUnexecutableCampaignValues(t *testing.T) {
 	tests := map[string]func(*DraftInput){
+		"power control mode":       func(input *DraftInput) { input.PowerControlMode = "" },
 		"short authorization list": func(input *DraftInput) { input.AuthorizationIDs = input.AuthorizationIDs[:6] },
 		"extra authorization":      func(input *DraftInput) { input.AuthorizationIDs = append(input.AuthorizationIDs, "authorization-8") },
 		"short duration list":      func(input *DraftInput) { input.MaximumSeconds = input.MaximumSeconds[:6] },
@@ -1240,6 +1242,18 @@ func TestDraftInputRejectsAmbiguousOrUnexecutableCampaignValues(t *testing.T) {
 				t.Fatalf("PrepareDraft() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestDraftInputPropagatesReviewedManualPowerControlMode(t *testing.T) {
+	fixture := newWorkflowFixture(t)
+	fixture.input.PowerControlMode = laneguard.PowerControlManual
+	snapshot, _, err := PrepareDraft(context.Background(), fixture.input, fixture.now, fixture.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.PowerControlMode != laneguard.PowerControlManual {
+		t.Fatalf("draft snapshot power control mode = %q", snapshot.PowerControlMode)
 	}
 }
 
@@ -1998,7 +2012,7 @@ func verifiedAttempt(snapshot laneguard.Plan, transaction controlplane.Transacti
 	operation := snapshot.Operations[len(transaction.Operations)-1]
 	base := laneguard.HardwareAction{
 		SchemaVersion: laneguard.BootTransitionActionSchemaVersion,
-		StationID:     snapshot.StationID, LaneID: snapshot.LaneID,
+		StationID:     snapshot.StationID, LaneID: snapshot.LaneID, PowerControlMode: snapshot.PowerControlMode,
 		TransactionID: snapshot.TransactionID, PlanDigest: snapshot.PlanDigest,
 		TargetFingerprint: snapshot.TargetFingerprint, FenceEpoch: snapshot.FenceEpoch,
 		ApprovalID: record.Approval.ID, IntentReceipt: record.IntentAuditReceiptID,
@@ -2051,10 +2065,12 @@ func completedBootTransitionOutcome(action laneguard.HardwareAction, start time.
 	evidence := laneguard.BootTransitionEvidence{
 		SchemaVersion: laneguard.BootTransitionEvidenceSchemaVersion,
 		TransitionKey: laneguard.BootTransitionKey(action, 1), Generation: 1, Action: action,
-		StartedAt: start, PromptID: "prompt-test", PromptDigest: testDigest("1"),
+		PowerControlMode:        laneguard.PowerControlRelay,
+		PowerEstablishmentBasis: laneguard.PowerEstablishmentRelayCommand,
+		StartedAt:               start, PromptID: "prompt-test", PromptDigest: testDigest("1"),
 		PromptExpiresAt: start.Add(20 * time.Second), Operator: laneguard.OperatorPeer{UID: 1000, GID: 1000, PID: 100},
 		PowerOffObservedAt: start, USBAbsentObservedAt: start.Add(time.Second), ColdIntervalEndsAt: start.Add(2 * time.Second),
-		OperatorAcknowledgedAt: start.Add(3 * time.Second), PowerAppliedAt: start.Add(4 * time.Second),
+		OperatorAcknowledgedAt: start.Add(3 * time.Second), PowerEstablishedAt: start.Add(4 * time.Second),
 		ModeObservedAt: modeObserved, ObservedMode: action.RequestedBootMode,
 		RPIBootSysfsPath: "/sys/bus/usb/devices/1-1", RPIBootObservationMethod: laneguard.RPIBootObservationSysfsPoll,
 		RPIBootPollInterval: 100 * time.Millisecond, SafeOffObservedAt: start.Add(7 * time.Second), CompletedAt: start.Add(8 * time.Second),
@@ -2080,8 +2096,11 @@ func completedBootTransitionOutcome(action laneguard.HardwareAction, start time.
 		Action:        action,
 		Generation:    1,
 		Reference: laneguard.BootTransitionReference{
-			SchemaVersion: laneguard.BootTransitionReferenceSchemaVersion,
-			TransitionKey: evidence.TransitionKey, Status: laneguard.BootTransitionCompleted, EvidenceDigest: digest,
+			SchemaVersion:    laneguard.BootTransitionReferenceSchemaVersion,
+			TransitionKey:    evidence.TransitionKey,
+			PowerControlMode: laneguard.PowerControlRelay, PowerEstablishmentBasis: laneguard.PowerEstablishmentRelayCommand,
+			SafeOffBasis: laneguard.SafeOffRelayInactiveAndUSBAbsence, SafeOffObservedAt: evidence.SafeOffObservedAt,
+			Status: laneguard.BootTransitionCompleted, EvidenceDigest: digest,
 		},
 		Evidence: evidence,
 	}

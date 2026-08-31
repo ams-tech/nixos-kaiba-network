@@ -19,8 +19,8 @@ type AttemptStatus string
 const (
 	maximumLaneJournalBytes = 8 * 1024 * 1024
 
-	AttemptSchemaVersion      = "provisioning.kaiba.network/lane-guard-attempt/v1alpha3"
-	AttemptStoreSchemaVersion = "provisioning.kaiba.network/lane-guard-attempt-store/v1alpha4"
+	AttemptSchemaVersion      = "provisioning.kaiba.network/lane-guard-attempt/v1alpha4"
+	AttemptStoreSchemaVersion = "provisioning.kaiba.network/lane-guard-attempt-store/v1alpha5"
 
 	AttemptStarted             AttemptStatus = "started"
 	AttemptUncertain           AttemptStatus = "uncertain"
@@ -514,11 +514,14 @@ func MergeBootTransitionProgress(durable, local BootTransition) (BootTransition,
 	if durable.IsTerminal() {
 		return BootTransition{}, errors.New("cannot merge progress into a terminal boot transition")
 	}
-	if err := local.Validate(); err != nil {
-		return BootTransition{}, fmt.Errorf("local boot-transition progress: %w", err)
-	}
 	progress := local
 	if local.IsTerminal() {
+		if err := local.Validate(); err != nil {
+			return BootTransition{}, fmt.Errorf("local boot-transition progress: %w", err)
+		}
+		// Project a valid terminal value back to its deepest active prefix.
+		// The caller reattaches terminal-only proof to its new outcome.
+		progress.FinalSafeOffProof = OperatorPowerProof{}
 		progress.SafeOffObservedAt = time.Time{}
 		progress.CompletedAt = time.Time{}
 		progress.Failure = BootTransitionFailureNone
@@ -530,9 +533,9 @@ func MergeBootTransitionProgress(durable, local BootTransition) (BootTransition,
 		case !progress.ModeObservedAt.IsZero():
 			progress.Status = BootTransitionModeObserved
 			progress.UpdatedAt = latestBootTransitionTime(durable.UpdatedAt, progress.ModeObservedAt)
-		case !progress.PowerAppliedAt.IsZero():
-			progress.Status = BootTransitionPowerApplied
-			progress.UpdatedAt = latestBootTransitionTime(durable.UpdatedAt, progress.PowerAppliedAt)
+		case !progress.PowerEstablishedAt.IsZero():
+			progress.Status = BootTransitionPowerEstablished
+			progress.UpdatedAt = latestBootTransitionTime(durable.UpdatedAt, progress.PowerEstablishedAt)
 		case !progress.OperatorAcknowledgedAt.IsZero():
 			progress.Status = BootTransitionOperatorAcknowledged
 			progress.UpdatedAt = latestBootTransitionTime(durable.UpdatedAt, progress.OperatorAcknowledgedAt)
@@ -543,6 +546,14 @@ func MergeBootTransitionProgress(durable, local BootTransition) (BootTransition,
 			progress.Status = BootTransitionRequested
 			progress.UpdatedAt = durable.UpdatedAt
 		}
+	} else {
+		// A safe-off proof may already have been collected for the terminal
+		// outcome while the locally retained progress is still active. It is
+		// not part of that active prefix and is validated after reattachment.
+		progress.FinalSafeOffProof = OperatorPowerProof{}
+	}
+	if err := progress.Validate(); err != nil {
+		return BootTransition{}, fmt.Errorf("local boot-transition progress: %w", err)
 	}
 	if err := validBootTransitionUpdate(durable, progress); err != nil {
 		return BootTransition{}, fmt.Errorf("local progress is not a valid forward durable prefix: %w", err)

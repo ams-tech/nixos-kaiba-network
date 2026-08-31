@@ -13,6 +13,38 @@ func TestReconcileSchemaTracksBootModeBoundRequest(t *testing.T) {
 	}
 }
 
+func TestContractSchemaTracksAuthorizedPowerControlMode(t *testing.T) {
+	if ContractSchemaVersion != "provisioning.kaiba.network/lane-guard/v1alpha6" {
+		t.Fatalf("contract schema = %q", ContractSchemaVersion)
+	}
+}
+
+func TestConfigRequiresClosedPowerControlMode(t *testing.T) {
+	for _, mode := range []PowerControlMode{PowerControlRelay, PowerControlManual} {
+		config := testConfig()
+		config.PowerControlMode = mode
+		if err := config.Validate(); err != nil {
+			t.Fatalf("valid power control mode %q rejected: %v", mode, err)
+		}
+	}
+	for _, mode := range []PowerControlMode{"", "automatic"} {
+		config := testConfig()
+		config.PowerControlMode = mode
+		if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "power control mode") {
+			t.Fatalf("invalid power control mode %q error = %v", mode, err)
+		}
+	}
+}
+
+func TestPlanValidateRejectsPowerControlModeDifferentFromLane(t *testing.T) {
+	plan := testPlan()
+	config := testConfig()
+	config.PowerControlMode = PowerControlManual
+	if err := plan.Validate(config); !errors.Is(err, ErrPlanMismatch) {
+		t.Fatalf("mode-mismatched plan error = %v, want plan mismatch", err)
+	}
+}
+
 func TestDirectStateValidateDistinguishesObservedAndUnavailableEEPROM(t *testing.T) {
 	observed := DirectState{
 		CustomerKeyHash: unownedCustomerKeyHash, EEPROMHash: digest("a"), EEPROMHashStatus: EEPROMHashObserved,

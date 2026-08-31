@@ -574,6 +574,20 @@ func ValidateAttemptForPlan(plan Plan, attempt Attempt) error {
 		attempt.Operation != operation.Operation || attempt.OperationDigest != operation.OperationDigest {
 		return ErrPlanMismatch
 	}
+	for _, outcome := range []BootTransitionOutcome{
+		attempt.PreObservationTransition,
+		attempt.ExecutionTransition,
+		attempt.PostObservationTransition,
+		attempt.ReconciliationTransition,
+	} {
+		if outcome == (BootTransitionOutcome{}) {
+			continue
+		}
+		if outcome.Action.PowerControlMode != plan.PowerControlMode ||
+			outcome.Reference.PowerControlMode != plan.PowerControlMode {
+			return fmt.Errorf("%w: boot-transition power control mode", ErrPlanMismatch)
+		}
+	}
 	switch attempt.Status {
 	case AttemptVerified:
 		if attempt.ObservedState != operation.ExpectedPoststate {
@@ -865,6 +879,9 @@ func (guard *Guard) validateBootTransitionOutcome(action HardwareAction, outcome
 	if err := outcome.ValidateForAction(action); err != nil {
 		return fmt.Errorf("%w: %v", ErrBootTransitionOutcome, err)
 	}
+	if outcome.Reference.PowerControlMode != guard.config.PowerControlMode {
+		return fmt.Errorf("%w: transition power control mode differs from the authorized lane mode", ErrBootTransitionOutcome)
+	}
 	if (outcome.Reference.Status == BootTransitionCompleted) != completed {
 		return fmt.Errorf("%w: terminal status does not match the hardware return", ErrBootTransitionOutcome)
 	}
@@ -888,7 +905,7 @@ func (guard *Guard) validateBootTransitionOutcome(action HardwareAction, outcome
 func makeHardwareAction(plan Plan, operation OperationSpec, phase HardwarePhase, claim *ReconciliationClaim) (HardwareAction, error) {
 	action := HardwareAction{
 		SchemaVersion: BootTransitionActionSchemaVersion,
-		StationID:     plan.StationID, LaneID: plan.LaneID, TransactionID: plan.TransactionID,
+		StationID:     plan.StationID, LaneID: plan.LaneID, PowerControlMode: plan.PowerControlMode, TransactionID: plan.TransactionID,
 		PlanDigest: plan.PlanDigest, TargetFingerprint: plan.TargetFingerprint, FenceEpoch: plan.FenceEpoch,
 		ApprovalID: plan.ApprovalID, IntentReceipt: plan.IntentReceipt, IntentSequence: plan.IntentSequence,
 		Sequence: operation.Sequence, Operation: operation.Operation, OperationDigest: operation.OperationDigest,
@@ -932,7 +949,7 @@ func clonePlan(plan Plan) Plan {
 }
 
 func samePlan(left, right Plan) bool {
-	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID || left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release || left.TargetFingerprint != right.TargetFingerprint || left.InitialObservationDigest != right.InitialObservationDigest || left.FenceEpoch != right.FenceEpoch || left.ApprovalID != right.ApprovalID || !left.ApprovalExpiresAt.Equal(right.ApprovalExpiresAt) || left.IntentReceipt != right.IntentReceipt || left.IntentSequence != right.IntentSequence || len(left.Operations) != len(right.Operations) {
+	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID || left.PowerControlMode != right.PowerControlMode || left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release || left.TargetFingerprint != right.TargetFingerprint || left.InitialObservationDigest != right.InitialObservationDigest || left.FenceEpoch != right.FenceEpoch || left.ApprovalID != right.ApprovalID || !left.ApprovalExpiresAt.Equal(right.ApprovalExpiresAt) || left.IntentReceipt != right.IntentReceipt || left.IntentSequence != right.IntentSequence || len(left.Operations) != len(right.Operations) {
 		return false
 	}
 	for index := range left.Operations {

@@ -34,6 +34,7 @@ const (
 type DraftInput struct {
 	StationID                string
 	LaneID                   string
+	PowerControlMode         laneguard.PowerControlMode
 	TransactionID            string
 	Release                  releasebinding.Binding
 	TargetFingerprint        string
@@ -71,6 +72,9 @@ func BuildDraft(input DraftInput) (Draft, error) {
 	if !identifier.MatchString(input.StationID) || !identifier.MatchString(input.LaneID) || !identifier.MatchString(input.TransactionID) {
 		return Draft{}, fmt.Errorf("%w: station, lane, or transaction identity is invalid", ErrInvalidDraft)
 	}
+	if input.PowerControlMode != laneguard.PowerControlRelay && input.PowerControlMode != laneguard.PowerControlManual {
+		return Draft{}, fmt.Errorf("%w: power control mode must be relay or manual", ErrInvalidDraft)
+	}
 	if !validDigest(input.TargetFingerprint) || !validDigest(input.InitialObservationDigest) || input.FenceEpoch == 0 {
 		return Draft{}, fmt.Errorf("%w: target fingerprint, initial observation digest, or fence epoch is invalid", ErrInvalidDraft)
 	}
@@ -100,6 +104,7 @@ func BuildDraft(input DraftInput) (Draft, error) {
 		SchemaVersion:            laneguard.ContractSchemaVersion,
 		StationID:                input.StationID,
 		LaneID:                   input.LaneID,
+		PowerControlMode:         input.PowerControlMode,
 		TransactionID:            input.TransactionID,
 		Release:                  input.Release,
 		TargetFingerprint:        input.TargetFingerprint,
@@ -163,6 +168,7 @@ func DraftFromSnapshot(snapshot laneguard.Plan) (Draft, error) {
 	restored, err := BuildDraft(DraftInput{
 		StationID:                snapshot.StationID,
 		LaneID:                   snapshot.LaneID,
+		PowerControlMode:         snapshot.PowerControlMode,
 		TransactionID:            snapshot.TransactionID,
 		Release:                  snapshot.Release,
 		TargetFingerprint:        snapshot.TargetFingerprint,
@@ -183,7 +189,7 @@ func DraftFromSnapshot(snapshot laneguard.Plan) (Draft, error) {
 }
 
 func sameDraftSnapshot(left, right laneguard.Plan) bool {
-	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID ||
+	if left.SchemaVersion != right.SchemaVersion || left.StationID != right.StationID || left.LaneID != right.LaneID || left.PowerControlMode != right.PowerControlMode ||
 		left.TransactionID != right.TransactionID || left.PlanDigest != right.PlanDigest || left.Release != right.Release ||
 		left.TargetFingerprint != right.TargetFingerprint || left.InitialObservationDigest != right.InitialObservationDigest || left.FenceEpoch != right.FenceEpoch ||
 		left.ApprovalExpiresAt != right.ApprovalExpiresAt || left.ApprovalID != right.ApprovalID ||

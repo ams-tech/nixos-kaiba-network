@@ -42,6 +42,7 @@ func TestHardwareActionEnforcesClosedPhaseBootModePolicy(t *testing.T) {
 		}},
 		{"reconciliation authority on execute", func(value *HardwareAction) { value.ReconciliationClaimID = "claim" }},
 		{"phase", func(value *HardwareAction) { value.Phase = "invented" }},
+		{"power control", func(value *HardwareAction) { value.PowerControlMode = "invented" }},
 		{"digest", func(value *HardwareAction) { value.OperationDigest = "not-a-digest" }},
 	}
 	for _, test := range tests {
@@ -84,30 +85,30 @@ func TestBootTransitionForwardOnlyCompletionRequiresReleaseAndBindsEvidence(t *t
 	}
 
 	changed := transition
-	changed.Status = BootTransitionPowerApplied
+	changed.Status = BootTransitionPowerEstablished
 	changed.Operator.UID++
-	changed.PowerAppliedAt = changed.OperatorAcknowledgedAt.Add(time.Second)
-	changed.UpdatedAt = changed.PowerAppliedAt
+	changed.PowerEstablishedAt = changed.OperatorAcknowledgedAt.Add(time.Second)
+	changed.UpdatedAt = changed.PowerEstablishedAt
 	if err := store.PutBootTransition(changed); err == nil || !strings.Contains(err.Error(), "progress") {
 		t.Fatalf("changed acknowledged peer error = %v", err)
 	}
 	changed = transition
-	changed.Status = BootTransitionPowerApplied
-	changed.PowerAppliedAt = changed.OperatorAcknowledgedAt.Add(time.Second)
+	changed.Status = BootTransitionPowerEstablished
+	changed.PowerEstablishedAt = changed.OperatorAcknowledgedAt.Add(time.Second)
 	changed.UpdatedAt = changed.OperatorAcknowledgedAt
 	if err := store.PutBootTransition(changed); err == nil || !strings.Contains(err.Error(), "update time") {
 		t.Fatalf("update before recorded event error = %v", err)
 	}
 
-	transition.Status = BootTransitionPowerApplied
-	transition.PowerAppliedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
-	transition.UpdatedAt = transition.PowerAppliedAt
+	transition.Status = BootTransitionPowerEstablished
+	transition.PowerEstablishedAt = transition.OperatorAcknowledgedAt.Add(time.Second)
+	transition.UpdatedAt = transition.PowerEstablishedAt
 	if err := store.PutBootTransition(transition); err != nil {
 		t.Fatalf("record power applied: %v", err)
 	}
 
 	transition.Status = BootTransitionModeObserved
-	transition.ModeObservedAt = transition.PowerAppliedAt.Add(time.Second)
+	transition.ModeObservedAt = transition.PowerEstablishedAt.Add(time.Second)
 	transition.ObservedMode = BootModeRPIBoot
 	transition.RPIBootSysfsPath = "/sys/bus/usb/devices/1-1"
 	transition.RPIBootEligibleTargets = 1
@@ -191,6 +192,114 @@ func TestBootTransitionForwardOnlyCompletionRequiresReleaseAndBindsEvidence(t *t
 	}
 }
 
+func TestManualPowerTransitionRequiresAndBindsInitialAndFinalSafeOffProof(t *testing.T) {
+	request := testBeginBootTransitionRequest(testHardwareAction(HardwarePhaseExecute, OperationProgramCustomerKeyAndEEPROM))
+	request.PowerControlMode = PowerControlManual
+	request.Action.PowerControlMode = PowerControlManual
+	request.InitialPowerOffProof = testOperatorPowerProof(
+		"initial_power_off", request.StartedAt.Add(500*time.Millisecond), request.StartedAt.Add(time.Minute),
+	)
+	transition, err := request.transition(1)
+	if err != nil {
+		t.Fatalf("begin manual transition: %v", err)
+	}
+	transition.Status = BootTransitionCompleted
+	transition.Operator = OperatorPeer{UID: 1000, GID: 1000, PID: 2000}
+	transition.OperatorAcknowledgedAt = transition.ColdIntervalEndsAt.Add(time.Second)
+	transition.PowerEstablishedAt = transition.OperatorAcknowledgedAt
+	transition.ModeObservedAt = transition.PowerEstablishedAt.Add(time.Second)
+	transition.ObservedMode = BootModeRPIBoot
+	transition.RPIBootSysfsPath = "/sys/bus/usb/devices/1-1"
+	transition.RPIBootEligibleTargets = 1
+	transition.RPIBootObservationMethod = RPIBootObservationSysfsPoll
+	transition.RPIBootPollInterval = 50 * time.Millisecond
+	transition.ReleasePromptID = "release_prompt_manual"
+	transition.ReleasePromptDigest = digest("d")
+	transition.ReleasePromptExpiresAt = transition.ModeObservedAt.Add(time.Minute)
+	transition.ReleaseOperator = transition.Operator
+	transition.OperatorReleasedAt = transition.ModeObservedAt.Add(time.Second)
+	transition.FinalSafeOffProof = testOperatorPowerProof(
+		"final_power_off", transition.OperatorReleasedAt.Add(time.Second), transition.OperatorReleasedAt.Add(time.Minute),
+	)
+	transition.SafeOffObservedAt = transition.FinalSafeOffProof.AcknowledgedAt.Add(time.Second)
+	transition.CompletedAt = transition.SafeOffObservedAt
+	transition.UpdatedAt = transition.CompletedAt
+	evidence, err := transition.Evidence()
+	if err != nil {
+		t.Fatalf("manual evidence: %v", err)
+	}
+	transition.EvidenceDigest, err = evidence.Digest()
+	if err != nil {
+		t.Fatalf("manual evidence digest: %v", err)
+	}
+	if err := transition.Validate(); err != nil {
+		t.Fatalf("valid completed manual transition rejected: %v", err)
+	}
+	reference, err := transition.Reference()
+	if err != nil || reference.PowerControlMode != PowerControlManual ||
+		reference.PowerEstablishmentBasis != PowerEstablishmentOperatorAttestation ||
+		reference.SafeOffBasis != SafeOffOperatorDisconnectAndUSBAbsence ||
+		reference.InitialPowerOffProof != transition.InitialPowerOffProof ||
+		reference.FinalSafeOffProof != transition.FinalSafeOffProof ||
+		!reference.SafeOffObservedAt.Equal(transition.SafeOffObservedAt) {
+		t.Fatalf("manual terminal attribution = %#v, %v", reference, err)
+	}
+	zeroTimestampReference := reference
+	zeroTimestampReference.InitialPowerOffProof.AcknowledgedAt = time.Time{}
+	if err := zeroTimestampReference.Validate(); err == nil {
+		t.Fatal("manual reference accepted a zero acknowledgement timestamp")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*BootTransition)
+	}{
+		{"missing initial proof", func(value *BootTransition) { value.InitialPowerOffProof = OperatorPowerProof{} }},
+		{"missing final proof", func(value *BootTransition) { value.FinalSafeOffProof = OperatorPowerProof{} }},
+		{"final proof before release", func(value *BootTransition) {
+			value.FinalSafeOffProof.AcknowledgedAt = value.OperatorReleasedAt.Add(-time.Nanosecond)
+		}},
+		{"relay with manual proof", func(value *BootTransition) { value.PowerControlMode = PowerControlRelay }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed := transition
+			test.mutate(&changed)
+			if err := changed.Validate(); err == nil {
+				t.Fatal("invalid manual power evidence was accepted")
+			}
+		})
+	}
+
+	changedEvidence := evidence
+	changedEvidence.FinalSafeOffProof.Operator.PID++
+	changedDigest, err := changedEvidence.Digest()
+	if err != nil || changedDigest == transition.EvidenceDigest {
+		t.Fatalf("manual final safe-off proof was not evidence-bound: digest=%q err=%v", changedDigest, err)
+	}
+	falseEdgeTime := evidence
+	falseEdgeTime.PowerEstablishedAt = falseEdgeTime.PowerEstablishedAt.Add(time.Nanosecond)
+	if _, err := falseEdgeTime.Digest(); err == nil || !strings.Contains(err.Error(), "attestation time") {
+		t.Fatalf("manual evidence with a fictional sensed power edge was accepted: %v", err)
+	}
+
+	quarantined, err := request.transition(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quarantined.Status = BootTransitionQuarantined
+	quarantined.Failure = BootTransitionFailureSafeOffUnproven
+	quarantined.UpdatedAt = quarantined.UpdatedAt.Add(time.Second)
+	if err := quarantined.Validate(); err != nil {
+		t.Fatalf("manual quarantine without a false final proof rejected: %v", err)
+	}
+	quarantinedReference, err := quarantined.Reference()
+	if err != nil || quarantinedReference.SafeOffBasis != SafeOffUnproven ||
+		!quarantinedReference.SafeOffObservedAt.IsZero() {
+		t.Fatalf("manual quarantine attribution = %#v, %v", quarantinedReference, err)
+	}
+}
+
 func TestBootTransitionBeginAllocatesGenerationAndBlocksOpenPhase(t *testing.T) {
 	store := NewMemoryStore()
 	request := testBeginBootTransitionRequest(testHardwareAction(HardwarePhasePreObservation, OperationColdPowerCycle))
@@ -247,6 +356,11 @@ func TestBootTransitionBeginAllocatesGenerationAndBlocksOpenPhase(t *testing.T) 
 	if err != nil || outcome.Reference != reference || outcome.Evidence != (BootTransitionEvidence{}) {
 		t.Fatalf("interrupted outcome = %#v, %v", outcome, err)
 	}
+	wrongModeOutcome := outcome
+	wrongModeOutcome.Action.PowerControlMode = PowerControlManual
+	if err := wrongModeOutcome.ValidateForAction(wrongModeOutcome.Action); err == nil || !strings.Contains(err.Error(), "authority-bound action") {
+		t.Fatalf("failed outcome with a different power mode was accepted: %v", err)
+	}
 
 	secondRequest := request
 	secondRequest.StartedAt = secondRequest.StartedAt.Add(time.Minute)
@@ -283,9 +397,9 @@ func TestMergeBootTransitionProgressPreservesOnlyValidForwardLocalPrefix(t *test
 	}
 
 	local := transition
-	local.Status = BootTransitionPowerApplied
-	local.PowerAppliedAt = local.UpdatedAt.Add(time.Second)
-	local.UpdatedAt = local.PowerAppliedAt
+	local.Status = BootTransitionPowerEstablished
+	local.PowerEstablishedAt = local.UpdatedAt.Add(time.Second)
+	local.UpdatedAt = local.PowerEstablishedAt
 	merged, err := MergeBootTransitionProgress(transition, local)
 	if err != nil || merged != local {
 		t.Fatalf("merged forward power prefix = %#v, %v", merged, err)
@@ -486,7 +600,8 @@ func testHardwareAction(phase HardwarePhase, operation Operation) HardwareAction
 	}
 	action := HardwareAction{
 		SchemaVersion: BootTransitionActionSchemaVersion, StationID: "station", LaneID: "lane",
-		TransactionID: "transaction", PlanDigest: digest("a"), TargetFingerprint: "target", FenceEpoch: 1,
+		PowerControlMode: PowerControlRelay,
+		TransactionID:    "transaction", PlanDigest: digest("a"), TargetFingerprint: "target", FenceEpoch: 1,
 		ApprovalID: "approval", IntentReceipt: "intent", IntentSequence: 1, Sequence: 1,
 		Operation: operation, OperationDigest: digest("b"), AuthorizationID: "authorization",
 		Phase: phase, OperationRequiredBootMode: required, RequestedBootMode: requested,
@@ -501,9 +616,17 @@ func testHardwareAction(phase HardwarePhase, operation Operation) HardwareAction
 func testBeginBootTransitionRequest(action HardwareAction) BeginBootTransitionRequest {
 	started := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	return BeginBootTransitionRequest{
-		Action: action, StartedAt: started, PowerOffObservedAt: started.Add(time.Second),
+		Action: action, PowerControlMode: PowerControlRelay,
+		StartedAt: started, PowerOffObservedAt: started.Add(time.Second),
 		USBAbsentObservedAt: started.Add(2 * time.Second), ColdIntervalEndsAt: started.Add(4 * time.Second),
 		RecordedAt: started.Add(2 * time.Second), PromptID: "hold_prompt_1", PromptDigest: digest("c"),
 		PromptExpiresAt: started.Add(2 * time.Minute),
+	}
+}
+
+func testOperatorPowerProof(id string, acknowledgedAt, expiresAt time.Time) OperatorPowerProof {
+	return OperatorPowerProof{
+		PromptID: id, PromptDigest: digest("e"), PromptExpiresAt: expiresAt,
+		Operator: OperatorPeer{UID: 1000, GID: 1000, PID: 2001}, AcknowledgedAt: acknowledgedAt,
 	}
 }

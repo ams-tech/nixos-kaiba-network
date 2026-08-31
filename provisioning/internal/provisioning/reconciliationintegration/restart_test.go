@@ -115,7 +115,8 @@ func testAuthenticatedRestartReconciliation(t *testing.T, mutationApplied, fresh
 	transaction := createClaimAndBind(t, ctx, control, release, freshObservation.TargetFingerprint, operationNames)
 	draft, err := plancompiler.BuildDraft(plancompiler.DraftInput{
 		StationID: stationID, LaneID: laneID, TransactionID: transaction.ID,
-		Release: release, TargetFingerprint: freshObservation.TargetFingerprint,
+		PowerControlMode: laneguard.PowerControlRelay,
+		Release:          release, TargetFingerprint: freshObservation.TargetFingerprint,
 		InitialObservationDigest: transaction.Target.ObservationDigest,
 		FenceEpoch:               transaction.FenceEpoch, ApprovalExpiresAt: now.Add(30 * time.Minute),
 		InitialState: initialState,
@@ -750,7 +751,7 @@ func (lease *simulatedPowerLease) Release() error {
 
 type unexpectedUART struct{}
 
-func (unexpectedUART) Capture(context.Context, string, []byte, int, func() error) ([]byte, error) {
+func (unexpectedUART) Capture(context.Context, string, []byte, int, time.Duration, func() error) ([]byte, error) {
 	return nil, errors.New("unexpected UART use in ownership-commit restart test")
 }
 
@@ -832,6 +833,7 @@ func laneConfig() laneguard.Config {
 	return laneguard.Config{
 		SchemaVersion: laneguard.ContractSchemaVersion,
 		StationID:     stationID, LaneID: laneID,
+		PowerControlMode:  laneguard.PowerControlRelay,
 		RPIBootSysfsPath:  "/sys/bus/usb/devices/1-1",
 		UARTPath:          "/dev/serial/by-id/kaiba-restart-uart",
 		PowerGPIO:         laneguard.GPIODescriptor{ChipPath: "/dev/gpiochip0", Offset: 17},

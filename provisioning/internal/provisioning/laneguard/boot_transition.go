@@ -10,13 +10,13 @@ import (
 )
 
 const (
-	BootTransitionActionSchemaVersion    = "provisioning.kaiba.network/boot-transition-action/v1alpha1"
-	BootTransitionSchemaVersion          = "provisioning.kaiba.network/boot-transition/v1alpha1"
-	BootTransitionEvidenceSchemaVersion  = "provisioning.kaiba.network/boot-transition-evidence/v1alpha1"
-	BootTransitionReferenceSchemaVersion = "provisioning.kaiba.network/boot-transition-reference/v1alpha1"
-	BootTransitionOutcomeSchemaVersion   = "provisioning.kaiba.network/boot-transition-outcome/v1alpha1"
+	BootTransitionActionSchemaVersion    = "provisioning.kaiba.network/boot-transition-action/v1alpha2"
+	BootTransitionSchemaVersion          = "provisioning.kaiba.network/boot-transition/v1alpha3"
+	BootTransitionEvidenceSchemaVersion  = "provisioning.kaiba.network/boot-transition-evidence/v1alpha3"
+	BootTransitionReferenceSchemaVersion = "provisioning.kaiba.network/boot-transition-reference/v1alpha2"
+	BootTransitionOutcomeSchemaVersion   = "provisioning.kaiba.network/boot-transition-outcome/v1alpha2"
 
-	bootTransitionEvidenceDigestDomain = "kaiba.provisioning.boot-transition-evidence.v1alpha1"
+	bootTransitionEvidenceDigestDomain = "kaiba.provisioning.boot-transition-evidence.v1alpha3"
 )
 
 var (
@@ -41,25 +41,26 @@ const (
 // future target-facing boot transition. It deliberately contains no physical
 // path, payload selector, executable, prompt text, or caller-selected mode.
 type HardwareAction struct {
-	SchemaVersion             string        `json:"schema_version"`
-	StationID                 string        `json:"station_id"`
-	LaneID                    string        `json:"lane_id"`
-	TransactionID             string        `json:"transaction_id"`
-	PlanDigest                string        `json:"plan_digest"`
-	TargetFingerprint         string        `json:"target_fingerprint"`
-	FenceEpoch                uint64        `json:"fence_epoch"`
-	ApprovalID                string        `json:"approval_id"`
-	IntentReceipt             string        `json:"intent_receipt"`
-	IntentSequence            uint32        `json:"intent_sequence"`
-	Sequence                  uint32        `json:"sequence"`
-	Operation                 Operation     `json:"operation"`
-	OperationDigest           string        `json:"operation_digest"`
-	AuthorizationID           string        `json:"authorization_id"`
-	Phase                     HardwarePhase `json:"phase"`
-	OperationRequiredBootMode BootMode      `json:"operation_required_boot_mode"`
-	RequestedBootMode         BootMode      `json:"requested_boot_mode"`
-	ReconciliationClaimID     string        `json:"reconciliation_claim_id,omitempty"`
-	ReconciliationFenceEpoch  uint64        `json:"reconciliation_fence_epoch,omitempty"`
+	SchemaVersion             string           `json:"schema_version"`
+	StationID                 string           `json:"station_id"`
+	LaneID                    string           `json:"lane_id"`
+	PowerControlMode          PowerControlMode `json:"power_control_mode"`
+	TransactionID             string           `json:"transaction_id"`
+	PlanDigest                string           `json:"plan_digest"`
+	TargetFingerprint         string           `json:"target_fingerprint"`
+	FenceEpoch                uint64           `json:"fence_epoch"`
+	ApprovalID                string           `json:"approval_id"`
+	IntentReceipt             string           `json:"intent_receipt"`
+	IntentSequence            uint32           `json:"intent_sequence"`
+	Sequence                  uint32           `json:"sequence"`
+	Operation                 Operation        `json:"operation"`
+	OperationDigest           string           `json:"operation_digest"`
+	AuthorizationID           string           `json:"authorization_id"`
+	Phase                     HardwarePhase    `json:"phase"`
+	OperationRequiredBootMode BootMode         `json:"operation_required_boot_mode"`
+	RequestedBootMode         BootMode         `json:"requested_boot_mode"`
+	ReconciliationClaimID     string           `json:"reconciliation_claim_id,omitempty"`
+	ReconciliationFenceEpoch  uint64           `json:"reconciliation_fence_epoch,omitempty"`
 }
 
 func (action HardwareAction) Validate() error {
@@ -69,6 +70,9 @@ func (action HardwareAction) Validate() error {
 	if !identifierPattern.MatchString(action.StationID) || !identifierPattern.MatchString(action.LaneID) ||
 		!identifierPattern.MatchString(action.TransactionID) || !identifierPattern.MatchString(action.TargetFingerprint) {
 		return errors.New("boot-transition action contains an invalid identity")
+	}
+	if action.PowerControlMode != PowerControlRelay && action.PowerControlMode != PowerControlManual {
+		return errors.New("boot-transition action has an invalid power-control mode")
 	}
 	if !digestPattern.MatchString(action.PlanDigest) || !digestPattern.MatchString(action.OperationDigest) {
 		return errors.New("boot-transition action requires canonical plan and operation digests")
@@ -115,7 +119,7 @@ const (
 	BootTransitionRequested            BootTransitionStatus = "requested"
 	BootTransitionAwaitingOperator     BootTransitionStatus = "awaiting_operator"
 	BootTransitionOperatorAcknowledged BootTransitionStatus = "operator_acknowledged"
-	BootTransitionPowerApplied         BootTransitionStatus = "power_applied"
+	BootTransitionPowerEstablished     BootTransitionStatus = "power_established"
 	BootTransitionModeObserved         BootTransitionStatus = "mode_observed"
 	BootTransitionOperatorReleased     BootTransitionStatus = "operator_released"
 	BootTransitionCompleted            BootTransitionStatus = "completed"
@@ -144,6 +148,75 @@ type OperatorPeer struct {
 	PID int32  `json:"pid"`
 }
 
+// PowerControlMode records which fixed lane mechanism established and removed
+// target power. Manual operation is deliberately explicit in durable evidence;
+// it must never be inferred from an absent GPIO descriptor or a failed relay.
+type PowerControlMode string
+
+const (
+	PowerControlRelay  PowerControlMode = "relay"
+	PowerControlManual PowerControlMode = "manual"
+)
+
+// PowerEstablishmentBasis says what the timestamp records. A relay command is
+// observed directly by the daemon; a manual power edge is not, so its time is
+// explicitly the authenticated operator attestation time.
+type PowerEstablishmentBasis string
+
+const (
+	PowerEstablishmentRelayCommand        PowerEstablishmentBasis = "relay_command"
+	PowerEstablishmentOperatorAttestation PowerEstablishmentBasis = "operator_attestation"
+)
+
+// SafeOffBasis distinguishes an inactive normally-off relay boundary from an
+// operator's authenticated disconnect acknowledgement. Both additionally
+// require direct absence of the fixed RPIBOOT USB device; neither is an
+// electrical measurement.
+type SafeOffBasis string
+
+const (
+	SafeOffRelayInactiveAndUSBAbsence      SafeOffBasis = "relay_inactive_and_usb_absence"
+	SafeOffOperatorDisconnectAndUSBAbsence SafeOffBasis = "operator_disconnect_and_usb_absence"
+	SafeOffUnproven                        SafeOffBasis = "unproven"
+)
+
+func powerEstablishmentBasis(mode PowerControlMode) (PowerEstablishmentBasis, bool) {
+	switch mode {
+	case PowerControlRelay:
+		return PowerEstablishmentRelayCommand, true
+	case PowerControlManual:
+		return PowerEstablishmentOperatorAttestation, true
+	default:
+		return "", false
+	}
+}
+
+// OperatorPowerProof binds one safety-increasing manual disconnect action to
+// the authenticated prompt that requested it and the peer that acknowledged
+// completion. The direct USB-absence timestamps remain separate because an
+// acknowledgement alone cannot establish lane USB topology.
+type OperatorPowerProof struct {
+	PromptID        string       `json:"prompt_id"`
+	PromptDigest    string       `json:"prompt_digest"`
+	PromptExpiresAt time.Time    `json:"prompt_expires_at"`
+	Operator        OperatorPeer `json:"operator"`
+	AcknowledgedAt  time.Time    `json:"acknowledged_at"`
+}
+
+func (proof OperatorPowerProof) isZero() bool {
+	return proof == (OperatorPowerProof{})
+}
+
+func (proof OperatorPowerProof) validate(notBefore time.Time) error {
+	if !identifierPattern.MatchString(proof.PromptID) || !digestPattern.MatchString(proof.PromptDigest) ||
+		proof.Operator.PID <= 0 || proof.AcknowledgedAt.IsZero() || proof.PromptExpiresAt.IsZero() ||
+		proof.AcknowledgedAt.Before(notBefore) ||
+		!proof.AcknowledgedAt.Before(proof.PromptExpiresAt) {
+		return errors.New("manual power proof has invalid prompt, peer, or timing evidence")
+	}
+	return nil
+}
+
 type RPIBootObservationMethod string
 
 const RPIBootObservationSysfsPoll RPIBootObservationMethod = "sysfs_poll"
@@ -152,26 +225,30 @@ const RPIBootObservationSysfsPoll RPIBootObservationMethod = "sysfs_poll"
 // operator prompt which must be persisted atomically before it becomes
 // actionable. Generation and key are allocated by the store.
 type BeginBootTransitionRequest struct {
-	Action              HardwareAction `json:"action"`
-	StartedAt           time.Time      `json:"started_at"`
-	RecordedAt          time.Time      `json:"recorded_at"`
-	PowerOffObservedAt  time.Time      `json:"power_off_observed_at"`
-	USBAbsentObservedAt time.Time      `json:"usb_absent_observed_at"`
-	ColdIntervalEndsAt  time.Time      `json:"cold_interval_ends_at"`
-	PromptID            string         `json:"prompt_id"`
-	PromptDigest        string         `json:"prompt_digest"`
-	PromptExpiresAt     time.Time      `json:"prompt_expires_at"`
+	Action               HardwareAction     `json:"action"`
+	PowerControlMode     PowerControlMode   `json:"power_control_mode"`
+	InitialPowerOffProof OperatorPowerProof `json:"initial_power_off_proof"`
+	StartedAt            time.Time          `json:"started_at"`
+	RecordedAt           time.Time          `json:"recorded_at"`
+	PowerOffObservedAt   time.Time          `json:"power_off_observed_at"`
+	USBAbsentObservedAt  time.Time          `json:"usb_absent_observed_at"`
+	ColdIntervalEndsAt   time.Time          `json:"cold_interval_ends_at"`
+	PromptID             string             `json:"prompt_id"`
+	PromptDigest         string             `json:"prompt_digest"`
+	PromptExpiresAt      time.Time          `json:"prompt_expires_at"`
 }
 
 func (request BeginBootTransitionRequest) transition(generation uint64) (BootTransition, error) {
 	transition := BootTransition{
 		SchemaVersion: BootTransitionSchemaVersion,
 		Generation:    generation, Action: request.Action, Status: BootTransitionRequested,
+		PowerControlMode: request.PowerControlMode, InitialPowerOffProof: request.InitialPowerOffProof,
 		StartedAt: request.StartedAt, UpdatedAt: request.RecordedAt,
 		PowerOffObservedAt: request.PowerOffObservedAt, USBAbsentObservedAt: request.USBAbsentObservedAt,
 		ColdIntervalEndsAt: request.ColdIntervalEndsAt, PromptID: request.PromptID,
 		PromptDigest: request.PromptDigest, PromptExpiresAt: request.PromptExpiresAt,
 	}
+	transition.PowerEstablishmentBasis, _ = powerEstablishmentBasis(request.PowerControlMode)
 	transition.Key = BootTransitionKey(request.Action, generation)
 	if err := transition.Validate(); err != nil {
 		return BootTransition{}, err
@@ -187,6 +264,9 @@ type BootTransition struct {
 	Key                       string                   `json:"key"`
 	Generation                uint64                   `json:"generation"`
 	Action                    HardwareAction           `json:"action"`
+	PowerControlMode          PowerControlMode         `json:"power_control_mode"`
+	PowerEstablishmentBasis   PowerEstablishmentBasis  `json:"power_establishment_basis"`
+	InitialPowerOffProof      OperatorPowerProof       `json:"initial_power_off_proof"`
 	Status                    BootTransitionStatus     `json:"status"`
 	StartedAt                 time.Time                `json:"started_at"`
 	UpdatedAt                 time.Time                `json:"updated_at"`
@@ -198,7 +278,7 @@ type BootTransition struct {
 	PromptExpiresAt           time.Time                `json:"prompt_expires_at"`
 	Operator                  OperatorPeer             `json:"operator"`
 	OperatorAcknowledgedAt    time.Time                `json:"operator_acknowledged_at"`
-	PowerAppliedAt            time.Time                `json:"power_applied_at"`
+	PowerEstablishedAt        time.Time                `json:"power_established_at"`
 	ModeObservedAt            time.Time                `json:"mode_observed_at"`
 	ObservedMode              BootMode                 `json:"observed_mode"`
 	RPIBootSysfsPath          string                   `json:"rpiboot_sysfs_path"`
@@ -213,6 +293,7 @@ type BootTransition struct {
 	ReleasePromptExpiresAt    time.Time                `json:"release_prompt_expires_at"`
 	ReleaseOperator           OperatorPeer             `json:"release_operator"`
 	OperatorReleasedAt        time.Time                `json:"operator_released_at"`
+	FinalSafeOffProof         OperatorPowerProof       `json:"final_safe_off_proof"`
 	SafeOffObservedAt         time.Time                `json:"safe_off_observed_at"`
 	CompletedAt               time.Time                `json:"completed_at"`
 	Failure                   BootTransitionFailure    `json:"failure"`
@@ -236,11 +317,17 @@ func (transition BootTransition) IsTerminal() bool {
 // error boundary. The complete record remains in the durable journal; a
 // completed outcome additionally binds its immutable evidence digest.
 type BootTransitionReference struct {
-	SchemaVersion  string                `json:"schema_version"`
-	TransitionKey  string                `json:"transition_key"`
-	Status         BootTransitionStatus  `json:"status"`
-	Failure        BootTransitionFailure `json:"failure"`
-	EvidenceDigest string                `json:"evidence_digest"`
+	SchemaVersion           string                  `json:"schema_version"`
+	TransitionKey           string                  `json:"transition_key"`
+	PowerControlMode        PowerControlMode        `json:"power_control_mode"`
+	PowerEstablishmentBasis PowerEstablishmentBasis `json:"power_establishment_basis"`
+	SafeOffBasis            SafeOffBasis            `json:"safe_off_basis"`
+	InitialPowerOffProof    OperatorPowerProof      `json:"initial_power_off_proof"`
+	FinalSafeOffProof       OperatorPowerProof      `json:"final_safe_off_proof"`
+	SafeOffObservedAt       time.Time               `json:"safe_off_observed_at"`
+	Status                  BootTransitionStatus    `json:"status"`
+	Failure                 BootTransitionFailure   `json:"failure"`
+	EvidenceDigest          string                  `json:"evidence_digest"`
 }
 
 func (transition BootTransition) Reference() (BootTransitionReference, error) {
@@ -250,8 +337,19 @@ func (transition BootTransition) Reference() (BootTransitionReference, error) {
 	if !transition.IsTerminal() {
 		return BootTransitionReference{}, errors.New("boot-transition reference requires a terminal record")
 	}
+	safeOffBasis := SafeOffUnproven
+	if transition.Status != BootTransitionQuarantined {
+		if transition.PowerControlMode == PowerControlManual {
+			safeOffBasis = SafeOffOperatorDisconnectAndUSBAbsence
+		} else {
+			safeOffBasis = SafeOffRelayInactiveAndUSBAbsence
+		}
+	}
 	reference := BootTransitionReference{
 		SchemaVersion: BootTransitionReferenceSchemaVersion, TransitionKey: transition.Key,
+		PowerControlMode: transition.PowerControlMode, PowerEstablishmentBasis: transition.PowerEstablishmentBasis,
+		SafeOffBasis: safeOffBasis, InitialPowerOffProof: transition.InitialPowerOffProof,
+		FinalSafeOffProof: transition.FinalSafeOffProof, SafeOffObservedAt: transition.SafeOffObservedAt,
 		Status: transition.Status, Failure: transition.Failure, EvidenceDigest: transition.EvidenceDigest,
 	}
 	return reference, reference.Validate()
@@ -260,6 +358,46 @@ func (transition BootTransition) Reference() (BootTransitionReference, error) {
 func (reference BootTransitionReference) Validate() error {
 	if reference.SchemaVersion != BootTransitionReferenceSchemaVersion || reference.TransitionKey == "" {
 		return errors.New("boot-transition reference is missing its schema or key")
+	}
+	expectedEstablishment, validMode := powerEstablishmentBasis(reference.PowerControlMode)
+	if !validMode || reference.PowerEstablishmentBasis != expectedEstablishment {
+		return errors.New("boot-transition reference has an invalid power-control attribution")
+	}
+	safeTerminal := reference.Status == BootTransitionCompleted ||
+		reference.Status == BootTransitionAbortedSafeOff ||
+		reference.Status == BootTransitionInterruptedSafeOff
+	if reference.PowerControlMode == PowerControlRelay {
+		if !reference.InitialPowerOffProof.isZero() || !reference.FinalSafeOffProof.isZero() {
+			return errors.New("relay boot-transition reference must not contain manual power proofs")
+		}
+		if safeTerminal && (reference.SafeOffBasis != SafeOffRelayInactiveAndUSBAbsence || reference.SafeOffObservedAt.IsZero()) {
+			return errors.New("safe relay boot-transition reference requires relay-inactive and USB-absence attribution")
+		}
+	} else {
+		if err := reference.InitialPowerOffProof.validate(time.Time{}); err != nil {
+			return fmt.Errorf("boot-transition reference initial manual power proof: %w", err)
+		}
+		if safeTerminal {
+			if reference.SafeOffBasis != SafeOffOperatorDisconnectAndUSBAbsence || reference.SafeOffObservedAt.IsZero() {
+				return errors.New("safe manual boot-transition reference requires operator-disconnect and USB-absence attribution")
+			}
+			if err := reference.FinalSafeOffProof.validate(reference.InitialPowerOffProof.AcknowledgedAt); err != nil {
+				return fmt.Errorf("boot-transition reference final manual power proof: %w", err)
+			}
+			if reference.SafeOffObservedAt.Before(reference.FinalSafeOffProof.AcknowledgedAt) {
+				return errors.New("manual boot-transition reference safe-off time precedes its final acknowledgement")
+			}
+		}
+	}
+	if reference.Status == BootTransitionQuarantined {
+		if reference.SafeOffBasis != SafeOffUnproven || !reference.SafeOffObservedAt.IsZero() {
+			return errors.New("quarantined boot-transition reference must attribute safe-off as unproven")
+		}
+		if reference.PowerControlMode == PowerControlManual && !reference.FinalSafeOffProof.isZero() {
+			if err := reference.FinalSafeOffProof.validate(reference.InitialPowerOffProof.AcknowledgedAt); err != nil {
+				return fmt.Errorf("boot-transition reference partial final manual power proof: %w", err)
+			}
+		}
 	}
 	switch reference.Status {
 	case BootTransitionCompleted:
@@ -324,12 +462,20 @@ func (outcome BootTransitionOutcome) ValidateForAction(expected HardwareAction) 
 	if outcome.Reference.TransitionKey != BootTransitionKey(outcome.Action, outcome.Generation) {
 		return errors.New("boot-transition outcome reference does not match its action and generation")
 	}
+	if outcome.Reference.PowerControlMode != outcome.Action.PowerControlMode {
+		return errors.New("boot-transition outcome reference power control does not match its authority-bound action")
+	}
 	if outcome.Reference.Status == BootTransitionCompleted {
 		if err := outcome.Evidence.Validate(); err != nil {
 			return fmt.Errorf("boot-transition outcome evidence: %w", err)
 		}
 		if outcome.Evidence.Action != outcome.Action || outcome.Evidence.Generation != outcome.Generation ||
-			outcome.Evidence.TransitionKey != outcome.Reference.TransitionKey {
+			outcome.Evidence.TransitionKey != outcome.Reference.TransitionKey ||
+			outcome.Evidence.PowerControlMode != outcome.Reference.PowerControlMode ||
+			outcome.Evidence.PowerEstablishmentBasis != outcome.Reference.PowerEstablishmentBasis ||
+			outcome.Evidence.InitialPowerOffProof != outcome.Reference.InitialPowerOffProof ||
+			outcome.Evidence.FinalSafeOffProof != outcome.Reference.FinalSafeOffProof ||
+			!outcome.Evidence.SafeOffObservedAt.Equal(outcome.Reference.SafeOffObservedAt) {
 			return errors.New("boot-transition outcome evidence does not match its action, generation, or reference")
 		}
 		digest, err := outcome.Evidence.Digest()
@@ -365,8 +511,72 @@ func (transition BootTransition) Validate() error {
 	if !identifierPattern.MatchString(transition.PromptID) || !digestPattern.MatchString(transition.PromptDigest) {
 		return errors.New("boot transition requires a bounded prompt ID and canonical prompt digest")
 	}
+	if err := validatePowerControlEvidence(transition); err != nil {
+		return err
+	}
 	if err := validateBootTransitionProgress(transition); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validatePowerControlEvidence(transition BootTransition) error {
+	if transition.PowerControlMode != transition.Action.PowerControlMode {
+		return errors.New("boot transition power-control mode differs from its authority-bound action")
+	}
+	expectedEstablishment, validMode := powerEstablishmentBasis(transition.PowerControlMode)
+	if !validMode || transition.PowerEstablishmentBasis != expectedEstablishment {
+		return errors.New("boot transition has an invalid power-establishment attribution")
+	}
+	switch transition.PowerControlMode {
+	case PowerControlRelay:
+		if !transition.InitialPowerOffProof.isZero() || !transition.FinalSafeOffProof.isZero() {
+			return errors.New("relay power control must not contain manual power proof")
+		}
+		return nil
+	case PowerControlManual:
+		if err := transition.InitialPowerOffProof.validate(transition.StartedAt); err != nil {
+			return fmt.Errorf("initial manual power-off proof: %w", err)
+		}
+		if transition.PowerOffObservedAt.Before(transition.InitialPowerOffProof.AcknowledgedAt) {
+			return errors.New("initial manual power-off acknowledgement follows power-off evidence")
+		}
+		if !transition.PowerEstablishedAt.IsZero() &&
+			!transition.PowerEstablishedAt.Equal(transition.OperatorAcknowledgedAt) {
+			return errors.New("manual power establishment time must be the authenticated operator attestation time")
+		}
+	default:
+		return errors.New("boot transition power-control mode is invalid")
+	}
+
+	finalRequired := transition.Status == BootTransitionCompleted ||
+		transition.Status == BootTransitionAbortedSafeOff ||
+		transition.Status == BootTransitionInterruptedSafeOff
+	if transition.FinalSafeOffProof.isZero() {
+		if finalRequired {
+			return errors.New("safe terminal manual transition requires final power-off proof")
+		}
+		return nil
+	}
+	if !transition.IsTerminal() {
+		return errors.New("active manual transition must not contain final power-off proof")
+	}
+	lowerBound := transition.InitialPowerOffProof.AcknowledgedAt
+	for _, observed := range []time.Time{
+		transition.OperatorAcknowledgedAt,
+		transition.PowerEstablishedAt,
+		transition.ModeObservedAt,
+		transition.OperatorReleasedAt,
+	} {
+		if observed.After(lowerBound) {
+			lowerBound = observed
+		}
+	}
+	if err := transition.FinalSafeOffProof.validate(lowerBound); err != nil {
+		return fmt.Errorf("final manual power-off proof: %w", err)
+	}
+	if !transition.SafeOffObservedAt.IsZero() && transition.SafeOffObservedAt.Before(transition.FinalSafeOffProof.AcknowledgedAt) {
+		return errors.New("final manual power-off acknowledgement follows safe-off evidence")
 	}
 	return nil
 }
@@ -377,7 +587,7 @@ func validateBootTransitionProgress(transition BootTransition) error {
 		return errors.New("boot transition has an invalid status")
 	}
 	acknowledged := !transition.OperatorAcknowledgedAt.IsZero()
-	powered := !transition.PowerAppliedAt.IsZero()
+	powered := !transition.PowerEstablishedAt.IsZero()
 	observed := !transition.ModeObservedAt.IsZero()
 	released := !transition.OperatorReleasedAt.IsZero()
 	safeOff := !transition.SafeOffObservedAt.IsZero()
@@ -388,11 +598,11 @@ func validateBootTransitionProgress(transition BootTransition) error {
 	if acknowledged && transition.OperatorAcknowledgedAt.After(transition.PromptExpiresAt) {
 		return errors.New("boot transition accepted an expired operator prompt")
 	}
-	if powered && (!acknowledged || transition.PowerAppliedAt.Before(transition.OperatorAcknowledgedAt)) {
-		return errors.New("boot transition applied power before durable operator acknowledgment")
+	if powered && (!acknowledged || transition.PowerEstablishedAt.Before(transition.OperatorAcknowledgedAt)) {
+		return errors.New("boot transition established power before durable operator acknowledgment")
 	}
-	if observed && (!powered || transition.ModeObservedAt.Before(transition.PowerAppliedAt)) {
-		return errors.New("boot transition observed a mode before power was applied")
+	if observed && (!powered || transition.ModeObservedAt.Before(transition.PowerEstablishedAt)) {
+		return errors.New("boot transition observed a mode before power was established")
 	}
 	if released && (!observed || transition.ReleaseOperator.PID <= 0 || transition.OperatorReleasedAt.Before(transition.ModeObservedAt)) {
 		return errors.New("boot transition has invalid BOOTSEL release acknowledgment evidence")
@@ -402,7 +612,7 @@ func validateBootTransitionProgress(transition BootTransition) error {
 	}
 	safeOffLowerBound := transition.USBAbsentObservedAt
 	if powered {
-		safeOffLowerBound = transition.PowerAppliedAt
+		safeOffLowerBound = transition.PowerEstablishedAt
 	}
 	if observed {
 		safeOffLowerBound = transition.ModeObservedAt
@@ -417,7 +627,7 @@ func validateBootTransitionProgress(transition BootTransition) error {
 		return errors.New("boot transition completion precedes safe-off evidence")
 	}
 	if (acknowledged && transition.UpdatedAt.Before(transition.OperatorAcknowledgedAt)) ||
-		(powered && transition.UpdatedAt.Before(transition.PowerAppliedAt)) ||
+		(powered && transition.UpdatedAt.Before(transition.PowerEstablishedAt)) ||
 		(observed && transition.UpdatedAt.Before(transition.ModeObservedAt)) ||
 		(released && transition.UpdatedAt.Before(transition.OperatorReleasedAt)) ||
 		(safeOff && transition.UpdatedAt.Before(transition.SafeOffObservedAt)) ||
@@ -513,7 +723,7 @@ func bootTransitionRank(status BootTransitionStatus) (int, bool) {
 		return 1, true
 	case BootTransitionOperatorAcknowledged:
 		return 2, true
-	case BootTransitionPowerApplied:
+	case BootTransitionPowerEstablished:
 		return 3, true
 	case BootTransitionModeObserved:
 		return 4, true
@@ -572,6 +782,9 @@ type BootTransitionEvidence struct {
 	TransitionKey             string                   `json:"transition_key"`
 	Generation                uint64                   `json:"generation"`
 	Action                    HardwareAction           `json:"action"`
+	PowerControlMode          PowerControlMode         `json:"power_control_mode"`
+	PowerEstablishmentBasis   PowerEstablishmentBasis  `json:"power_establishment_basis"`
+	InitialPowerOffProof      OperatorPowerProof       `json:"initial_power_off_proof"`
 	StartedAt                 time.Time                `json:"started_at"`
 	PromptID                  string                   `json:"prompt_id"`
 	PromptDigest              string                   `json:"prompt_digest"`
@@ -581,7 +794,7 @@ type BootTransitionEvidence struct {
 	USBAbsentObservedAt       time.Time                `json:"usb_absent_observed_at"`
 	ColdIntervalEndsAt        time.Time                `json:"cold_interval_ends_at"`
 	OperatorAcknowledgedAt    time.Time                `json:"operator_acknowledged_at"`
-	PowerAppliedAt            time.Time                `json:"power_applied_at"`
+	PowerEstablishedAt        time.Time                `json:"power_established_at"`
 	ModeObservedAt            time.Time                `json:"mode_observed_at"`
 	ObservedMode              BootMode                 `json:"observed_mode"`
 	RPIBootSysfsPath          string                   `json:"rpiboot_sysfs_path"`
@@ -596,6 +809,7 @@ type BootTransitionEvidence struct {
 	ReleasePromptExpiresAt    time.Time                `json:"release_prompt_expires_at"`
 	ReleaseOperator           OperatorPeer             `json:"release_operator"`
 	OperatorReleasedAt        time.Time                `json:"operator_released_at"`
+	FinalSafeOffProof         OperatorPowerProof       `json:"final_safe_off_proof"`
 	SafeOffObservedAt         time.Time                `json:"safe_off_observed_at"`
 	CompletedAt               time.Time                `json:"completed_at"`
 }
@@ -606,19 +820,23 @@ func (transition BootTransition) Evidence() (BootTransitionEvidence, error) {
 	}
 	evidence := BootTransitionEvidence{
 		SchemaVersion: BootTransitionEvidenceSchemaVersion, TransitionKey: transition.Key, Generation: transition.Generation,
-		Action: transition.Action, StartedAt: transition.StartedAt, PromptID: transition.PromptID,
+		Action: transition.Action, PowerControlMode: transition.PowerControlMode,
+		PowerEstablishmentBasis: transition.PowerEstablishmentBasis,
+		InitialPowerOffProof:    transition.InitialPowerOffProof,
+		StartedAt:               transition.StartedAt, PromptID: transition.PromptID,
 		PromptDigest: transition.PromptDigest, PromptExpiresAt: transition.PromptExpiresAt, Operator: transition.Operator,
 		PowerOffObservedAt: transition.PowerOffObservedAt, USBAbsentObservedAt: transition.USBAbsentObservedAt,
 		ColdIntervalEndsAt: transition.ColdIntervalEndsAt, OperatorAcknowledgedAt: transition.OperatorAcknowledgedAt,
-		PowerAppliedAt: transition.PowerAppliedAt, ModeObservedAt: transition.ModeObservedAt, ObservedMode: transition.ObservedMode,
+		PowerEstablishedAt: transition.PowerEstablishedAt, ModeObservedAt: transition.ModeObservedAt, ObservedMode: transition.ObservedMode,
 		RPIBootSysfsPath: transition.RPIBootSysfsPath, RPIBootEligibleTargets: transition.RPIBootEligibleTargets,
 		UARTPath: transition.UARTPath, UARTOutputDigest: transition.UARTOutputDigest,
 		RPIBootObservationMethod: transition.RPIBootObservationMethod, RPIBootPollInterval: transition.RPIBootPollInterval,
 		RPIBootNotObservedThrough: transition.RPIBootNotObservedThrough, ReleasePromptID: transition.ReleasePromptID,
 		ReleasePromptDigest: transition.ReleasePromptDigest, ReleasePromptExpiresAt: transition.ReleasePromptExpiresAt,
 		ReleaseOperator:    transition.ReleaseOperator,
-		OperatorReleasedAt: transition.OperatorReleasedAt, SafeOffObservedAt: transition.SafeOffObservedAt,
-		CompletedAt: transition.CompletedAt,
+		OperatorReleasedAt: transition.OperatorReleasedAt, FinalSafeOffProof: transition.FinalSafeOffProof,
+		SafeOffObservedAt: transition.SafeOffObservedAt,
+		CompletedAt:       transition.CompletedAt,
 	}
 	return evidence, nil
 }
@@ -632,11 +850,14 @@ func (evidence BootTransitionEvidence) Validate() error {
 	}
 	transition := BootTransition{
 		SchemaVersion: BootTransitionSchemaVersion, Key: evidence.TransitionKey, Generation: evidence.Generation,
-		Action: evidence.Action, Status: BootTransitionCompleted, StartedAt: evidence.StartedAt,
+		Action: evidence.Action, PowerControlMode: evidence.PowerControlMode,
+		PowerEstablishmentBasis: evidence.PowerEstablishmentBasis,
+		InitialPowerOffProof:    evidence.InitialPowerOffProof,
+		Status:                  BootTransitionCompleted, StartedAt: evidence.StartedAt,
 		UpdatedAt: evidence.CompletedAt, PowerOffObservedAt: evidence.PowerOffObservedAt,
 		USBAbsentObservedAt: evidence.USBAbsentObservedAt, ColdIntervalEndsAt: evidence.ColdIntervalEndsAt,
 		PromptID: evidence.PromptID, PromptDigest: evidence.PromptDigest, PromptExpiresAt: evidence.PromptExpiresAt,
-		Operator: evidence.Operator, OperatorAcknowledgedAt: evidence.OperatorAcknowledgedAt, PowerAppliedAt: evidence.PowerAppliedAt,
+		Operator: evidence.Operator, OperatorAcknowledgedAt: evidence.OperatorAcknowledgedAt, PowerEstablishedAt: evidence.PowerEstablishedAt,
 		ModeObservedAt: evidence.ModeObservedAt, ObservedMode: evidence.ObservedMode, RPIBootSysfsPath: evidence.RPIBootSysfsPath,
 		RPIBootEligibleTargets: evidence.RPIBootEligibleTargets, UARTPath: evidence.UARTPath,
 		UARTOutputDigest: evidence.UARTOutputDigest, RPIBootObservationMethod: evidence.RPIBootObservationMethod,
@@ -644,6 +865,7 @@ func (evidence BootTransitionEvidence) Validate() error {
 		ReleasePromptID: evidence.ReleasePromptID, ReleasePromptDigest: evidence.ReleasePromptDigest,
 		ReleasePromptExpiresAt: evidence.ReleasePromptExpiresAt,
 		ReleaseOperator:        evidence.ReleaseOperator, OperatorReleasedAt: evidence.OperatorReleasedAt,
+		FinalSafeOffProof: evidence.FinalSafeOffProof,
 		SafeOffObservedAt: evidence.SafeOffObservedAt, CompletedAt: evidence.CompletedAt,
 	}
 	if transition.Key != BootTransitionKey(transition.Action, transition.Generation) {
@@ -653,12 +875,15 @@ func (evidence BootTransitionEvidence) Validate() error {
 		transition.USBAbsentObservedAt.Before(transition.PowerOffObservedAt) ||
 		transition.ColdIntervalEndsAt.Before(transition.USBAbsentObservedAt) || transition.OperatorAcknowledgedAt.Before(transition.ColdIntervalEndsAt) ||
 		transition.OperatorAcknowledgedAt.After(transition.PromptExpiresAt) ||
-		transition.PowerAppliedAt.Before(transition.OperatorAcknowledgedAt) || transition.ModeObservedAt.Before(transition.PowerAppliedAt) ||
+		transition.PowerEstablishedAt.Before(transition.OperatorAcknowledgedAt) || transition.ModeObservedAt.Before(transition.PowerEstablishedAt) ||
 		transition.SafeOffObservedAt.Before(transition.ModeObservedAt) || transition.CompletedAt.Before(transition.SafeOffObservedAt) {
 		return errors.New("boot-transition evidence timestamps are missing or unordered")
 	}
 	if !identifierPattern.MatchString(evidence.PromptID) || !digestPattern.MatchString(evidence.PromptDigest) || evidence.Operator.PID <= 0 {
 		return errors.New("boot-transition evidence has invalid prompt or operator evidence")
+	}
+	if err := validatePowerControlEvidence(transition); err != nil {
+		return err
 	}
 	if err := validateObservedBootMode(transition); err != nil {
 		return err
@@ -690,48 +915,71 @@ func (evidence BootTransitionEvidence) Digest() (string, error) {
 }
 
 type bootTransitionEvidenceDigestMaterial struct {
-	SchemaVersion             string                   `json:"schema_version"`
-	TransitionKey             string                   `json:"transition_key"`
-	Generation                uint64                   `json:"generation"`
-	Action                    HardwareAction           `json:"action"`
-	StartedAt                 string                   `json:"started_at"`
-	PromptID                  string                   `json:"prompt_id"`
-	PromptDigest              string                   `json:"prompt_digest"`
-	PromptExpiresAt           string                   `json:"prompt_expires_at"`
-	Operator                  OperatorPeer             `json:"operator"`
-	PowerOffObservedAt        string                   `json:"power_off_observed_at"`
-	USBAbsentObservedAt       string                   `json:"usb_absent_observed_at"`
-	ColdIntervalEndsAt        string                   `json:"cold_interval_ends_at"`
-	OperatorAcknowledgedAt    string                   `json:"operator_acknowledged_at"`
-	PowerAppliedAt            string                   `json:"power_applied_at"`
-	ModeObservedAt            string                   `json:"mode_observed_at"`
-	ObservedMode              BootMode                 `json:"observed_mode"`
-	RPIBootSysfsPath          string                   `json:"rpiboot_sysfs_path"`
-	RPIBootEligibleTargets    int                      `json:"rpiboot_eligible_targets"`
-	UARTPath                  string                   `json:"uart_path"`
-	UARTOutputDigest          string                   `json:"uart_output_digest"`
-	RPIBootObservationMethod  RPIBootObservationMethod `json:"rpiboot_observation_method"`
-	RPIBootPollIntervalNanos  int64                    `json:"rpiboot_poll_interval_nanoseconds"`
-	RPIBootNotObservedThrough string                   `json:"rpiboot_not_observed_through"`
-	ReleasePromptID           string                   `json:"release_prompt_id"`
-	ReleasePromptDigest       string                   `json:"release_prompt_digest"`
-	ReleasePromptExpiresAt    string                   `json:"release_prompt_expires_at"`
-	ReleaseOperator           OperatorPeer             `json:"release_operator"`
-	OperatorReleasedAt        string                   `json:"operator_released_at"`
-	SafeOffObservedAt         string                   `json:"safe_off_observed_at"`
-	CompletedAt               string                   `json:"completed_at"`
+	SchemaVersion             string                           `json:"schema_version"`
+	TransitionKey             string                           `json:"transition_key"`
+	Generation                uint64                           `json:"generation"`
+	Action                    HardwareAction                   `json:"action"`
+	PowerControlMode          PowerControlMode                 `json:"power_control_mode"`
+	PowerEstablishmentBasis   PowerEstablishmentBasis          `json:"power_establishment_basis"`
+	InitialPowerOffProof      operatorPowerProofDigestMaterial `json:"initial_power_off_proof"`
+	StartedAt                 string                           `json:"started_at"`
+	PromptID                  string                           `json:"prompt_id"`
+	PromptDigest              string                           `json:"prompt_digest"`
+	PromptExpiresAt           string                           `json:"prompt_expires_at"`
+	Operator                  OperatorPeer                     `json:"operator"`
+	PowerOffObservedAt        string                           `json:"power_off_observed_at"`
+	USBAbsentObservedAt       string                           `json:"usb_absent_observed_at"`
+	ColdIntervalEndsAt        string                           `json:"cold_interval_ends_at"`
+	OperatorAcknowledgedAt    string                           `json:"operator_acknowledged_at"`
+	PowerEstablishedAt        string                           `json:"power_established_at"`
+	ModeObservedAt            string                           `json:"mode_observed_at"`
+	ObservedMode              BootMode                         `json:"observed_mode"`
+	RPIBootSysfsPath          string                           `json:"rpiboot_sysfs_path"`
+	RPIBootEligibleTargets    int                              `json:"rpiboot_eligible_targets"`
+	UARTPath                  string                           `json:"uart_path"`
+	UARTOutputDigest          string                           `json:"uart_output_digest"`
+	RPIBootObservationMethod  RPIBootObservationMethod         `json:"rpiboot_observation_method"`
+	RPIBootPollIntervalNanos  int64                            `json:"rpiboot_poll_interval_nanoseconds"`
+	RPIBootNotObservedThrough string                           `json:"rpiboot_not_observed_through"`
+	ReleasePromptID           string                           `json:"release_prompt_id"`
+	ReleasePromptDigest       string                           `json:"release_prompt_digest"`
+	ReleasePromptExpiresAt    string                           `json:"release_prompt_expires_at"`
+	ReleaseOperator           OperatorPeer                     `json:"release_operator"`
+	OperatorReleasedAt        string                           `json:"operator_released_at"`
+	FinalSafeOffProof         operatorPowerProofDigestMaterial `json:"final_safe_off_proof"`
+	SafeOffObservedAt         string                           `json:"safe_off_observed_at"`
+	CompletedAt               string                           `json:"completed_at"`
+}
+
+type operatorPowerProofDigestMaterial struct {
+	PromptID        string       `json:"prompt_id"`
+	PromptDigest    string       `json:"prompt_digest"`
+	PromptExpiresAt string       `json:"prompt_expires_at"`
+	Operator        OperatorPeer `json:"operator"`
+	AcknowledgedAt  string       `json:"acknowledged_at"`
+}
+
+func canonicalOperatorPowerProof(proof OperatorPowerProof) operatorPowerProofDigestMaterial {
+	return operatorPowerProofDigestMaterial{
+		PromptID: proof.PromptID, PromptDigest: proof.PromptDigest,
+		PromptExpiresAt: canonicalBootTransitionTime(proof.PromptExpiresAt),
+		Operator:        proof.Operator, AcknowledgedAt: canonicalBootTransitionTime(proof.AcknowledgedAt),
+	}
 }
 
 func canonicalBootTransitionEvidence(evidence BootTransitionEvidence) ([]byte, error) {
 	return json.Marshal(bootTransitionEvidenceDigestMaterial{
 		SchemaVersion: evidence.SchemaVersion, TransitionKey: evidence.TransitionKey, Generation: evidence.Generation,
-		Action: evidence.Action, StartedAt: canonicalBootTransitionTime(evidence.StartedAt), PromptID: evidence.PromptID,
+		Action: evidence.Action, PowerControlMode: evidence.PowerControlMode,
+		PowerEstablishmentBasis: evidence.PowerEstablishmentBasis,
+		InitialPowerOffProof:    canonicalOperatorPowerProof(evidence.InitialPowerOffProof),
+		StartedAt:               canonicalBootTransitionTime(evidence.StartedAt), PromptID: evidence.PromptID,
 		PromptDigest: evidence.PromptDigest, PromptExpiresAt: canonicalBootTransitionTime(evidence.PromptExpiresAt), Operator: evidence.Operator,
 		PowerOffObservedAt:     canonicalBootTransitionTime(evidence.PowerOffObservedAt),
 		USBAbsentObservedAt:    canonicalBootTransitionTime(evidence.USBAbsentObservedAt),
 		ColdIntervalEndsAt:     canonicalBootTransitionTime(evidence.ColdIntervalEndsAt),
 		OperatorAcknowledgedAt: canonicalBootTransitionTime(evidence.OperatorAcknowledgedAt),
-		PowerAppliedAt:         canonicalBootTransitionTime(evidence.PowerAppliedAt), ModeObservedAt: canonicalBootTransitionTime(evidence.ModeObservedAt),
+		PowerEstablishedAt:     canonicalBootTransitionTime(evidence.PowerEstablishedAt), ModeObservedAt: canonicalBootTransitionTime(evidence.ModeObservedAt),
 		ObservedMode: evidence.ObservedMode, RPIBootSysfsPath: evidence.RPIBootSysfsPath,
 		RPIBootEligibleTargets: evidence.RPIBootEligibleTargets, UARTPath: evidence.UARTPath,
 		UARTOutputDigest: evidence.UARTOutputDigest, RPIBootObservationMethod: evidence.RPIBootObservationMethod,
@@ -740,6 +988,7 @@ func canonicalBootTransitionEvidence(evidence BootTransitionEvidence) ([]byte, e
 		ReleasePromptID:           evidence.ReleasePromptID, ReleasePromptDigest: evidence.ReleasePromptDigest,
 		ReleasePromptExpiresAt: canonicalBootTransitionTime(evidence.ReleasePromptExpiresAt),
 		ReleaseOperator:        evidence.ReleaseOperator, OperatorReleasedAt: canonicalBootTransitionTime(evidence.OperatorReleasedAt),
+		FinalSafeOffProof: canonicalOperatorPowerProof(evidence.FinalSafeOffProof),
 		SafeOffObservedAt: canonicalBootTransitionTime(evidence.SafeOffObservedAt), CompletedAt: canonicalBootTransitionTime(evidence.CompletedAt),
 	})
 }
@@ -759,7 +1008,9 @@ func validBootTransitionUpdate(existing, next BootTransition) error {
 		return err
 	}
 	if existing.SchemaVersion != next.SchemaVersion || existing.Key != next.Key || existing.Generation != next.Generation ||
-		existing.Action != next.Action || !existing.StartedAt.Equal(next.StartedAt) ||
+		existing.Action != next.Action || existing.PowerControlMode != next.PowerControlMode ||
+		existing.PowerEstablishmentBasis != next.PowerEstablishmentBasis ||
+		existing.InitialPowerOffProof != next.InitialPowerOffProof || !existing.StartedAt.Equal(next.StartedAt) ||
 		!existing.PowerOffObservedAt.Equal(next.PowerOffObservedAt) || !existing.USBAbsentObservedAt.Equal(next.USBAbsentObservedAt) ||
 		!existing.ColdIntervalEndsAt.Equal(next.ColdIntervalEndsAt) || existing.PromptID != next.PromptID ||
 		existing.PromptDigest != next.PromptDigest || !existing.PromptExpiresAt.Equal(next.PromptExpiresAt) {
@@ -804,7 +1055,7 @@ func bootTransitionProgressIsPrefix(existing, next BootTransition) bool {
 		(existing.Operator != next.Operator || !existing.OperatorAcknowledgedAt.Equal(next.OperatorAcknowledgedAt)) {
 		return false
 	}
-	if !existing.PowerAppliedAt.IsZero() && !existing.PowerAppliedAt.Equal(next.PowerAppliedAt) {
+	if !existing.PowerEstablishedAt.IsZero() && !existing.PowerEstablishedAt.Equal(next.PowerEstablishedAt) {
 		return false
 	}
 	if !existing.ModeObservedAt.IsZero() &&
@@ -818,6 +1069,9 @@ func bootTransitionProgressIsPrefix(existing, next BootTransition) bool {
 	}
 	if !existing.OperatorReleasedAt.IsZero() &&
 		(existing.ReleaseOperator != next.ReleaseOperator || !existing.OperatorReleasedAt.Equal(next.OperatorReleasedAt)) {
+		return false
+	}
+	if !existing.FinalSafeOffProof.isZero() && existing.FinalSafeOffProof != next.FinalSafeOffProof {
 		return false
 	}
 	if !existing.SafeOffObservedAt.IsZero() && !existing.SafeOffObservedAt.Equal(next.SafeOffObservedAt) {

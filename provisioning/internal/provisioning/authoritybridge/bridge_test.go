@@ -130,6 +130,9 @@ func TestBinderRejectsTamperedOrAuthoritativeDraftSnapshot(t *testing.T) {
 		"required boot mode": func(request *BridgeRequest) {
 			request.DraftSnapshot.Operations[0].RequiredBootMode = laneguard.BootModeNormal
 		},
+		"power control mode": func(request *BridgeRequest) {
+			request.DraftSnapshot.PowerControlMode = laneguard.PowerControlManual
+		},
 		"operation digest": func(request *BridgeRequest) {
 			request.DraftSnapshot.Operations[0].OperationDigest = bridgeDigest("f")
 		},
@@ -543,7 +546,8 @@ func newBridgeFixture(t *testing.T) bridgeFixture {
 	}
 	draft, err := plancompiler.BuildDraft(plancompiler.DraftInput{
 		StationID: "station-bridge", LaneID: "lane-bridge", TransactionID: "transaction-bridge",
-		Release: release, TargetFingerprint: bridgeDigest("7"), InitialObservationDigest: bridgeDigest("a"), FenceEpoch: 1,
+		PowerControlMode: laneguard.PowerControlRelay,
+		Release:          release, TargetFingerprint: bridgeDigest("7"), InitialObservationDigest: bridgeDigest("a"), FenceEpoch: 1,
 		ApprovalExpiresAt: now.Add(30 * time.Minute),
 		InitialState: laneguard.DirectState{
 			CustomerKeyHash: plancompiler.ZeroCustomerKeyHash, EEPROMHash: bridgeDigest("8"), EEPROMHashStatus: laneguard.EEPROMHashObserved,
