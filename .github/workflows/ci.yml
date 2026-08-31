@@ -69,7 +69,6 @@ jobs:
             .#checks.x86_64-linux.rpi5-root-integrity-record \
             .#checks.x86_64-linux.rpi5-production-media-staging \
             .#checks.x86_64-linux.rpi5-qualification-ceremony \
-            .#checks.x86_64-linux.rpi5-secure-boot-target-eval \
             .#checks.x86_64-linux.unit \
             .#checks.x86_64-linux.signing-approval \
             .#checks.x86_64-linux.signing-ceremony \
@@ -127,6 +126,7 @@ jobs:
       - name: Build and test all production binaries
         run: |
           nix build --no-link -L \
+            .#checks.aarch64-linux.rpi5-secure-boot-target-eval \
             ./nix/dns#checks.aarch64-linux.unit \
             ./nix/dns#packages.aarch64-linux.kaiba-agent \
             ./nix/dns#packages.aarch64-linux.kaiba-controller \

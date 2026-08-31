@@ -552,15 +552,6 @@
           rpi5-qualification-ceremony = import ./tests/rpi5-qualification-ceremony.nix {
             inherit lib pkgs;
           };
-          rpi5-secure-boot-target-eval = import ./tests/rpi5-secure-boot-target-eval.nix {
-            inherit lib pkgs;
-            target = mkRpi5SecureBootTarget {
-              # Evaluation fixture only.  Deployments must supply the reviewed
-              # customer-key hash produced by the pinned Raspberry Pi tooling.
-              expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-              sourceRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-            };
-          };
           rpi5-prototype-release-eval = import ./tests/rpi5-prototype-release-eval.nix {
             inherit lib pkgs;
             prototype = rpi5PrototypeRelease;
@@ -577,6 +568,17 @@
               pkgs
               ;
             prototype = rpi5PrototypeRelease;
+          };
+        }
+        // lib.optionalAttrs (system == "aarch64-linux") {
+          rpi5-secure-boot-target-eval = import ./tests/rpi5-secure-boot-target-eval.nix {
+            inherit lib pkgs;
+            target = mkRpi5SecureBootTarget {
+              # Evaluation fixture only.  Deployments must supply the reviewed
+              # customer-key hash produced by the pinned Raspberry Pi tooling.
+              expectedCustomerKeyHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+              sourceRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            };
           };
         }
       );
