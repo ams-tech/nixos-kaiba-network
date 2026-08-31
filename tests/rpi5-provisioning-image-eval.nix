@@ -16,6 +16,9 @@ let
   relayGPIOInventoryPackage = lib.findFirst (
     package: lib.getName package == "kaiba-relay-gpio-inventory"
   ) (throw "relay GPIO inventory package is absent") imageConfig.environment.systemPackages;
+  relayGPIOInventoryContract =
+    relayGPIOInventoryPackage.kaibaRelayGPIOInventoryContract
+      or (throw "relay GPIO inventory package contract is absent");
   forbiddenTargetMutationPackages = [
     "cryptsetup"
     "ddrescue"
@@ -67,7 +70,12 @@ let
     && imageConfig.hardware.raspberry-pi.config.all.base-dt-params.strict_gpiod.enable
     && imageConfig.hardware.raspberry-pi.config.all.base-dt-params.strict_gpiod.value == null
     && lib.hasInfix "dtparam=strict_gpiod" imageConfig.hardware.raspberry-pi.config-generated
-    && lib.hasInfix "Relay GPIO inventory: kaiba-relay-gpio-inventory" imageConfig.environment.etc.issue.text;
+    && lib.hasInfix "Relay GPIO inventory: kaiba-relay-gpio-inventory" imageConfig.environment.etc.issue.text
+    && relayGPIOInventoryContract.gpioPath == "/dev/gpiochip-kaiba-rp1"
+    &&
+      relayGPIOInventoryContract.persistenceParameter
+      == "/sys/module/pinctrl_rp1/parameters/persist_gpio_outputs"
+    && relayGPIOInventoryContract.releaseMode == "strict";
 
   accessContract =
     imageConfig.users.allowNoPasswordLogin
@@ -187,10 +195,6 @@ pkgs.runCommand "kaiba-rpi5-provisioning-image-evaluation" { } ''
   test -x ${pkgs.libgpiod}/bin/gpiodetect
   test -x ${pkgs.libgpiod}/bin/gpioinfo
   test -x ${pkgs.libgpiod}/bin/gpioset
-  grep -F '/sys/module/pinctrl_rp1/parameters/persist_gpio_outputs' \
-    ${relayGPIOInventoryPackage}/bin/kaiba-relay-gpio-inventory >/dev/null
-  grep -F 'KAIBA_RP1_GPIO_RELEASE_MODE=strict' \
-    ${relayGPIOInventoryPackage}/bin/kaiba-relay-gpio-inventory >/dev/null
 
   mkdir -p "$out"
   printf '%s\n' \

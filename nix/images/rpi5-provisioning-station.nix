@@ -17,6 +17,7 @@ let
   relayGPIOGroup = "kaiba-relay-gpio";
   relayGPIOPath = "/dev/gpiochip-kaiba-rp1";
   relayGPIOPersistenceParameter = "/sys/module/pinctrl_rp1/parameters/persist_gpio_outputs";
+  relayGPIOReleaseMode = "strict";
   # Custom share trees are not guaranteed to appear in the NixOS system path.
   # Keep qualification inputs bound to the same immutable package as the tool.
   profilePath = "${kaibaProvisionPackage}/share/kaiba/device-profiles/raspberry-pi-5-model-b-v1alpha1.json";
@@ -109,7 +110,7 @@ let
       done
     '';
   };
-  relayGPIOInventory = pkgs.writeShellApplication {
+  relayGPIOInventoryBase = pkgs.writeShellApplication {
     name = "kaiba-relay-gpio-inventory";
     runtimeInputs = with pkgs; [
       coreutils
@@ -152,11 +153,20 @@ let
         fail "$gpio_chip is not accessible to the current operator"
 
       printf 'KAIBA_RP1_GPIO_CHIP=%s\n' "$gpio_chip"
-      printf 'KAIBA_RP1_GPIO_RELEASE_MODE=strict\n'
+      printf 'KAIBA_RP1_GPIO_RELEASE_MODE=%s\n' ${lib.escapeShellArg relayGPIOReleaseMode}
       gpiodetect "$gpio_link"
       gpioinfo --chip "$gpio_link" 4 6 22 26
     '';
   };
+  relayGPIOInventory = relayGPIOInventoryBase.overrideAttrs (old: {
+    passthru = (old.passthru or { }) // {
+      kaibaRelayGPIOInventoryContract = {
+        gpioPath = relayGPIOPath;
+        persistenceParameter = relayGPIOPersistenceParameter;
+        releaseMode = relayGPIOReleaseMode;
+      };
+    };
+  });
   qualificationCeremony = import ./rpi5-qualification-ceremony.nix {
     inherit
       kaibaProvisionPackage
