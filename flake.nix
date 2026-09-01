@@ -342,6 +342,67 @@
           signingProfile = developmentSigningFor system;
         };
 
+      # Recover a payload whose signatures and authenticated receipts passed
+      # independent verification but whose original offline finalizer had a
+      # software-only defect. The payload factory remains pinned to its own
+      # source revision; only the no-authority final publication step comes
+      # from this flake. This does not create or repeat a signing request.
+      mkRpi5PrototypeSignedReleaseRecovery =
+        {
+          payload,
+          payloadSourceRevision,
+          bootSignedOutput,
+          eepromSignedOutput,
+          ownedRecoverySignedOutput,
+          signingGrantRegistry,
+          signingReceiptExport,
+          name ? "kaiba-rpi5-${builtins.substring 0 12 payloadSourceRevision}-recovery-signed-release",
+        }:
+        let
+          system = "x86_64-linux";
+          payloadGraph = payload.lib.mkRpi5PrototypeSignedRelease {
+            inherit
+              bootSignedOutput
+              eepromSignedOutput
+              ownedRecoverySignedOutput
+              signingGrantRegistry
+              signingReceiptExport
+              ;
+          };
+          payloadInputs = payloadGraph.release.kaibaVerifiedSignedRelease;
+          recovered = provisioning.lib.mkRpi5VerifiedSignedRelease {
+            inherit name system;
+            inherit (payloadInputs)
+              deviceProfile
+              eepromRelease
+              platformAdapter
+              rootIntegrity
+              signingReceiptVerification
+              unsignedArtifacts
+              verifiedOwnedRecovery
+              verifiedRPIBootBundles
+              verifiedSignedBoot
+              verifiedSignedEEPROM
+              ;
+          };
+        in
+        assert lib.assertMsg (
+          builtins.isString payloadSourceRevision
+          && builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" payloadSourceRevision != null
+          && payloadGraph.metadata.sourceRevision == payloadSourceRevision
+        ) "the recovery payload factory is not bound to the expected source revision";
+        recovered
+        // {
+          kaibaPrototypeSignedReleaseRecovery = {
+            inherit payloadSourceRevision;
+            recoveryToolSourceRevision = defaultTargetSourceRevision;
+            hardwareAccess = false;
+            mutationCapable = false;
+            privateKeyAccess = false;
+            signingAuthorityConfigured = false;
+          };
+        };
+
       mkRpi5PrototypeOwnedRecoveryPlan =
         let
           system = "x86_64-linux";
@@ -385,6 +446,7 @@
           mkRpi5PrototypeVerifiedUnfusedCapsule
           mkRpi5PrototypeOwnedRecoveryPlan
           mkRpi5PrototypeSignedRelease
+          mkRpi5PrototypeSignedReleaseRecovery
           mkRpi5SecureBootTarget
           rpi5SecureBootFirmwareAllowlist
           ;
@@ -565,6 +627,7 @@
               lib
               mkRpi5PrototypeOwnedRecoveryPlan
               mkRpi5PrototypeSignedRelease
+              mkRpi5PrototypeSignedReleaseRecovery
               pkgs
               ;
             prototype = rpi5PrototypeRelease;

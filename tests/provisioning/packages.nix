@@ -879,7 +879,7 @@ let
       '';
   productionMediaFixtureFirmware = pkgs.runCommand "kaiba-production-media-fixture-firmware" { } ''
     set -euo pipefail
-    mkdir -p "$out/nixos/default"
+    mkdir -p "$out/nixos/default/overlays"
     printf '%s\n' 'boot_ramdisk=1' > "$out/config.txt"
     printf '%s\n' 'fixture production device tree' \
       > "$out/nixos/default/bcm2712-rpi-5-b.dtb"
@@ -887,6 +887,12 @@ let
       > "$out/nixos/default/cmdline.txt"
     printf '%s\n' 'fixture production initrd' > "$out/nixos/default/initrd"
     printf '%s\n' 'fixture production kernel' > "$out/nixos/default/kernel.img"
+    printf '%s\n' 'fixture production overlay sentinel' \
+      > "$out/nixos/default/overlays/README"
+    printf '%s\n' 'fixture BCM2712 D0 correction overlay' \
+      > "$out/nixos/default/overlays/bcm2712d0.dtbo"
+    printf '%s\n' 'fixture firmware overlay-name map' \
+      > "$out/nixos/default/overlays/overlay_map.dtb"
   '';
   productionMediaUnsignedArtifacts = secureBootArtifactBuilder {
     name = "kaiba-production-media-unsigned-artifacts-fixture";
@@ -898,6 +904,9 @@ let
       "nixos/default/cmdline.txt"
       "nixos/default/initrd"
       "nixos/default/kernel.img"
+      "nixos/default/overlays/README"
+      "nixos/default/overlays/bcm2712d0.dtbo"
+      "nixos/default/overlays/overlay_map.dtb"
     ];
     firmwareTree = productionMediaFixtureFirmware;
     rootImage = secureBootFixtureRootA;

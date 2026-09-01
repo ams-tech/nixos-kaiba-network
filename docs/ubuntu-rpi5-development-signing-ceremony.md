@@ -972,3 +972,54 @@ roots, until those records and the final release have been retained under the
 reviewed evidence policy. The resulting release is ready for a separately authorized
 sacrificial-board test plan; it is not authority to write NVMe, program EEPROM,
 change OTP/JTAG posture, or promote the development signer to production.
+
+## 12. Recovery from a software-only finalizer defect
+
+If assembly writes `assembly-failure.json`, that ceremony is terminal. Preserve
+the failure record, build log, handoff snapshot, verification records, and GC
+roots. Do not remove the record, rerun `assemble`, repeat a signing request, or
+move the original release tag.
+
+A defect confined to the public, no-authority finalizer does not invalidate
+already authenticated artifact signatures and receipt attestations. After the
+fix has passed review and CI under a new immutable tooling tag, use
+`lib.mkRpi5PrototypeSignedReleaseRecovery` in a new verifier-owned recovery
+directory. The recovery factory evaluates the payload graph from the original
+tag, then feeds that exact verified component graph to the fixed finalizer:
+
+```nix
+let
+  payload = builtins.getFlake payloadFlakeRef;
+  fixed = builtins.getFlake recoveryToolFlakeRef;
+in
+fixed.lib.mkRpi5PrototypeSignedReleaseRecovery {
+  inherit
+    bootSignedOutput
+    eepromSignedOutput
+    ownedRecoverySignedOutput
+    signingGrantRegistry
+    signingReceiptExport
+    ;
+  inherit payload;
+  payloadSourceRevision = payloadCommit;
+}
+```
+
+The five inputs must be independently imported from the already authenticated
+handoff. Do not use the normal prototype factory from the new tag: it would
+create a different payload revision that the existing signatures do not
+authorize.
+
+Retain a recovery record containing at least:
+
+- the original payload tag and commit;
+- the recovery-tool tag and commit;
+- the original handoff-manifest, approval, registry, release-intent, receipt
+  export, and assembly-failure digests;
+- the fixed finalizer package NAR hash;
+- the recovered signed-release NAR hash and publication digest.
+
+Re-run the final publication inspection from section 11 and confirm that its
+`source_revision` and release-intent digest still name the original payload.
+Recovery remains software-only; it does not authorize media, EEPROM, OTP, JTAG,
+or other hardware mutation.

@@ -114,6 +114,7 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
       coreutils
       cryptsetup
       findutils
+      go
       gnugrep
       gnused
       jq
@@ -152,6 +153,10 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
     readonly customer_key_hash_file="$customerKeyHashFileInput"
     readonly signer_policy_json_path="$signerPolicyJSONInput"
     readonly signer_policy_digest_file="$signerPolicyDigestFileInput"
+
+    export CGO_ENABLED=0
+    export GOCACHE="$TMPDIR/go-cache"
+    export GOPATH="$TMPDIR/go-path"
 
     test -d "$unsigned"
     test ! -L "$unsigned"
@@ -246,6 +251,14 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
         and .verity.hash_device == "PARTUUID=${unsignedContract.rootHashPartitionGUID}"
         and .verity.mapper == "/dev/mapper/root"
       ' "$unsigned/manifest.json" > /dev/null
+
+    (
+      cd ${../provisioning}
+      KAIBA_SIGNED_RELEASE_TEST_UNSIGNED_ARTIFACT_SET="$unsigned/manifest.json" \
+        go test ./internal/provisioning/signedrelease \
+          -run '^TestReviewedUnsignedArtifactSetMatchesFinalizerContract$' \
+          -count=1
+    )
 
     verify_digest() {
       local expected="$1"
