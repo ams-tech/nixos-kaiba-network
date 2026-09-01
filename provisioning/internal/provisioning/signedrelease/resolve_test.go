@@ -394,7 +394,7 @@ func writeUnsignedFixture(
 	value := unsignedArtifactSet{
 		Schema: unsignedArtifactSchema, SourceRevision: strings.Repeat("a", 40), ExpectedCustomerKeyHash: customerHash,
 		BootOrderPolicy: bootOrderPolicy, BootCommandLinePath: "nixos/default/cmdline.txt",
-		FirmwareAllowlist:  []string{"config.txt", "kaiba-root-integrity.json", "nixos/default/bcm2712-rpi-5-b.dtb", "nixos/default/cmdline.txt", "nixos/default/initrd", "nixos/default/kernel.img"},
+		FirmwareAllowlist:  append([]string(nil), reviewedFirmwareAllowlist...),
 		BootImageSizeBytes: uint64(len(boot)), PersistentMutableState: "tmpfs-only", RollbackPolicy: "unimplemented-block-enrollment-ready",
 		DebugPolicy: "videocore-jtag-unlocked-development", EEPROMWriteProtectionPolicy: "unlocked-development",
 		Toolchain: unsignedToolchain{Cryptsetup: "2.7", Dosfstools: "4.2", Mtools: "4.0"},

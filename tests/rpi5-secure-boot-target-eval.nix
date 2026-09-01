@@ -133,14 +133,27 @@ pkgs.runCommand "kaiba-rpi5-secure-boot-target-evaluation"
       pkgs.dtc
       pkgs.e2fsprogs
       pkgs.erofs-utils
+      pkgs.go
       pkgs.gnugrep
     ];
   }
   ''
+    export CGO_ENABLED=0
+    export GOCACHE="$TMPDIR/go-cache"
+    export GOPATH="$TMPDIR/go-path"
+
     readonly firmware=${target.firmwareTree}
     readonly kernel_dtbs=${cfg.hardware.deviceTree.dtbSource}
     readonly root_image=${target.rootImage}
     readonly dbus_unit="$(readlink -f ${target.system}/etc/systemd/system/dbus.service)"
+
+    (
+      cd ${../provisioning}
+      KAIBA_SIGNED_RELEASE_TEST_UNSIGNED_ARTIFACT_SET=${target.unsignedArtifacts}/manifest.json \
+        go test ./internal/provisioning/signedrelease \
+          -run '^TestReviewedUnsignedArtifactSetMatchesFinalizerContract$' \
+          -count=1
+    )
 
     grep -F '${cfg.services.dbus.dbusPackage}/bin/dbus-daemon' "$dbus_unit" > /dev/null
     if grep -F 'dbus-broker-launch' "$dbus_unit" > /dev/null; then

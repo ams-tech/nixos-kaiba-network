@@ -156,6 +156,64 @@ func TestUnsignedArtifactSetRejectsDuplicateNullAndBadDigest(t *testing.T) {
 	}
 }
 
+func TestReviewedUnsignedArtifactSetMatchesFinalizerContract(t *testing.T) {
+	path := os.Getenv("KAIBA_SIGNED_RELEASE_TEST_UNSIGNED_ARTIFACT_SET")
+	if path == "" {
+		t.Skip("reviewed unsigned artifact set was not supplied")
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseUnsignedArtifactSet(encoded); err != nil {
+		t.Fatalf("reviewed unsigned artifact set violates finalizer contract: %v", err)
+	}
+}
+
+func TestUnsignedArtifactSetRequiresReviewedD0OverlayFiles(t *testing.T) {
+	valid, err := parseUnsignedArtifactSet(validUnsignedArtifactSet(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"nixos/default/overlays/README",
+		"nixos/default/overlays/bcm2712d0.dtbo",
+		"nixos/default/overlays/overlay_map.dtb",
+	} {
+		t.Run(path, func(t *testing.T) {
+			candidate := valid
+			candidate.FirmwareAllowlist = make([]string, 0, len(valid.FirmwareAllowlist)-1)
+			for _, entry := range valid.FirmwareAllowlist {
+				if entry != path {
+					candidate.FirmwareAllowlist = append(candidate.FirmwareAllowlist, entry)
+				}
+			}
+			if err := candidate.validate(); err == nil || !strings.Contains(err.Error(), "firmware_allowlist") {
+				t.Fatalf("unsigned artifact set without %q error=%v, want fixed allowlist rejection", path, err)
+			}
+		})
+	}
+	t.Run("extra entry", func(t *testing.T) {
+		candidate := valid
+		candidate.FirmwareAllowlist = append(
+			append([]string(nil), valid.FirmwareAllowlist...),
+			"nixos/default/overlays/unreviewed.dtbo",
+		)
+		if err := candidate.validate(); err == nil || !strings.Contains(err.Error(), "firmware_allowlist") {
+			t.Fatalf("unsigned artifact set with an extra firmware file error=%v, want fixed allowlist rejection", err)
+		}
+	})
+	t.Run("reordered entries", func(t *testing.T) {
+		candidate := valid
+		candidate.FirmwareAllowlist = append([]string(nil), valid.FirmwareAllowlist...)
+		candidate.FirmwareAllowlist[6], candidate.FirmwareAllowlist[7] =
+			candidate.FirmwareAllowlist[7], candidate.FirmwareAllowlist[6]
+		if err := candidate.validate(); err == nil || !strings.Contains(err.Error(), "firmware_allowlist") {
+			t.Fatalf("unsigned artifact set with reordered firmware files error=%v, want fixed allowlist rejection", err)
+		}
+	})
+}
+
 func TestUnsignedArtifactSetRequiresDistinctCanonicalPARTUUIDSelectors(t *testing.T) {
 	valid, err := parseUnsignedArtifactSet(validUnsignedArtifactSet(t))
 	if err != nil {
@@ -380,7 +438,7 @@ func validUnsignedArtifactSetWithBootPolicy(t *testing.T, bootOrderPolicy string
 	value := unsignedArtifactSet{
 		Schema: unsignedArtifactSchema, SourceRevision: strings.Repeat("a", 40), ExpectedCustomerKeyHash: bundle.Sum([]byte("key")),
 		BootOrderPolicy: bootOrderPolicy, BootCommandLinePath: "nixos/default/cmdline.txt",
-		FirmwareAllowlist:  []string{"config.txt", "kaiba-root-integrity.json", "nixos/default/bcm2712-rpi-5-b.dtb", "nixos/default/cmdline.txt", "nixos/default/initrd", "nixos/default/kernel.img"},
+		FirmwareAllowlist:  append([]string(nil), reviewedFirmwareAllowlist...),
 		BootImageSizeBytes: 32 * 1024 * 1024, PersistentMutableState: "tmpfs-only", RollbackPolicy: "unimplemented-block-enrollment-ready",
 		DebugPolicy: "videocore-jtag-unlocked-development", EEPROMWriteProtectionPolicy: "unlocked-development",
 		Toolchain: unsignedToolchain{Cryptsetup: "1", Dosfstools: "1", Mtools: "1"},

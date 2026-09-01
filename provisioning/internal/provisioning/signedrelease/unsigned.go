@@ -20,10 +20,21 @@ const (
 )
 
 var (
-	sourceRevisionPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-	versionPattern        = regexp.MustCompile(`^[ -~]{1,128}$`)
-	uuidPattern           = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	partUUIDPattern       = regexp.MustCompile(`^PARTUUID=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	sourceRevisionPattern     = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+	versionPattern            = regexp.MustCompile(`^[ -~]{1,128}$`)
+	uuidPattern               = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	partUUIDPattern           = regexp.MustCompile(`^PARTUUID=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	reviewedFirmwareAllowlist = []string{
+		"config.txt",
+		"kaiba-root-integrity.json",
+		"nixos/default/bcm2712-rpi-5-b.dtb",
+		"nixos/default/cmdline.txt",
+		"nixos/default/initrd",
+		"nixos/default/kernel.img",
+		"nixos/default/overlays/README",
+		"nixos/default/overlays/bcm2712d0.dtbo",
+		"nixos/default/overlays/overlay_map.dtb",
+	}
 )
 
 type unsignedArtifact struct {
@@ -116,15 +127,11 @@ func (m unsignedArtifactSet) validate() error {
 		m.BootCommandLinePath != "nixos/default/cmdline.txt" {
 		return errors.New("unsigned artifact set does not use a recognized boot policy and fixed command-line path")
 	}
-	wantAllowlist := []string{
-		"config.txt", "kaiba-root-integrity.json", "nixos/default/bcm2712-rpi-5-b.dtb",
-		"nixos/default/cmdline.txt", "nixos/default/initrd", "nixos/default/kernel.img",
-	}
-	if len(m.FirmwareAllowlist) != len(wantAllowlist) {
+	if len(m.FirmwareAllowlist) != len(reviewedFirmwareAllowlist) {
 		return errors.New("unsigned firmware_allowlist is not the fixed reviewed set")
 	}
-	for index := range wantAllowlist {
-		if m.FirmwareAllowlist[index] != wantAllowlist[index] {
+	for index := range reviewedFirmwareAllowlist {
+		if m.FirmwareAllowlist[index] != reviewedFirmwareAllowlist[index] {
 			return errors.New("unsigned firmware_allowlist is not the fixed reviewed set")
 		}
 	}

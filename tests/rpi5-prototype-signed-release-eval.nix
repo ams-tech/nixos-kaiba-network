@@ -2,6 +2,7 @@
   lib,
   mkRpi5PrototypeOwnedRecoveryPlan,
   mkRpi5PrototypeSignedRelease,
+  mkRpi5PrototypeSignedReleaseRecovery,
   pkgs,
   prototype,
 }:
@@ -23,6 +24,18 @@ let
   recoveryPreparation = mkRpi5PrototypeOwnedRecoveryPlan {
     eepromSignedOutput = emptySignedOutput;
   };
+  recovered = mkRpi5PrototypeSignedReleaseRecovery {
+    payload = {
+      lib = { inherit mkRpi5PrototypeSignedRelease; };
+    };
+    payloadSourceRevision = prototype.metadata.sourceRevision;
+    bootSignedOutput = emptySignedOutput;
+    eepromSignedOutput = emptySignedOutput;
+    ownedRecoverySignedOutput = emptySignedOutput;
+    signingGrantRegistry = emptySigningGrantRegistry;
+    signingReceiptExport = emptySigningReceiptExport;
+    name = "kaiba-rpi5-prototype-recovery-release-evaluation";
+  };
   releaseContract = assembled.release.kaibaVerifiedSignedRelease;
   bundleContract = assembled.verifiedRPIBootBundles.kaibaVerifiedRPIBootBundles;
   recoveryContract = assembled.verifiedOwnedRecovery.kaibaVerifiedOwnedRecovery;
@@ -37,7 +50,19 @@ assert lib.assertMsg (lib.all lib.isDerivation [
   assembled.verifiedSignedBoot
   assembled.verifiedSignedEEPROM
   assembled.verifiedSigningReceipts
+  recovered
 ]) "the prototype live-output factory did not expose the complete derivation graph";
+assert lib.assertMsg (
+  recovered.kaibaPrototypeSignedReleaseRecovery.payloadSourceRevision
+  == prototype.metadata.sourceRevision
+  &&
+    recovered.kaibaPrototypeSignedReleaseRecovery.recoveryToolSourceRevision
+    == prototype.metadata.sourceRevision
+  && recovered.kaibaPrototypeSignedReleaseRecovery.privateKeyAccess == false
+  && recovered.kaibaPrototypeSignedReleaseRecovery.signingAuthorityConfigured == false
+  && recovered.kaibaPrototypeSignedReleaseRecovery.hardwareAccess == false
+  && recovered.kaibaPrototypeSignedReleaseRecovery.mutationCapable == false
+) "the recovery finalizer is not explicitly bound to public, no-authority revisions";
 assert lib.assertMsg (
   recoveryPreparation.verifiedSignedEEPROM == assembled.verifiedSignedEEPROM
   && recoveryPreparation.ownedRecoverySigningPlan == assembled.ownedRecoverySigningPlan
