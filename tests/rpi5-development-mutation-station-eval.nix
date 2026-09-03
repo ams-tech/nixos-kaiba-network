@@ -5,6 +5,7 @@
   mismatchedReleaseIntentSourceRevisionRejected,
   mismatchedUnsignedArtifactSourceRevisionRejected,
   mutationStation,
+  nativeCredentialPacketValidator,
   noncanonicalPayloadSourceRevisionRejected,
   pkgs,
   sourceRevision,
@@ -23,7 +24,7 @@ let
   stationLaneWorkflow = lib.findFirst (
     package: lib.getName package == "kaiba-provision-lane-workflow"
   ) null imageConfig.environment.systemPackages;
-  credentialPacketValidator = stationLaneWorkflow.kaibaCredentialPacketValidator;
+  stationCredentialPacketValidator = stationLaneWorkflow.kaibaCredentialPacketValidator;
 
   hardwareContract =
     imageConfig.nixpkgs.hostPlatform.system == "aarch64-linux"
@@ -107,7 +108,10 @@ let
     && lib.hasInfix "kaiba-mutation-authority-credential-admission" credentialAdmissionUnit.serviceConfig.ExecStart
     && builtins.elem "kaiba-provisioning-authority-bridge.service" laneUnit.requires
     && builtins.elem "kaiba-provisioning-authority-bridge.service" laneUnit.after
-    && lib.isDerivation credentialPacketValidator;
+    && lib.isDerivation stationCredentialPacketValidator
+    && stationCredentialPacketValidator.system == imageConfig.nixpkgs.hostPlatform.system
+    && lib.isDerivation nativeCredentialPacketValidator
+    && nativeCredentialPacketValidator.system == pkgs.stdenv.hostPlatform.system;
 
   manualBoundary =
     !(builtins.hasAttr "kaiba-relay-gpio" imageConfig.users.groups)
@@ -224,7 +228,7 @@ pkgs.runCommand "kaiba-rpi5-development-mutation-station-evaluation"
       --print-release-binding | jq -er .lane_guard_package_digest)"
     test "$binding_a" != "$binding_b"
 
-    credential_validator=${credentialPacketValidator}/bin/kaiba-validate-mutation-credential-packet
+    credential_validator=${nativeCredentialPacketValidator}/bin/kaiba-validate-mutation-credential-packet
     mkdir credential-packet
     for credential in \
       audit-server-ca.crt \
