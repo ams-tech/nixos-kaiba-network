@@ -799,6 +799,9 @@
               };
             in
             import ./tests/rpi5-development-mutation-station-eval.nix {
+              nativeCredentialPacketValidator = import ./nix/mutation-credential-packet-validator.nix {
+                inherit pkgs;
+              };
               inherit
                 bindingGuardA
                 bindingGuardB
