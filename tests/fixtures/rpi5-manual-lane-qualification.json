@@ -1,0 +1,51 @@
+{
+  "schema_version": "kaiba.provisioning.rpi5-manual-lane-qualification/v1alpha1",
+  "status": "accepted_development_rehearsal",
+  "evidence_basis": "operator_attestation_and_software_observation",
+  "qualification_source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "qualified_at": "2026-09-02T12:00:00Z",
+  "operator_id": "operator:test",
+  "station_id": "kaiba-rpi5-provisioner",
+  "lane_id": "lane-1",
+  "target_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "hardware_qualification_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "power_control_mode": "manual",
+  "no_mutation_performed": true,
+  "rpiboot_sysfs_path": "/sys/bus/usb/devices/3-1",
+  "uart_path": "/dev/serial/by-id/usb-Raspberry_Pi_Debug_Probe__CMSIS-DAP__E663B035973F3F26-if01",
+  "usb_power_path": {
+    "source_id": "fixture-usb-source",
+    "cable_id": "fixture-intact-cable",
+    "cable_type": "intact_power_and_data",
+    "sole_target_power_source": true,
+    "normal_target_psu_absent": true,
+    "source_rated_current_milliamps": 900,
+    "source_rating_basis": "manufacturer_label",
+    "source_rating_reference": "fixture source label",
+    "load_test_completed": true,
+    "load_test_reviewed": true,
+    "load_test_duration_seconds": 60,
+    "rpiboot_enumeration_observed": true,
+    "undervoltage_observed": false,
+    "usb_reset_observed": false,
+    "unexpected_target_disappearance_observed": false
+  },
+  "normal_boot_path": {
+    "provisioning_usb_absent": true,
+    "normal_psu_sole_power_source": true,
+    "bootsel_not_asserted": true,
+    "uart_observed": true,
+    "uart_capture_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "uart": {
+    "receive_only": true,
+    "common_ground": true,
+    "adapter_vcc_disconnected": true,
+    "adapter_tx_disconnected": true,
+    "target_tx_observed": true
+  },
+  "automated_failoff": false,
+  "electrical_measurement_performed": false,
+  "production_qualified": false,
+  "disclaimer": "This operator-attested development rehearsal binds one manual lane and observed software symptoms only; it is not an electrical measurement, automated fail-off proof, production qualification, device attestation, or mutation authorization."
+}

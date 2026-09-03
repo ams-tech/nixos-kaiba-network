@@ -277,6 +277,25 @@
           pkgs = import nixpkgs { inherit system; };
         };
 
+      ubuntuProvisioningAuthorityDeploymentFor =
+        system:
+        import ./nix/ubuntu-provisioning-authority-deployment.nix {
+          pkgs = import nixpkgs { inherit system; };
+          auditPackage = provisioning.packages.${system}.kaiba-provision-audit;
+          controlPackage = provisioning.packages.${system}.kaiba-provision-control;
+        };
+
+      ubuntuProvisioningAuthorityLoopbackTestDeploymentFor =
+        system:
+        import ./nix/ubuntu-provisioning-authority-deployment.nix {
+          pkgs = import nixpkgs { inherit system; };
+          auditPackage = provisioning.packages.${system}.kaiba-provision-audit;
+          controlPackage = provisioning.packages.${system}.kaiba-provision-control;
+          listenAddress = "127.0.0.1";
+          controlPort = 38091;
+          auditPort = 38092;
+        };
+
       developmentSigningCeremonyFor =
         system:
         import ./nix/development-signing-ceremony.nix {
@@ -412,6 +431,69 @@
           prototype = rpi5PrototypeRelease;
           signingProfile = developmentSigningFor system;
         };
+
+      rpi5DevelopmentMutationLaneGuardName =
+        manualLaneQualificationDigest:
+        let
+          digestMatch = builtins.match "sha256:([0-9a-f]{64})" manualLaneQualificationDigest;
+        in
+        if digestMatch == null then
+          throw "manualLaneQualificationDigest must use canonical sha256:<64 lowercase hex> form"
+        else
+          "kaiba-rpi5-v016-development-physical-lane-guard-${builtins.head digestMatch}";
+
+      mkRpi5DevelopmentMutationStation =
+        {
+          acceptedTargetFingerprint,
+          verifiedSignedRelease,
+          auditAddress,
+          auditPort ? 8092,
+          controlAddress,
+          controlPort ? 8091,
+          hardwareQualificationDigest,
+          laneID,
+          manualLaneQualificationDigest,
+          manualLaneQualificationSourceRevision,
+          operatorName ? "provisioner",
+          payloadSourceRevision,
+          rpibootSysfsPath,
+          sourceRevision ? defaultTargetSourceRevision,
+          stationID,
+          uartPath,
+          unfusedCompatibilityUARTDigest,
+        }:
+        let
+          physicalLaneGuard = provisioning.lib.mkRpi5PhysicalLaneGuard {
+            system = "aarch64-linux";
+            inherit verifiedSignedRelease;
+            name = rpi5DevelopmentMutationLaneGuardName manualLaneQualificationDigest;
+          };
+        in
+        import ./nix/rpi5-development-mutation-station.nix {
+          inherit
+            auditAddress
+            auditPort
+            acceptedTargetFingerprint
+            controlAddress
+            controlPort
+            hardwareQualificationDigest
+            laneID
+            lib
+            manualLaneQualificationDigest
+            manualLaneQualificationSourceRevision
+            nixos-raspberrypi
+            operatorName
+            payloadSourceRevision
+            physicalLaneGuard
+            provisioning
+            rpibootSysfsPath
+            sourceRevision
+            stationID
+            uartPath
+            unfusedCompatibilityUARTDigest
+            verifiedSignedRelease
+            ;
+        };
     in
     {
       nixosModules = {
@@ -443,6 +525,7 @@
 
       lib = provisioning.lib // {
         inherit
+          mkRpi5DevelopmentMutationStation
           mkRpi5PrototypeVerifiedUnfusedCapsule
           mkRpi5PrototypeOwnedRecoveryPlan
           mkRpi5PrototypeSignedRelease
@@ -460,6 +543,7 @@
         {
           default = compatibilitySuiteFor system;
           rpi5-unfused-verifier = developmentSigning.unfusedVerifier;
+          ubuntu-provisioning-authority-deployment = ubuntuProvisioningAuthorityDeploymentFor system;
           ubuntu-signing-gate-deployment = ubuntuSigningGateDeploymentFor system;
           inherit (dns.packages.${system})
             kaiba-agent
@@ -558,6 +642,11 @@
           signing-approval = provisioning.checks.${system}.signing-approval;
           signing-receipts = provisioning.checks.${system}.signing-receipts;
           signing-receipts-integration = provisioning.checks.${system}.signing-receipts-integration;
+          ubuntu-provisioning-authority-deployment = import ./tests/ubuntu-provisioning-authority.nix {
+            deployment = ubuntuProvisioningAuthorityDeploymentFor system;
+            runtimeDeployment = ubuntuProvisioningAuthorityLoopbackTestDeploymentFor system;
+            inherit pkgs;
+          };
           ubuntu-signing-gate-deployment = ubuntuSigningGateDeploymentFor system;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
@@ -611,6 +700,117 @@
             imageConfig = rpi5ProvisioningSystem.config;
             kaibaProvisionPackage = provisioning.packages.aarch64-linux.kaiba-provision;
           };
+          rpi5-development-mutation-station-eval =
+            let
+              fixtureSourceRevision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+              fixturePayloadSourceRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+              fixtureBaseRelease =
+                provisioning.packages.aarch64-linux.rpi5-physical-lane-guard-fixture.kaibaPhysicalLaneGuard.verifiedSignedRelease;
+              fixtureRecoveredRelease = fixtureBaseRelease.overrideAttrs (old: {
+                passthru = (old.passthru or { }) // {
+                  kaibaPrototypeSignedReleaseRecovery = {
+                    payloadSourceRevision = fixturePayloadSourceRevision;
+                    recoveryToolSourceRevision = fixtureSourceRevision;
+                    privateKeyAccess = false;
+                    signingAuthorityConfigured = false;
+                    hardwareAccess = false;
+                    mutationCapable = false;
+                  };
+                };
+              });
+              fixtureReleaseContract = fixtureRecoveredRelease.kaibaVerifiedSignedRelease;
+              fixtureReleaseIntentWithMismatchedSource =
+                fixtureReleaseContract.releaseIntent.overrideAttrs
+                  (old: {
+                    passthru = (old.passthru or { }) // {
+                      kaibaRpi5ReleaseIntent = old.passthru.kaibaRpi5ReleaseIntent // {
+                        sourceRevision = fixtureSourceRevision;
+                      };
+                    };
+                  });
+              fixtureUnsignedArtifactsWithMismatchedSource =
+                fixtureReleaseContract.unsignedArtifacts.overrideAttrs
+                  (old: {
+                    passthru = (old.passthru or { }) // {
+                      kaibaUnsignedArtifacts = old.passthru.kaibaUnsignedArtifacts // {
+                        sourceRevision = fixtureSourceRevision;
+                      };
+                    };
+                  });
+              mkRecoveredReleaseWithContract =
+                contractOverrides:
+                fixtureRecoveredRelease.overrideAttrs (old: {
+                  passthru = (old.passthru or { }) // {
+                    kaibaVerifiedSignedRelease = old.passthru.kaibaVerifiedSignedRelease // contractOverrides;
+                  };
+                });
+              fixtureReleaseIntentMismatch = mkRecoveredReleaseWithContract {
+                releaseIntent = fixtureReleaseIntentWithMismatchedSource;
+              };
+              fixtureUnsignedArtifactsMismatch = mkRecoveredReleaseWithContract {
+                unsignedArtifacts = fixtureUnsignedArtifactsWithMismatchedSource;
+              };
+              mkFixtureMutationStation =
+                overrides:
+                mkRpi5DevelopmentMutationStation (
+                  {
+                    acceptedTargetFingerprint = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+                    auditAddress = "192.168.8.249";
+                    controlAddress = "192.168.8.249";
+                    hardwareQualificationDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+                    laneID = "lane-1";
+                    manualLaneQualificationDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+                    manualLaneQualificationSourceRevision = fixturePayloadSourceRevision;
+                    operatorName = "provisioner";
+                    payloadSourceRevision = fixturePayloadSourceRevision;
+                    rpibootSysfsPath = "/sys/bus/usb/devices/3-1";
+                    sourceRevision = fixtureSourceRevision;
+                    stationID = "kaiba-rpi5-provisioner";
+                    uartPath = "/dev/serial/by-id/usb-Raspberry_Pi_Debug_Probe__CMSIS-DAP__E663B035973F3F26-if01";
+                    unfusedCompatibilityUARTDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+                    verifiedSignedRelease = fixtureRecoveredRelease;
+                  }
+                  // overrides
+                );
+              mutationStation = mkFixtureMutationStation { };
+              mutationStationInputRejected =
+                overrides:
+                !(builtins.tryEval ((mkFixtureMutationStation overrides).metadata.payloadSourceRevision)).success;
+              noncanonicalPayloadSourceRevisionRejected = mutationStationInputRejected {
+                payloadSourceRevision = "not-a-canonical-revision";
+              };
+              mismatchedReleaseIntentSourceRevisionRejected = mutationStationInputRejected {
+                verifiedSignedRelease = fixtureReleaseIntentMismatch;
+              };
+              mismatchedUnsignedArtifactSourceRevisionRejected = mutationStationInputRejected {
+                verifiedSignedRelease = fixtureUnsignedArtifactsMismatch;
+              };
+              bindingFixtureRelease =
+                provisioning.packages.x86_64-linux.rpi5-physical-lane-guard-fixture.kaibaPhysicalLaneGuard.verifiedSignedRelease;
+              bindingGuardA = provisioning.lib.mkRpi5PhysicalLaneGuard {
+                system = "x86_64-linux";
+                verifiedSignedRelease = bindingFixtureRelease;
+                name = rpi5DevelopmentMutationLaneGuardName "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+              };
+              bindingGuardB = provisioning.lib.mkRpi5PhysicalLaneGuard {
+                system = "x86_64-linux";
+                verifiedSignedRelease = bindingFixtureRelease;
+                name = rpi5DevelopmentMutationLaneGuardName "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+              };
+            in
+            import ./tests/rpi5-development-mutation-station-eval.nix {
+              inherit
+                bindingGuardA
+                bindingGuardB
+                lib
+                mismatchedReleaseIntentSourceRevisionRejected
+                mismatchedUnsignedArtifactSourceRevisionRejected
+                mutationStation
+                noncanonicalPayloadSourceRevisionRejected
+                pkgs
+                ;
+              sourceRevision = fixtureSourceRevision;
+            };
           rpi5-qualification-ceremony = import ./tests/rpi5-qualification-ceremony.nix {
             inherit lib pkgs;
           };

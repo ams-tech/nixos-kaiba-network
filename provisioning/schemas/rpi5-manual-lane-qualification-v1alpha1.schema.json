@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaiba.network/schemas/rpi5-manual-lane-qualification-v1alpha1.schema.json",
+  "title": "Kaiba Raspberry Pi 5 development manual-lane qualification v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "evidence_basis",
+    "qualification_source_revision",
+    "qualified_at",
+    "operator_id",
+    "station_id",
+    "lane_id",
+    "target_fingerprint",
+    "hardware_qualification_digest",
+    "power_control_mode",
+    "no_mutation_performed",
+    "rpiboot_sysfs_path",
+    "uart_path",
+    "usb_power_path",
+    "normal_boot_path",
+    "uart",
+    "automated_failoff",
+    "electrical_measurement_performed",
+    "production_qualified",
+    "disclaimer"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kaiba.provisioning.rpi5-manual-lane-qualification/v1alpha1"
+    },
+    "status": { "const": "accepted_development_rehearsal" },
+    "evidence_basis": { "const": "operator_attestation_and_software_observation" },
+    "qualification_source_revision": { "$ref": "#/$defs/revision" },
+    "qualified_at": { "type": "string", "format": "date-time" },
+    "operator_id": { "$ref": "#/$defs/identifier" },
+    "station_id": { "$ref": "#/$defs/identifier" },
+    "lane_id": { "$ref": "#/$defs/identifier" },
+    "target_fingerprint": { "$ref": "#/$defs/digest" },
+    "hardware_qualification_digest": { "$ref": "#/$defs/digest" },
+    "power_control_mode": { "const": "manual" },
+    "no_mutation_performed": { "const": true },
+    "rpiboot_sysfs_path": {
+      "type": "string",
+      "pattern": "^/sys/bus/usb/devices/[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "uart_path": {
+      "type": "string",
+      "pattern": "^/dev/serial/by-id/[A-Za-z0-9][A-Za-z0-9._:+-]*$"
+    },
+    "usb_power_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "cable_id",
+        "cable_type",
+        "sole_target_power_source",
+        "normal_target_psu_absent",
+        "source_rated_current_milliamps",
+        "source_rating_basis",
+        "source_rating_reference",
+        "load_test_completed",
+        "load_test_reviewed",
+        "load_test_duration_seconds",
+        "rpiboot_enumeration_observed",
+        "undervoltage_observed",
+        "usb_reset_observed",
+        "unexpected_target_disappearance_observed"
+      ],
+      "properties": {
+        "source_id": { "$ref": "#/$defs/nonempty" },
+        "cable_id": { "$ref": "#/$defs/nonempty" },
+        "cable_type": { "const": "intact_power_and_data" },
+        "sole_target_power_source": { "const": true },
+        "normal_target_psu_absent": { "const": true },
+        "source_rated_current_milliamps": { "type": "integer", "minimum": 900 },
+        "source_rating_basis": {
+          "enum": [
+            "manufacturer_label",
+            "manufacturer_datasheet",
+            "host_port_specification",
+            "powered_hub_specification"
+          ]
+        },
+        "source_rating_reference": { "$ref": "#/$defs/nonempty" },
+        "load_test_completed": { "const": true },
+        "load_test_reviewed": { "const": true },
+        "load_test_duration_seconds": { "type": "integer", "minimum": 1 },
+        "rpiboot_enumeration_observed": { "const": true },
+        "undervoltage_observed": { "const": false },
+        "usb_reset_observed": { "const": false },
+        "unexpected_target_disappearance_observed": { "const": false }
+      }
+    },
+    "normal_boot_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provisioning_usb_absent",
+        "normal_psu_sole_power_source",
+        "bootsel_not_asserted",
+        "uart_observed",
+        "uart_capture_digest"
+      ],
+      "properties": {
+        "provisioning_usb_absent": { "const": true },
+        "normal_psu_sole_power_source": { "const": true },
+        "bootsel_not_asserted": { "const": true },
+        "uart_observed": { "const": true },
+        "uart_capture_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "uart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receive_only",
+        "common_ground",
+        "adapter_vcc_disconnected",
+        "adapter_tx_disconnected",
+        "target_tx_observed"
+      ],
+      "properties": {
+        "receive_only": { "const": true },
+        "common_ground": { "const": true },
+        "adapter_vcc_disconnected": { "const": true },
+        "adapter_tx_disconnected": { "const": true },
+        "target_tx_observed": { "const": true }
+      }
+    },
+    "automated_failoff": { "const": false },
+    "electrical_measurement_performed": { "const": false },
+    "production_qualified": { "const": false },
+    "disclaimer": {
+      "const": "This operator-attested development rehearsal binds one manual lane and observed software symptoms only; it is not an electrical measurement, automated fail-off proof, production qualification, device attestation, or mutation authorization."
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$"
+    },
+    "nonempty": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  }
+}
