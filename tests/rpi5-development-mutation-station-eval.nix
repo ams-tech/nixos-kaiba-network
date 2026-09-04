@@ -1,6 +1,7 @@
 {
   bindingGuardA,
   bindingGuardB,
+  directMutationStation,
   lib,
   mismatchedReleaseIntentSourceRevisionRejected,
   mismatchedUnsignedArtifactSourceRevisionRejected,
@@ -172,6 +173,33 @@ let
     && mismatchedReleaseIntentSourceRevisionRejected
     && mismatchedUnsignedArtifactSourceRevisionRejected;
   qualificationBindingContract = toString bindingGuardA != toString bindingGuardB;
+  directConfig = directMutationStation.nixosSystem.config;
+  directSystemPackageNames = map lib.getName directConfig.environment.systemPackages;
+  directSudoCommands = builtins.concatMap (rule: rule.commands) directConfig.security.sudo.extraRules;
+  directStationContract =
+    directConfig.nixpkgs.hostPlatform.system == "aarch64-linux"
+    && directConfig.networking.hostName == "kaiba-rpi5-secure-boot-station"
+    && directConfig.image.baseName == "kaiba-rpi5-development-secure-boot-station"
+    && lib.isDerivation directMutationStation.sdImage
+    && directMutationStation.secureBootRunner ? kaibaDevelopmentSecureBoot
+    && !directMutationStation.secureBootRunner.kaibaDevelopmentSecureBoot.remoteAuthorityRequired
+    && !directMutationStation.secureBootRunner.kaibaDevelopmentSecureBoot.signingCapable
+    && directMutationStation.metadata.command == "kaiba-secure-boot run"
+    && !directMutationStation.metadata.remoteAuthorityRequired
+    && !directMutationStation.metadata.signingCapable
+    && builtins.elem "kaiba-secure-boot" directSystemPackageNames
+    && builtins.elem "kaiba-secure-boot-inventory" directSystemPackageNames
+    && !(builtins.elem "kaiba-provision-lane-workflow" directSystemPackageNames)
+    && !(builtins.elem "kaiba-mutation-release-binding" directSystemPackageNames)
+    && builtins.length directSudoCommands == 1
+    && lib.hasInfix "kaiba-rpi5-development-secure-boot" (builtins.head directSudoCommands).command
+    && builtins.elem "NOPASSWD" (builtins.head directSudoCommands).options
+    && builtins.elem "d /var/lib/kaiba-development-secure-boot 0700 root root - -" directConfig.systemd.tmpfiles.rules
+    && directConfig.swapDevices == [ ]
+    && !directConfig.zramSwap.enable
+    && !directConfig.nix.enable
+    && directConfig.system.disableInstallerTools
+    && !directConfig.system.switch.enable;
 in
 assert lib.assertMsg hardwareContract
   "the development mutation station hardware or image contract changed";
@@ -195,6 +223,8 @@ assert lib.assertMsg rejectedLineageInputsContract
   "the development mutation station accepted an invalid payload lineage";
 assert lib.assertMsg qualificationBindingContract
   "the manual-lane qualification digest did not change the physical guard package identity";
+assert lib.assertMsg directStationContract
+  "the direct development secure-boot station contract changed";
 pkgs.runCommand "kaiba-rpi5-development-mutation-station-evaluation"
   {
     nativeBuildInputs = [

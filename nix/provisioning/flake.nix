@@ -66,6 +66,10 @@
           { system, ... }@args:
           (packagesFor system).mkRpi5PhysicalLaneGuard (builtins.removeAttrs args [ "system" ]);
 
+        mkRpi5DevelopmentSecureBootRunner =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5DevelopmentSecureBootRunner (builtins.removeAttrs args [ "system" ]);
+
         mkRpi5BootSigningPlan =
           { system, ... }@args:
           (packagesFor system).mkRpi5BootSigningPlan (builtins.removeAttrs args [ "system" ]);

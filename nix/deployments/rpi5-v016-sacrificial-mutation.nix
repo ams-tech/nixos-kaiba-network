@@ -28,7 +28,7 @@ let
   releaseContract = recoveredSignedRelease.kaibaVerifiedSignedRelease;
   releaseIntentContract = releaseContract.releaseIntent.kaibaRpi5ReleaseIntent;
   unsignedContract = releaseContract.unsignedArtifacts.kaibaUnsignedArtifacts;
-  mutationStation = fixed.lib.mkRpi5DevelopmentMutationStation {
+  mutationStation = fixed.lib.mkRpi5DevelopmentDirectMutationStation {
     acceptedTargetFingerprint = "sha256:e7e61cab9b971a61207fcb17b15971c208d2374d14d62c9506e3b1717fb576dd";
     hardwareQualificationDigest = "sha256:a1ba7a356616a7e18a0e2abad17fc0152255ab29e0af8a81f6bc0e41566d637d";
     stationID = "kaiba-rpi5-provisioner";
@@ -38,10 +38,6 @@ let
     inherit payloadSourceRevision;
     uartPath = "/dev/serial/by-id/usb-Raspberry_Pi_Debug_Probe__CMSIS-DAP__E663B035973F3F26-if01";
     unfusedCompatibilityUARTDigest = "sha256:b22b0967e90ed6f86b56a510f939bf49eb570e18caa90bed313977808889a598";
-    controlAddress = "192.168.8.249";
-    controlPort = 8091;
-    auditAddress = "192.168.8.249";
-    auditPort = 8092;
     sourceRevision = fixedSourceRevision;
     verifiedSignedRelease = recoveredSignedRelease;
   };
@@ -66,6 +62,6 @@ assert
 {
   inherit mutationStation recoveredSignedRelease;
   image = mutationStation.sdImage;
-  physicalLaneGuard = mutationStation.physicalLaneGuard;
+  secureBootRunner = mutationStation.secureBootRunner;
   system = mutationStation.system;
 }
