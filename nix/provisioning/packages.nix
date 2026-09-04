@@ -1088,6 +1088,202 @@ let
       };
     };
 
+  # A deliberately narrow development appliance for bringing one already
+  # signed sacrificial Pi 5 across the secure-boot boundary. Unlike the
+  # campaign lane guard, this has no authority bridge, approval protocol, or
+  # signing surface. The release, target, USB lane, and UART are compiled into
+  # the binary and cannot be selected at runtime.
+  mkRpi5DevelopmentSecureBootRunner =
+    {
+      expectedTargetFingerprint,
+      fixedRPIBootSysfsPath,
+      fixedUARTPath,
+      hardwareQualificationDigest,
+      laneID,
+      manualLaneQualificationDigest,
+      payloadSourceRevision,
+      stationID,
+      stationSourceRevision,
+      unfusedCompatibilityUARTDigest,
+      verifiedSignedRelease,
+      name ? "kaiba-rpi5-development-secure-boot",
+    }:
+    assert lib.assertMsg (storeBacked verifiedSignedRelease)
+      "verifiedSignedRelease must be one fixed Nix-store path";
+    assert lib.assertMsg (
+      builtins.isAttrs verifiedSignedRelease && verifiedSignedRelease ? kaibaVerifiedSignedRelease
+    ) "verifiedSignedRelease must be produced by mkRpi5VerifiedSignedRelease";
+    assert lib.assertMsg (
+      builtins.match "sha256:[0-9a-f]{64}" expectedTargetFingerprint != null
+    ) "expectedTargetFingerprint must be canonical";
+    assert lib.assertMsg (
+      builtins.match "/sys/bus/usb/devices/[0-9]+-[0-9]+(\\.[0-9]+)*" fixedRPIBootSysfsPath != null
+    ) "fixedRPIBootSysfsPath must identify one fixed USB device";
+    assert lib.assertMsg (
+      builtins.match "/dev/serial/by-id/[^/]+" fixedUARTPath != null
+    ) "fixedUARTPath must identify one fixed serial adapter";
+    assert lib.assertMsg (
+      builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" stationSourceRevision != null
+      && builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" payloadSourceRevision != null
+    ) "development secure-boot revisions must be canonical";
+    assert lib.assertMsg (lib.all (value: builtins.match "sha256:[0-9a-f]{64}" value != null) [
+      hardwareQualificationDigest
+      manualLaneQualificationDigest
+      unfusedCompatibilityUARTDigest
+    ]) "development secure-boot evidence digests must be canonical";
+    let
+      releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
+      verifiedRPIBootBundles = releaseContract.verifiedRPIBootBundles or null;
+      verifiedReleaseContract =
+        (releaseContract.artifactRoleCount or null) == 18
+        && (releaseContract.authenticatedSigningReceiptCount or null) == 5
+        && (releaseContract.contentAddressedPublication or false)
+        && (releaseContract.verificationMode or "") == "pure_offline_replay"
+        && verifiedRPIBootBundles != null
+        && storeBacked verifiedRPIBootBundles
+        && builtins.isAttrs verifiedRPIBootBundles
+        && verifiedRPIBootBundles ? kaibaVerifiedRPIBootBundles
+        && lib.all (value: value == false) [
+          (releaseContract.blockDeviceWriteCapable or null)
+          (releaseContract.directHardwareAccess or null)
+          (releaseContract.eepromProgrammingCapable or null)
+          (releaseContract.mutationCapable or null)
+          (releaseContract.oneTimeSettingCapable or null)
+          (releaseContract.otpCapable or null)
+          (releaseContract.privateKeyAccess or null)
+        ];
+    in
+    assert lib.assertMsg verifiedReleaseContract
+      "verifiedSignedRelease does not expose the complete pure verified release contract";
+    pkgs.buildGoModule {
+      pname = name;
+      inherit version;
+      src = goSource;
+      subPackages = [ "cmd/kaiba-rpi5-development-secure-boot" ];
+      vendorHash = null;
+      doCheck = true;
+      checkPhase = ''
+        runHook preCheck
+        go test \
+          ./cmd/kaiba-rpi5-development-secure-boot \
+          ./internal/provisioning/physicalrpi5 \
+          ./internal/provisioning/rpi5
+        runHook postCheck
+      '';
+      nativeBuildInputs = [ pkgs.jq ];
+      ldflags = [
+        "-s"
+        "-w"
+      ];
+      preBuild = ''
+        set -euo pipefail
+
+        verified_release=${lib.escapeShellArg (toString verifiedSignedRelease)}
+        publication="$verified_release/publication.json"
+        test -f "$publication"
+        test ! -L "$publication"
+        test "$(${pkgs.jq}/bin/jq -er .schema_version "$publication")" = \
+          kaiba.provisioning.rpi5-signed-release-publication/v1alpha1
+
+        manifest_digest="$(${pkgs.jq}/bin/jq -er '
+          .signed_release_manifest_digest
+          | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$publication")"
+        manifest_hex="$(printf '%s' "$manifest_digest" | cut -c 8-)"
+        manifest_relative="$(${pkgs.jq}/bin/jq -er --arg expected \
+          "manifests/sha256/$manifest_hex.json" \
+          '.manifest_path | select(. == $expected)' "$publication")"
+        manifest="$verified_release/$manifest_relative"
+        test -f "$manifest"
+        test ! -L "$manifest"
+        test "$(tail -c 1 "$manifest" | od -An -tu1 | tr -d ' ')" = 10
+        calculated_manifest_digest="sha256:$({
+          printf '%s\0' kaiba.provisioning.rpi5-signed-release-manifest.v1alpha2
+          head -c -1 "$manifest"
+        } | sha256sum | cut -d ' ' -f 1)"
+        test "$calculated_manifest_digest" = "$manifest_digest"
+        test "$(${pkgs.jq}/bin/jq -er .schema_version "$manifest")" = \
+          kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2
+
+        manifest_role_digest() {
+          ${pkgs.jq}/bin/jq -er --arg role "$1" --arg kind "$2" '
+            [.artifacts[]
+              | select(.role == $role and .kind == $kind)
+              | .digest
+              | select(test("^sha256:[0-9a-f]{64}$"))]
+            | if length == 1 then .[0] else error("missing or duplicate manifest role") end
+          ' "$manifest"
+        }
+
+        fresh_commit_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/fresh-commit"}
+        fresh_readback_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/fresh-readback"}
+        owned_readback_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/owned-readback"}
+        for bundle_path in \
+          "$fresh_commit_bundle" \
+          "$fresh_readback_bundle" \
+          "$owned_readback_bundle"; do
+          test -d "$bundle_path"
+          test ! -L "$bundle_path"
+        done
+
+        expected_customer_key_hash="$(${pkgs.jq}/bin/jq -er '
+          .expected_customer_key_hash | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$manifest")"
+        expected_eeprom_hash="$(manifest_role_digest rpi5.signed_eeprom_image regular_file)"
+        expected_boot_image_digest="$(manifest_role_digest rpi5.boot_image regular_file)"
+
+        go_string() {
+          ${pkgs.jq}/bin/jq -Rn --arg value "$1" '$value'
+        }
+        {
+          printf 'package main\n\n'
+          printf 'func init() {\n'
+          printf '\trpibootBinary = %s\n' "$(go_string ${lib.escapeShellArg "${rpiboot}/bin/rpiboot"})"
+          printf '\tfreshCommitBundle = %s\n' "$(go_string "$fresh_commit_bundle")"
+          printf '\tfreshReadbackBundle = %s\n' "$(go_string "$fresh_readback_bundle")"
+          printf '\townedReadbackBundle = %s\n' "$(go_string "$owned_readback_bundle")"
+          printf '\texpectedCustomerKeyHash = %s\n' "$(go_string "''${expected_customer_key_hash#sha256:}")"
+          printf '\texpectedEEPROMHash = %s\n' "$(go_string "''${expected_eeprom_hash#sha256:}")"
+          printf '\texpectedBootImageDigest = %s\n' "$(go_string "$expected_boot_image_digest")"
+          printf '\tsignedReleaseManifestDigest = %s\n' "$(go_string "$manifest_digest")"
+          printf '\texpectedTargetFingerprint = %s\n' "$(go_string ${lib.escapeShellArg expectedTargetFingerprint})"
+          printf '\tfixedRPIBootSysfsPath = %s\n' "$(go_string ${lib.escapeShellArg fixedRPIBootSysfsPath})"
+          printf '\tfixedUARTPath = %s\n' "$(go_string ${lib.escapeShellArg fixedUARTPath})"
+          printf '\tstationID = %s\n' "$(go_string ${lib.escapeShellArg stationID})"
+          printf '\tlaneID = %s\n' "$(go_string ${lib.escapeShellArg laneID})"
+          printf '\tstationSourceRevision = %s\n' "$(go_string ${lib.escapeShellArg stationSourceRevision})"
+          printf '\tpayloadSourceRevision = %s\n' "$(go_string ${lib.escapeShellArg payloadSourceRevision})"
+          printf '\thardwareQualificationDigest = %s\n' "$(go_string ${lib.escapeShellArg hardwareQualificationDigest})"
+          printf '\tmanualLaneQualificationDigest = %s\n' "$(go_string ${lib.escapeShellArg manualLaneQualificationDigest})"
+          printf '\tunfusedCompatibilityUARTDigest = %s\n' "$(go_string ${lib.escapeShellArg unfusedCompatibilityUARTDigest})"
+          printf '}\n'
+        } > cmd/kaiba-rpi5-development-secure-boot/release_lineage_generated.go
+      '';
+      passthru.kaibaDevelopmentSecureBoot = {
+        inherit
+          expectedTargetFingerprint
+          fixedRPIBootSysfsPath
+          fixedUARTPath
+          hardwareQualificationDigest
+          laneID
+          manualLaneQualificationDigest
+          payloadSourceRevision
+          stationID
+          stationSourceRevision
+          unfusedCompatibilityUARTDigest
+          verifiedSignedRelease
+          ;
+        remoteAuthorityRequired = false;
+        signingCapable = false;
+        operation = "program_key_eeprom_readback_and_signed_uart_boot";
+      };
+      meta = {
+        mainProgram = "kaiba-rpi5-development-secure-boot";
+        description = "Fixed local development runner for one Raspberry Pi 5 secure-boot transition";
+        platforms = lib.platforms.linux;
+      };
+    };
+
   # Builds the complete external-wrapper -> approval gate -> immutable
   # OpenSSL-provider -> YKCS11 chain.  Only public metadata enters the Nix
   # store; the PIN is read at runtime from the fixed systemd credential path.
@@ -1484,6 +1680,7 @@ in
     mkRpi5EEPROMReleaseSigningInputs
     mkRpi5EEPROMSigningPlan
     mkRpi5PhysicalLaneGuard
+    mkRpi5DevelopmentSecureBootRunner
     mkRpi5ProductionMedia
     mkRpi5MediaStagingFixture
     mkRpi5OwnedRecoverySigningPlan

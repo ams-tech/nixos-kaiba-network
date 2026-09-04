@@ -494,6 +494,43 @@
             verifiedSignedRelease
             ;
         };
+
+      mkRpi5DevelopmentDirectMutationStation =
+        {
+          acceptedTargetFingerprint,
+          hardwareQualificationDigest,
+          laneID,
+          manualLaneQualificationDigest,
+          manualLaneQualificationSourceRevision,
+          operatorName ? "provisioner",
+          payloadSourceRevision,
+          rpibootSysfsPath,
+          sourceRevision ? defaultTargetSourceRevision,
+          stationID,
+          uartPath,
+          unfusedCompatibilityUARTDigest,
+          verifiedSignedRelease,
+        }:
+        import ./nix/rpi5-development-direct-mutation-station.nix {
+          inherit
+            acceptedTargetFingerprint
+            hardwareQualificationDigest
+            laneID
+            lib
+            manualLaneQualificationDigest
+            manualLaneQualificationSourceRevision
+            nixos-raspberrypi
+            operatorName
+            payloadSourceRevision
+            provisioning
+            rpibootSysfsPath
+            sourceRevision
+            stationID
+            uartPath
+            unfusedCompatibilityUARTDigest
+            verifiedSignedRelease
+            ;
+        };
     in
     {
       nixosModules = {
@@ -525,6 +562,7 @@
 
       lib = provisioning.lib // {
         inherit
+          mkRpi5DevelopmentDirectMutationStation
           mkRpi5DevelopmentMutationStation
           mkRpi5PrototypeVerifiedUnfusedCapsule
           mkRpi5PrototypeOwnedRecoveryPlan
@@ -773,6 +811,21 @@
                   // overrides
                 );
               mutationStation = mkFixtureMutationStation { };
+              directMutationStation = mkRpi5DevelopmentDirectMutationStation {
+                acceptedTargetFingerprint = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+                hardwareQualificationDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+                laneID = "lane-1";
+                manualLaneQualificationDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+                manualLaneQualificationSourceRevision = fixturePayloadSourceRevision;
+                operatorName = "provisioner";
+                payloadSourceRevision = fixturePayloadSourceRevision;
+                rpibootSysfsPath = "/sys/bus/usb/devices/3-1";
+                sourceRevision = fixtureSourceRevision;
+                stationID = "kaiba-rpi5-provisioner";
+                uartPath = "/dev/serial/by-id/usb-Raspberry_Pi_Debug_Probe__CMSIS-DAP__E663B035973F3F26-if01";
+                unfusedCompatibilityUARTDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+                verifiedSignedRelease = fixtureRecoveredRelease;
+              };
               mutationStationInputRejected =
                 overrides:
                 !(builtins.tryEval ((mkFixtureMutationStation overrides).metadata.payloadSourceRevision)).success;
@@ -805,6 +858,7 @@
               inherit
                 bindingGuardA
                 bindingGuardB
+                directMutationStation
                 lib
                 mismatchedReleaseIntentSourceRevisionRejected
                 mismatchedUnsignedArtifactSourceRevisionRejected
