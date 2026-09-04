@@ -175,7 +175,13 @@ let
   qualificationBindingContract = toString bindingGuardA != toString bindingGuardB;
   directConfig = directMutationStation.nixosSystem.config;
   directSystemPackageNames = map lib.getName directConfig.environment.systemPackages;
-  directSudoCommands = builtins.concatMap (rule: rule.commands) directConfig.security.sudo.extraRules;
+  directOperatorSudoCommands = builtins.concatMap (
+    rule:
+    if builtins.elem directMutationStation.metadata.operatorName (rule.users or [ ]) then
+      rule.commands
+    else
+      [ ]
+  ) directConfig.security.sudo.extraRules;
   directStationContract =
     directConfig.nixpkgs.hostPlatform.system == "aarch64-linux"
     && directConfig.networking.hostName == "kaiba-rpi5-secure-boot-station"
@@ -191,9 +197,10 @@ let
     && builtins.elem "kaiba-secure-boot-inventory" directSystemPackageNames
     && !(builtins.elem "kaiba-provision-lane-workflow" directSystemPackageNames)
     && !(builtins.elem "kaiba-mutation-release-binding" directSystemPackageNames)
-    && builtins.length directSudoCommands == 1
-    && lib.hasInfix "kaiba-rpi5-development-secure-boot" (builtins.head directSudoCommands).command
-    && builtins.elem "NOPASSWD" (builtins.head directSudoCommands).options
+    && builtins.length directOperatorSudoCommands == 1
+    && lib.hasInfix "kaiba-rpi5-development-secure-boot" (builtins.head directOperatorSudoCommands)
+    .command
+    && builtins.elem "NOPASSWD" (builtins.head directOperatorSudoCommands).options
     && builtins.elem "d /var/lib/kaiba-development-secure-boot 0700 root root - -" directConfig.systemd.tmpfiles.rules
     && directConfig.swapDevices == [ ]
     && !directConfig.zramSwap.enable
