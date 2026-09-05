@@ -23,6 +23,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.provisioning.follows = "provisioning";
     };
+    v016Payload.url = "github:ams-tech/nixos-kaiba-network/8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
   };
 
   outputs =
@@ -32,6 +33,7 @@
       nixos-raspberrypi,
       provisioning,
       dns,
+      v016Payload,
     }:
     let
       lib = nixpkgs.lib;
@@ -73,6 +75,36 @@
           sourceRevision
         else
           throw "mkRpi5SecureBootTarget requires a clean Git source or an explicit canonical sourceRevision";
+
+      v016PublicSignedInputs = {
+        bootSignedOutput = builtins.path {
+          name = "kaiba-rpi5-v016-boot-signed";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/boot-signed;
+        };
+        eepromSignedOutput = builtins.path {
+          name = "kaiba-rpi5-v016-eeprom-signed";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/eeprom-signed;
+        };
+        ownedRecoverySignedOutput = builtins.path {
+          name = "kaiba-rpi5-v016-owned-recovery-signed";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/owned-recovery-signed;
+        };
+        signingGrantRegistry = builtins.path {
+          name = "kaiba-rpi5-v016-signing-grants.json";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-grants.json;
+        };
+        signingReceiptExport = builtins.path {
+          name = "kaiba-rpi5-v016-signing-receipts.json";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-receipts.json;
+        };
+      };
+      v016PublicSignedInputSource = builtins.path {
+        name = "kaiba-rpi5-v016-public-signed-input-source";
+        path = ./provisioning/releases/rpi5-v0.1.6;
+      };
+      v016OperationalPayloadManifest = builtins.fromJSON (
+        builtins.readFile ./provisioning/releases/rpi5-v0.1.6/operational-payload-manifest.json
+      );
 
       # Keep this list deliberately small and literal.  The target module
       # filters the kernel DTBs to the single supported Pi 5 Model B base file.
@@ -502,6 +534,7 @@
           laneID,
           manualLaneQualificationDigest,
           manualLaneQualificationSourceRevision,
+          operationalPayload,
           operatorName ? "provisioner",
           payloadSourceRevision,
           rpibootSysfsPath,
@@ -520,6 +553,7 @@
             manualLaneQualificationDigest
             manualLaneQualificationSourceRevision
             nixos-raspberrypi
+            operationalPayload
             operatorName
             payloadSourceRevision
             provisioning
@@ -531,6 +565,23 @@
             verifiedSignedRelease
             ;
         };
+
+      rpi5V016DirectMutationDeployment = import ./nix/deployments/rpi5-v016-sacrificial-mutation.nix {
+        inherit (v016PublicSignedInputs)
+          bootSignedOutput
+          eepromSignedOutput
+          ownedRecoverySignedOutput
+          signingGrantRegistry
+          signingReceiptExport
+          ;
+        fixed = self;
+        fixedSourceRevision = defaultTargetSourceRevision;
+        manualLaneQualificationDigest = "sha256:4ca8f4c40084311266e1a6f828a14b716eb73935079355044ecf1e6387b60c27";
+        operationalPayloadManifest = v016OperationalPayloadManifest;
+        payload = v016Payload;
+        publicSignedInputSource = v016PublicSignedInputSource;
+        rpibootSysfsPath = "/sys/bus/usb/devices/1-1";
+      };
     in
     {
       nixosModules = {
@@ -636,6 +687,7 @@
             ;
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
+          rpi5-development-secure-boot-station-sd-image = rpi5V016DirectMutationDeployment.image;
           rpi5-provisioning-sd-image = rpi5ProvisioningSystem.config.system.build.sdImage;
           rpi5-prototype-unsigned-artifacts = rpi5PrototypeRelease.unsignedArtifacts;
         }
@@ -664,6 +716,46 @@
           development-yubikey-signing = provisioning.checks.${system}.development-yubikey-signing;
           device-profile-schema = provisioning.checks.${system}.device-profile-schema;
           rpi5-development-posture = provisioning.checks.${system}.rpi5-development-posture;
+          rpi5-v016-public-signed-inputs =
+            pkgs.runCommand "kaiba-rpi5-v016-public-signed-inputs-check"
+              {
+                nativeBuildInputs = with pkgs.buildPackages; [
+                  coreutils
+                  findutils
+                  gnugrep
+                ];
+              }
+              ''
+                set -euo pipefail
+                export LC_ALL=C
+
+                release=${v016PublicSignedInputSource}
+                cd "$release"
+                sha256sum --check --strict SHA256SUMS
+
+                file_count="$(find signed-inputs -type f | wc -l)"
+                if test "$file_count" -ne 12; then
+                  echo "expected exactly 12 public signed input files, found $file_count" >&2
+                  exit 1
+                fi
+                if test -n "$(find signed-inputs -type l -print -quit)"; then
+                  echo "public signed inputs contain a symbolic link" >&2
+                  exit 1
+                fi
+                if test -n "$(find signed-inputs ! -type d ! -type f -print -quit)"; then
+                  echo "public signed inputs contain an unsupported filesystem object" >&2
+                  exit 1
+                fi
+                if grep --recursive --binary-files=text --extended-regexp \
+                  -- '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----' signed-inputs
+                then
+                  echo "public signed inputs contain private-key material" >&2
+                  exit 1
+                fi
+
+                mkdir -p "$out"
+                touch "$out/passed"
+              '';
           rpi5-probe-bundle = provisioning.checks.${system}.rpi5-probe-bundle;
           module-eval = moduleEval;
           provisioning-test-result = provisioning.checks.${system}.provisioning-test-result;
@@ -811,12 +903,26 @@
                   // overrides
                 );
               mutationStation = mkFixtureMutationStation { };
+              fixtureOperationalPayload =
+                pkgs.runCommand "fixture-operational-payload"
+                  {
+                    passthru.kaibaDevelopmentSecureBootOperationalPayload = {
+                      payloadSourceRevision = fixturePayloadSourceRevision;
+                      privateKeyAccess = false;
+                      signingAuthorityConfigured = false;
+                      signingCapable = false;
+                    };
+                  }
+                  ''
+                    mkdir -p "$out"
+                  '';
               directMutationStation = mkRpi5DevelopmentDirectMutationStation {
                 acceptedTargetFingerprint = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
                 hardwareQualificationDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
                 laneID = "lane-1";
                 manualLaneQualificationDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
                 manualLaneQualificationSourceRevision = fixturePayloadSourceRevision;
+                operationalPayload = fixtureOperationalPayload;
                 operatorName = "provisioner";
                 payloadSourceRevision = fixturePayloadSourceRevision;
                 rpibootSysfsPath = "/sys/bus/usb/devices/3-1";
@@ -889,6 +995,111 @@
               ;
             prototype = rpi5PrototypeRelease;
           };
+          rpi5-v016-operational-payload-reconstruction =
+            let
+              verifiedSignedRelease = rpi5V016DirectMutationDeployment.recoveredSignedRelease;
+              releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
+              recoveryContract = verifiedSignedRelease.kaibaPrototypeSignedReleaseRecovery;
+              releaseIntentContract = releaseContract.releaseIntent.kaibaRpi5ReleaseIntent;
+              unsignedContract = releaseContract.unsignedArtifacts.kaibaUnsignedArtifacts;
+              operationalPayload = provisioning.lib.mkRpi5DevelopmentSecureBootOperationalPayload {
+                inherit system;
+                operationalPayloadManifest = v016OperationalPayloadManifest;
+                payloadSourceRevision = recoveryContract.payloadSourceRevision;
+                publicSignedInputSource = v016PublicSignedInputSource;
+                name = "kaiba-rpi5-v016-${system}-operational-payload-check";
+              };
+              releaseGraphContract =
+                recoveryContract.payloadSourceRevision == "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598"
+                && !recoveryContract.privateKeyAccess
+                && !recoveryContract.signingAuthorityConfigured
+                && !recoveryContract.hardwareAccess
+                && !recoveryContract.mutationCapable
+                && releaseContract.artifactRoleCount == 18
+                && releaseContract.authenticatedSigningReceiptCount == 5
+                && releaseContract.contentAddressedPublication
+                && releaseContract.verificationMode == "pure_offline_replay"
+                && !releaseContract.privateKeyAccess
+                && !releaseContract.signingAuthorityConfigured
+                && releaseIntentContract.sourceRevision == recoveryContract.payloadSourceRevision
+                && unsignedContract.sourceRevision == recoveryContract.payloadSourceRevision
+                &&
+                  releaseIntentContract.expectedCustomerKeyHash
+                  == v016OperationalPayloadManifest.expected_customer_key_hash
+                &&
+                  releaseIntentContract.publicKeyFingerprint == v016OperationalPayloadManifest.public_key_fingerprint;
+            in
+            assert lib.assertMsg releaseGraphContract
+              "the pinned v0.1.6 recovered-release graph does not match the operational payload";
+            pkgs.runCommand "kaiba-rpi5-v016-operational-payload-reconstruction-check"
+              {
+                nativeBuildInputs = [
+                  pkgs.coreutils
+                  pkgs.jq
+                ];
+              }
+              ''
+                set -euo pipefail
+                export LC_ALL=C
+
+                public_source=${lib.escapeShellArg (toString v016PublicSignedInputSource)}
+                operational_payload=${lib.escapeShellArg (toString operationalPayload)}
+                operational_manifest="$operational_payload/manifest.json"
+
+                cd "$public_source"
+                sha256sum --check --strict SHA256SUMS
+                cmp operational-payload-manifest.json "$operational_manifest"
+
+                jq -e \
+                  --slurpfile boot signed-inputs/boot-signed/signing-result.json \
+                  --slurpfile eeprom signed-inputs/eeprom-signed/result.json \
+                  --slurpfile owned signed-inputs/owned-recovery-signed/result.json \
+                  --slurpfile receipts signed-inputs/signing-receipts.json \
+                  --slurpfile grants signed-inputs/signing-grants.json \
+                  '
+                    .payload_source_revision == "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598"
+                    and .release_intent_digest == $boot[0].release_intent_digest
+                    and .release_intent_digest == $eeprom[0].release_intent_digest
+                    and .release_intent_digest == $owned[0].release_intent_digest
+                    and .expected_boot_image_digest == $boot[0].boot_image_digest
+                    and .expected_customer_key_hash == $eeprom[0].customer_key_hash
+                    and .expected_customer_key_hash == $owned[0].customer_key_hash
+                    and .expected_eeprom_hash == $eeprom[0].signed_eeprom.digest
+                    and .expected_eeprom_hash == $owned[0].replayed_signed_eeprom.digest
+                    and .public_key_fingerprint == $boot[0].public_key_fingerprint
+                    and .public_key_fingerprint == $eeprom[0].public_key_fingerprint
+                    and .public_key_fingerprint == $owned[0].public_key_fingerprint
+                    and $receipts[0].release_intent_digest == .release_intent_digest
+                    and $receipts[0].public_key_fingerprint == .public_key_fingerprint
+                    and ($receipts[0].receipts | length) == 5
+                    and ($grants[0].grants | length) == 5
+                  ' "$operational_manifest"
+
+                test "sha256:$(sha256sum signed-inputs/boot-signed/boot.sig | cut -d ' ' -f 1)" = \
+                  "$(jq -er .boot_signature_digest signed-inputs/boot-signed/signing-result.json)"
+                test "sha256:$(sha256sum signed-inputs/eeprom-signed/pieeprom.bin | cut -d ' ' -f 1)" = \
+                  "$(jq -er .signed_eeprom.digest signed-inputs/eeprom-signed/result.json)"
+                test "sha256:$(sha256sum signed-inputs/eeprom-signed/pieeprom.sig | cut -d ' ' -f 1)" = \
+                  "$(jq -er .eeprom_update_metadata.digest signed-inputs/eeprom-signed/result.json)"
+                test "sha256:$(sha256sum signed-inputs/eeprom-signed/bootcode5.bin | cut -d ' ' -f 1)" = \
+                  "$(jq -er .fresh_recovery_bootcode.digest signed-inputs/eeprom-signed/result.json)"
+                test "sha256:$(sha256sum signed-inputs/owned-recovery-signed/bootcode5.bin | cut -d ' ' -f 1)" = \
+                  "$(jq -er .owned_recovery_bootcode.digest signed-inputs/owned-recovery-signed/result.json)"
+
+                cmp signed-inputs/eeprom-signed/bootcode5.bin \
+                  "$operational_payload/fresh-commit/bootcode5.bin"
+                cmp signed-inputs/eeprom-signed/pieeprom.bin \
+                  "$operational_payload/fresh-commit/pieeprom.bin"
+                cmp signed-inputs/eeprom-signed/pieeprom.sig \
+                  "$operational_payload/fresh-commit/pieeprom.sig"
+                cmp signed-inputs/eeprom-signed/bootcode5.bin \
+                  "$operational_payload/fresh-readback/bootcode5.bin"
+                cmp signed-inputs/owned-recovery-signed/bootcode5.bin \
+                  "$operational_payload/owned-readback/bootcode5.bin"
+
+                mkdir -p "$out"
+                touch "$out/passed"
+              '';
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
           rpi5-secure-boot-target-eval = import ./tests/rpi5-secure-boot-target-eval.nix {
@@ -903,7 +1114,10 @@
         }
       );
 
-      nixosConfigurations.rpi5-provisioning-station = rpi5ProvisioningSystem;
+      nixosConfigurations = {
+        rpi5-development-secure-boot-station = rpi5V016DirectMutationDeployment.mutationStation.nixosSystem;
+        rpi5-provisioning-station = rpi5ProvisioningSystem;
+      };
 
       apps.x86_64-linux.dns-test-driver = dns.apps.x86_64-linux.dns-test-driver;
 

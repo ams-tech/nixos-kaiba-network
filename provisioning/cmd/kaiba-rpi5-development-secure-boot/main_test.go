@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ams-tech/nixos-kaiba-network/provisioning/internal/provisioning/rpi5"
 )
@@ -11,13 +14,14 @@ const testFingerprint = "sha256:e7e61cab9b971a61207fcb17b15971c208d2374d14d62c95
 
 func setTestBuildValues(t *testing.T) {
 	t.Helper()
-	oldKey, oldEEPROM, oldBoot, oldTarget := expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest, expectedTargetFingerprint
+	oldKey, oldEEPROM, oldBoot, oldTarget, oldRPIBootPath := expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest, expectedTargetFingerprint, fixedRPIBootSysfsPath
 	expectedCustomerKeyHash = strings.Repeat("a", 64)
 	expectedEEPROMHash = strings.Repeat("b", 64)
 	expectedBootImageDigest = "sha256:" + strings.Repeat("c", 64)
 	expectedTargetFingerprint = testFingerprint
+	fixedRPIBootSysfsPath = "/sys/bus/usb/devices/3-1"
 	t.Cleanup(func() {
-		expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest, expectedTargetFingerprint = oldKey, oldEEPROM, oldBoot, oldTarget
+		expectedCustomerKeyHash, expectedEEPROMHash, expectedBootImageDigest, expectedTargetFingerprint, fixedRPIBootSysfsPath = oldKey, oldEEPROM, oldBoot, oldTarget, oldRPIBootPath
 	})
 }
 
@@ -82,5 +86,83 @@ func TestSignedBootEvidenceRequiresExpectedImageAndOTPBit(t *testing.T) {
 	duplicate := valid + strings.TrimPrefix(valid, "noise\n")
 	if err := validateSignedBootEvidence([]byte(duplicate)); err == nil {
 		t.Fatal("duplicate secure-boot evidence was accepted")
+	}
+}
+
+func TestAutomaticCommitIdentifiesFixedTargetWithoutPrompt(t *testing.T) {
+	setTestBuildValues(t)
+	var output bytes.Buffer
+	announceAutomaticCommit(&output)
+	if strings.Contains(output.String(), "Type exactly") || strings.Contains(output.String(), "> ") {
+		t.Fatalf("automatic commit emitted an interactive prompt: %q", output.String())
+	}
+	if !strings.Contains(output.String(), expectedTargetFingerprint) {
+		t.Fatalf("automatic commit did not identify the fixed target: %q", output.String())
+	}
+}
+
+func TestUnattendedHardwareWaitsAdvanceFromObservedTopology(t *testing.T) {
+	setTestBuildValues(t)
+	oldObserve, oldWait := observeEligibleTargets, waitForInterval
+	t.Cleanup(func() {
+		observeEligibleTargets, waitForInterval = oldObserve, oldWait
+	})
+
+	observations := [][]string{
+		{fixedRPIBootSysfsPath},
+		{},
+		{},
+		{fixedRPIBootSysfsPath},
+	}
+	observeEligibleTargets = func() ([]string, error) {
+		if len(observations) == 0 {
+			t.Fatal("hardware wait read more topology observations than expected")
+		}
+		result := observations[0]
+		observations = observations[1:]
+		return result, nil
+	}
+	waitForInterval = func(context.Context, time.Duration) error { return nil }
+
+	var output bytes.Buffer
+	if err := prepareDisconnected(context.Background(), &output); err != nil {
+		t.Fatalf("wait for disconnect: %v", err)
+	}
+	if err := waitExactTarget(context.Background()); err != nil {
+		t.Fatalf("wait for exact target: %v", err)
+	}
+	if len(observations) != 0 {
+		t.Fatalf("hardware waits left %d observations unread", len(observations))
+	}
+	if strings.Contains(output.String(), "press Enter") {
+		t.Fatalf("unattended hardware wait emitted an input prompt: %q", output.String())
+	}
+}
+
+func TestUnattendedHardwareWaitRejectsWrongTopology(t *testing.T) {
+	setTestBuildValues(t)
+	oldObserve := observeEligibleTargets
+	t.Cleanup(func() { observeEligibleTargets = oldObserve })
+	observeEligibleTargets = func() ([]string, error) {
+		return []string{"/sys/bus/usb/devices/9-9"}, nil
+	}
+	if err := waitExactTarget(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "unexpected RPIBOOT topology") {
+		t.Fatalf("wrong topology error = %v", err)
+	}
+}
+
+func TestUnattendedHardwareWaitStopsOnCancellation(t *testing.T) {
+	setTestBuildValues(t)
+	oldObserve, oldWait := observeEligibleTargets, waitForInterval
+	t.Cleanup(func() {
+		observeEligibleTargets, waitForInterval = oldObserve, oldWait
+	})
+	observeEligibleTargets = func() ([]string, error) { return nil, nil }
+	waitForInterval = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitExactTarget(ctx); err == nil {
+		t.Fatal("cancelled unattended wait succeeded")
 	}
 }

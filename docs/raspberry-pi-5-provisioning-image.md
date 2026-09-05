@@ -135,50 +135,14 @@ emulation. CI builds it on the native `ubuntu-24.04-arm` runner. Its output is:
 result/sd-image/kaiba-rpi5-provisioning.img.zst
 ```
 
-## Release the image
+## Release policy
 
-The release workflow accepts stable `vMAJOR.MINOR.PATCH` tags whose commits are
-reachable from `main`. Wait for that commit's CI run to succeed, then create and
-push an annotated tag from a clean, reviewed `main` checkout:
-
-```console
-RELEASE_TAG=v0.1.2
-git tag --annotate "$RELEASE_TAG" \
-  --message "Kaiba provisioning image $RELEASE_TAG"
-test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
-test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$(git rev-parse HEAD)"
-git push origin "$RELEASE_TAG"
-```
-
-Set `RELEASE_TAG` to the next unused stable version.
-`git tag v0.1.2` without `--annotate` creates a lightweight tag and the release
-workflow rejects it. The two checks above must report an object of type `tag`
-and confirm that it resolves to the reviewed `HEAD` before the push.
-
-`.github/workflows/release.yml` rebuilds the exact tagged revision on native
-ARM64 and creates a GitHub release with these assets:
-
-```text
-kaiba-rpi5-provisioning-v0.1.2.img.zst
-kaiba-rpi5-provisioning-v0.1.2.img.zst.sha256
-```
-
-The build validates the Zstandard archive before publication, and the
-publication job independently verifies the downloaded artifact against the
-checksum. Download both files and verify them before flashing:
-
-```console
-sha256sum --check kaiba-rpi5-provisioning-v0.1.2.img.zst.sha256
-zstd --test kaiba-rpi5-provisioning-v0.1.2.img.zst
-```
-
-GitHub requires each release asset to be smaller than 2 GiB, so the workflow
-fails with an explicit error if the compressed image reaches that limit.
-Protect the repository's `v*` tag pattern from updates and deletion with a
-ruleset. The workflow verifies the remote tag against the built commit before
-creating and again before publishing the release, rejects a remote ref that is
-not annotated, and relies on the ruleset to prevent a tag update in the
-remaining publication window.
+This read-only qualification image remains buildable as
+`packages.aarch64-linux.rpi5-provisioning-sd-image`, but stable releases from
+v0.1.11 onward publish only the unattended, mutation-capable development
+secure-boot station. Use the [secure-boot station release and physical boot
+procedure](raspberry-pi-5-development-secure-boot-station.md) for the GitHub
+asset that provisions the sacrificial Pi.
 
 ## Flash and boot
 

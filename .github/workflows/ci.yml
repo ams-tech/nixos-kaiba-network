@@ -67,6 +67,7 @@ jobs:
             .#checks.x86_64-linux.rpi5-development-mutation-station-eval \
             .#checks.x86_64-linux.rpi5-provisioning-image-eval \
             .#checks.x86_64-linux.rpi5-prototype-signed-release-eval \
+            .#checks.x86_64-linux.rpi5-v016-operational-payload-reconstruction \
             .#checks.x86_64-linux.rpi5-root-integrity-record \
             .#checks.x86_64-linux.rpi5-production-media-staging \
             .#checks.x86_64-linux.rpi5-qualification-ceremony \
@@ -177,7 +178,7 @@ jobs:
           compression-level: 9
 
   provisioning-image:
-    name: Raspberry Pi 5 provisioning station image
+    name: Raspberry Pi 5 unattended secure-boot station image
     needs: quality
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
@@ -196,15 +197,15 @@ jobs:
             extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
           github_access_token: ${{ github.token }}
 
-      - name: Build the provisioning station SD image
+      - name: Build the unattended secure-boot station SD image
         run: |
           nix --accept-flake-config build -L \
             --out-link provisioning-image \
-            .#packages.aarch64-linux.rpi5-provisioning-sd-image
+            .#packages.aarch64-linux.rpi5-development-secure-boot-station-sd-image
 
       - name: Verify the image archive
         run: |
-          image=provisioning-image/sd-image/kaiba-rpi5-provisioning.img.zst
+          image=provisioning-image/sd-image/kaiba-rpi5-development-secure-boot-station.img.zst
           if [[ -L "$image" || ! -f "$image" ]]; then
             echo "::error title=Image unavailable::Expected one regular image at $image."
             exit 1

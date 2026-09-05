@@ -6,6 +6,7 @@
   manualLaneQualificationDigest,
   manualLaneQualificationSourceRevision,
   nixos-raspberrypi,
+  operationalPayload,
   operatorName ? "provisioner",
   payloadSourceRevision,
   provisioning,
@@ -34,9 +35,9 @@ let
       hardwareQualificationDigest
       laneID
       manualLaneQualificationDigest
+      operationalPayload
       payloadSourceRevision
       stationID
-      verifiedSignedRelease
       ;
     expectedTargetFingerprint = acceptedTargetFingerprint;
     fixedRPIBootSysfsPath = rpibootSysfsPath;
@@ -75,6 +76,16 @@ assert lib.assertMsg sourceRevisionIsCanonical
   "the direct development mutation station requires a canonical station source revision";
 assert lib.assertMsg payloadSourceRevisionIsCanonical
   "the direct development mutation station requires a canonical payload source revision";
+assert lib.assertMsg (
+  builtins.isAttrs operationalPayload
+  && operationalPayload ? kaibaDevelopmentSecureBootOperationalPayload
+  &&
+    (operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.payloadSourceRevision or null)
+    == payloadSourceRevision
+  && !operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.privateKeyAccess
+  && !operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.signingAuthorityConfigured
+  && !operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.signingCapable
+) "the direct development mutation station requires the checked public operational payload";
 assert lib.assertMsg
   (
     builtins.isAttrs recoveryContract
@@ -90,7 +101,7 @@ assert lib.assertMsg (
   && (unsignedContract.sourceRevision or null) == payloadSourceRevision
 ) "the recovered release is not bound to the expected payload revision";
 {
-  inherit nixosSystem secureBootRunner;
+  inherit nixosSystem operationalPayload secureBootRunner;
   sdImage = nixosSystem.config.system.build.sdImage;
   system = nixosSystem.config.system.build.toplevel;
   metadata = {
@@ -100,6 +111,7 @@ assert lib.assertMsg (
       laneID
       manualLaneQualificationDigest
       manualLaneQualificationSourceRevision
+      operationalPayload
       operatorName
       payloadSourceRevision
       rpibootSysfsPath
@@ -108,7 +120,8 @@ assert lib.assertMsg (
       uartPath
       unfusedCompatibilityUARTDigest
       ;
-    command = "kaiba-secure-boot run";
+    command = "kaiba-secure-boot provision";
+    automaticAtBoot = true;
     enableMutations = true;
     powerControl = "manual";
     remoteAuthorityRequired = false;

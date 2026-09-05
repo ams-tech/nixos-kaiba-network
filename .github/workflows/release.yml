@@ -1,4 +1,4 @@
-name: Release provisioning image
+name: Release unattended secure-boot provisioning image
 
 on:
   push:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build-image:
-    name: Build the Raspberry Pi 5 provisioning image
+    name: Build the Raspberry Pi 5 unattended secure-boot station image
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
@@ -57,17 +57,17 @@ jobs:
             extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
           github_access_token: ${{ github.token }}
 
-      - name: Build the provisioning station SD image
+      - name: Build the unattended secure-boot station SD image
         run: |
           nix --accept-flake-config build -L \
             --out-link provisioning-image \
-            .#packages.aarch64-linux.rpi5-provisioning-sd-image
+            .#packages.aarch64-linux.rpi5-development-secure-boot-station-sd-image
 
       - name: Stage and verify the release assets
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          source_image=provisioning-image/sd-image/kaiba-rpi5-provisioning.img.zst
+          source_image=provisioning-image/sd-image/kaiba-rpi5-development-secure-boot-station.img.zst
           if [[ -L "$source_image" || ! -f "$source_image" ]]; then
             echo "::error title=Image unavailable::Expected one regular image at $source_image."
             exit 1
@@ -80,7 +80,7 @@ jobs:
             exit 1
           fi
 
-          image_name="kaiba-rpi5-provisioning-${RELEASE_TAG}.img.zst"
+          image_name="kaiba-rpi5-development-secure-boot-station-${RELEASE_TAG}.img.zst"
           mkdir -p release-assets
           install --mode=0644 "$source_image" "release-assets/$image_name"
           (
@@ -92,7 +92,7 @@ jobs:
       - name: Upload the release assets for publication
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: kaiba-rpi5-provisioning-${{ github.sha }}
+          name: kaiba-rpi5-development-secure-boot-station-${{ github.sha }}
           path: release-assets/
           if-no-files-found: error
           retention-days: 1
@@ -117,7 +117,7 @@ jobs:
       - name: Download the verified release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: kaiba-rpi5-provisioning-${{ github.sha }}
+          name: kaiba-rpi5-development-secure-boot-station-${{ github.sha }}
           path: release-assets
 
       - name: Verify and publish the release
@@ -127,11 +127,11 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           SOURCE_REVISION: ${{ github.sha }}
         run: |
-          image_name="kaiba-rpi5-provisioning-${RELEASE_TAG}.img.zst"
+          image_name="kaiba-rpi5-development-secure-boot-station-${RELEASE_TAG}.img.zst"
           image="release-assets/$image_name"
           checksum="$image.sha256"
           checksum_name="$image_name.sha256"
-          release_title="Kaiba provisioning image $RELEASE_TAG"
+          release_title="Kaiba unattended secure-boot provisioning image $RELEASE_TAG"
 
           mapfile -d '' assets < <(find release-assets -mindepth 1 -maxdepth 1 -print0)
           if (( ${#assets[@]} != 2 )); then
@@ -157,12 +157,13 @@ jobs:
             sha256sum --check --strict "$image_name.sha256"
           )
 
-          release_marker="Raspberry Pi 5 provisioning-station SD image built from commit ${SOURCE_REVISION}."
+          release_marker="Raspberry Pi 5 unattended secure-boot provisioning-station SD image built from commit ${SOURCE_REVISION}."
           release_notes="$release_marker
 
-          Automated checks validate and build the image, but they do not prove
-          physical Pi boot, bootloader, or USB behavior. Complete the documented
-          first-boot smoke test before using the station."
+          This development image is mutation-capable for one fixed sacrificial
+          Raspberry Pi 5, USB lane, and UART adapter. It contains the verified
+          public v0.1.6 signed payload and no signing key. Boot the provisioning
+          Pi with the target disconnected; the service starts automatically."
 
           verify_remote_tag() {
             bash scripts/ci/verify_remote_release_tag.sh \
