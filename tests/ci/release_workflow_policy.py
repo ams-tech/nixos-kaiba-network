@@ -20,16 +20,11 @@ REMOTE_TAG_OBJECT_QUERY = "--jq '[.sha, .object.type, .object.sha] | @tsv'"
 MAIN_LINEAGE_CHECK = (
     'if ! git merge-base --is-ancestor "$SOURCE_REVISION" origin/main; then'
 )
-DIRECT_IMAGE_TARGET = (
-    ".#packages.aarch64-linux."
-    "rpi5-development-secure-boot-station-sd-image"
-)
 DIRECT_IMAGE_SOURCE = (
-    "provisioning-image/sd-image/"
-    "kaiba-rpi5-development-secure-boot-station.img.zst"
+    'source_image="target-image/$image_name"'
 )
 DIRECT_IMAGE_NAME = (
-    'image_name="kaiba-rpi5-development-secure-boot-station-'
+    'image_name="kaiba-rpi5-development-secure-boot-target-'
     '${RELEASE_TAG}.img.zst"'
 )
 
@@ -64,34 +59,46 @@ def main() -> None:
     full_checkout = require_once(workflow, "fetch-depth: 0")
     main_lineage = require_once(workflow, MAIN_LINEAGE_CHECK)
     guard = require_once(workflow, GUARD_COMMAND)
-    install_nix = require_once(workflow, "uses: cachix/install-nix-action@")
-    if not build_checkout < full_checkout < main_lineage < guard < install_nix:
-        fail("main-lineage and annotated-tag checks must follow checkout and precede Nix")
+    seed_download = require_once(workflow, 'gh release download "$RELEASE_TAG"')
+    if not build_checkout < full_checkout < main_lineage < guard < seed_download:
+        fail("main-lineage and annotated-tag checks must precede the archive download")
     if workflow.count("persist-credentials: false") != 2:
         fail("both checkouts must disable persisted GitHub credentials")
 
-    build_target = require_once(workflow, DIRECT_IMAGE_TARGET)
     source_image = require_once(workflow, DIRECT_IMAGE_SOURCE)
+    archive_digest = require_once(
+        workflow,
+        "c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a",
+    )
+    media_digest = require_once(
+        workflow,
+        "9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5",
+    )
     image_names = [
         match.start()
         for match in re.finditer(re.escape(DIRECT_IMAGE_NAME), workflow)
     ]
     if len(image_names) != 2:
         fail(
-            "the exact direct station release filename must appear in both "
+            "the exact signed target release filename must appear in both "
             f"jobs, found {len(image_names)}"
         )
     if not (
-        install_nix
-        < build_target
+        image_names[0]
+        < seed_download
         < source_image
-        < image_names[0]
+        < archive_digest
+        < media_digest
         < publish_checkout
         < image_names[1]
     ):
-        fail("the direct station build, source path, and release names are out of order")
+        fail("the signed target archive verification and release names are out of order")
+    if ".#packages.aarch64-linux.rpi5-v016-signed-target-sd-image" in workflow:
+        fail("the self-hosted target archive cannot be built before its release exists")
     if ".#packages.aarch64-linux.rpi5-provisioning-sd-image" in workflow:
         fail("the release workflow still builds the read-only qualification image")
+    if ".#packages.aarch64-linux.rpi5-development-secure-boot-station-sd-image" in workflow:
+        fail("the signed target release workflow still builds a provisioning-station image")
 
     remote_guard_call = require_once(workflow, REMOTE_GUARD_COMMAND)
     require_once(workflow, REMOTE_GUARD_ARGUMENTS)

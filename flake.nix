@@ -24,6 +24,12 @@
       inputs.provisioning.follows = "provisioning";
     };
     v016Payload.url = "github:ams-tech/nixos-kaiba-network/8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
+    v017Recovery = {
+      url = "github:ams-tech/nixos-kaiba-network/e9925a3b2c080c67cec624e8ccae3dd17276fb75";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.nixos-raspberrypi.follows = "nixos-raspberrypi";
+      inputs.dns.follows = "dns";
+    };
   };
 
   outputs =
@@ -34,6 +40,7 @@
       provisioning,
       dns,
       v016Payload,
+      v017Recovery,
     }:
     let
       lib = nixpkgs.lib;
@@ -78,23 +85,23 @@
 
       v016PublicSignedInputs = {
         bootSignedOutput = builtins.path {
-          name = "kaiba-rpi5-v016-boot-signed";
+          name = "boot-signed";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/boot-signed;
         };
         eepromSignedOutput = builtins.path {
-          name = "kaiba-rpi5-v016-eeprom-signed";
+          name = "eeprom-signed";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/eeprom-signed;
         };
         ownedRecoverySignedOutput = builtins.path {
-          name = "kaiba-rpi5-v016-owned-recovery-signed";
+          name = "owned-recovery-signed";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/owned-recovery-signed;
         };
         signingGrantRegistry = builtins.path {
-          name = "kaiba-rpi5-v016-signing-grants.json";
+          name = "signing-grants.json";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-grants.json;
         };
         signingReceiptExport = builtins.path {
-          name = "kaiba-rpi5-v016-signing-receipts.json";
+          name = "signing-receipts.json";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-receipts.json;
         };
       };
@@ -580,7 +587,26 @@
         operationalPayloadManifest = v016OperationalPayloadManifest;
         payload = v016Payload;
         publicSignedInputSource = v016PublicSignedInputSource;
+        recovery = v017Recovery;
+        recoverySourceRevision = "e9925a3b2c080c67cec624e8ccae3dd17276fb75";
         rpibootSysfsPath = "/sys/bus/usb/devices/1-1";
+      };
+      rpi5V016SignedTargetImage = import ./nix/rpi5-signed-target-image.nix {
+        expectedArchiveDigest = "sha256:c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a";
+        expectedArchiveSizeBytes = 1166253581;
+        pkgs = import nixpkgs { system = "aarch64-linux"; };
+        payloadSourceRevision = "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
+        sourceArchive = (import nixpkgs { system = "aarch64-linux"; }).fetchurl {
+          url = "https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst";
+          sha256 = "c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a";
+        };
+        sourceURL = "https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst";
+        expectedBootImageDigest = v016OperationalPayloadManifest.expected_boot_image_digest;
+        expectedBootSignatureDigest = "sha256:f3a71792962c153db56bb317a82ba9d7354feb474cbb34484a7751009b8b83f9";
+        expectedMediaDigest = "sha256:9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5";
+        expectedRootDataDigest = "sha256:4c0898995e6562cb4be8244b9aa410df64a9c8b7c748990b0f753c9f68b0d0ad";
+        expectedRootHashDigest = "sha256:6443329ece3c73f32bdfc7f986c46778b8f80dbb6ecf8238acf4f06a01ec65a2";
+        expectedRootIntegrityDigest = "sha256:093618422f01ec7aec8578f8f27001b6ec7b8734c1fcc2343c57997ff4da73fb";
       };
     in
     {
@@ -689,6 +715,7 @@
         // lib.optionalAttrs (system == "aarch64-linux") {
           rpi5-development-secure-boot-station-sd-image = rpi5V016DirectMutationDeployment.image;
           rpi5-provisioning-sd-image = rpi5ProvisioningSystem.config.system.build.sdImage;
+          rpi5-v016-signed-target-sd-image = rpi5V016SignedTargetImage;
           rpi5-prototype-unsigned-artifacts = rpi5PrototypeRelease.unsignedArtifacts;
         }
       );
@@ -829,6 +856,12 @@
               ;
             imageConfig = rpi5ProvisioningSystem.config;
             kaibaProvisionPackage = provisioning.packages.aarch64-linux.kaiba-provision;
+          };
+          rpi5-v016-signed-target-image-eval = import ./tests/rpi5-v016-signed-target-image-eval.nix {
+            expectedBootImageDigest = v016OperationalPayloadManifest.expected_boot_image_digest;
+            image = rpi5V016SignedTargetImage;
+            inherit lib pkgs;
+            payloadSourceRevision = "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
           };
           rpi5-development-mutation-station-eval =
             let

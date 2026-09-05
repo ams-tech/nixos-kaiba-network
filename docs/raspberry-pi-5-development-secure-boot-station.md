@@ -16,7 +16,7 @@ USB-path, or UART-path overrides. It never asks for a typed
 irreversible-operation phrase; direct observation of the fixed USB path advances
 each physical transition.
 
-## v0.1.13 release image
+## v0.1.13 provisioning-station image
 
 The v0.1.13 GitHub release contains exactly:
 
@@ -38,9 +38,44 @@ sha256sum --check --strict \
 zstd --test kaiba-rpi5-development-secure-boot-station-v0.1.13.img.zst
 ```
 
-The sacrificial Pi's verified signed v0.1.6 target media must already be
-installed before the final normal boot. The station image does not stage that
-target media and contains no private key or signing capability.
+The station image does not stage target media and contains no private key or
+signing capability.
+
+## v0.1.14 signed target image
+
+The separate v0.1.14 release contains the flashable signed target media needed
+for the final normal boot:
+
+```text
+kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst
+kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst.sha256
+```
+
+It is a fixed 3 GiB whole-disk GPT image and therefore requires a nominal 4 GB
+or larger SD card. It contains the exact public signed v0.1.6 payload from
+source revision `8e9f1d5cd97ff46d8b56b1128251ca70b7fec598`, including the immutable
+dm-verity root and hash tree. The archive and decompressed whole-disk image are
+bound to fixed SHA-256 digests because a clean rebuild of the historical
+unsigned boot filesystem is not byte-reproducible and therefore cannot be
+paired safely with the existing signature. It contains no signing key or
+signing capability.
+
+Download and verify both target-image assets:
+
+```console
+curl --fail --location --remote-name \
+  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst
+curl --fail --location --remote-name \
+  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst.sha256
+sha256sum --check --strict \
+  kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst.sha256
+zstd --test kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst
+```
+
+Write the compressed image directly with Raspberry Pi Imager or another
+Zstandard-aware whole-disk writer. Do not extract or copy its individual
+partitions. Install that card in the sacrificial Pi before the final normal
+boot.
 
 ## Physical interface
 

@@ -8,6 +8,8 @@
   ownedRecoverySignedOutput,
   payload,
   publicSignedInputSource,
+  recovery,
+  recoverySourceRevision,
   rpibootSysfsPath,
   signingGrantRegistry,
   signingReceiptExport,
@@ -15,7 +17,7 @@
 
 let
   payloadSourceRevision = "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
-  recoveredSignedRelease = fixed.lib.mkRpi5PrototypeSignedReleaseRecovery {
+  recoveredSignedRelease = recovery.lib.mkRpi5PrototypeSignedReleaseRecovery {
     inherit
       bootSignedOutput
       eepromSignedOutput
@@ -52,6 +54,7 @@ in
 assert builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" fixedSourceRevision != null;
 assert fixed.sourceInfo.rev == fixedSourceRevision;
 assert payload.sourceInfo.rev == payloadSourceRevision;
+assert recovery.sourceInfo.rev == recoverySourceRevision;
 assert
   recoveredSignedRelease.kaibaPrototypeSignedReleaseRecovery.payloadSourceRevision
   == payloadSourceRevision;

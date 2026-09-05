@@ -18,7 +18,7 @@ jobs:
   quality:
     name: Formatting, unit tests, and module evaluation
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,6 +66,7 @@ jobs:
             .#checks.x86_64-linux.module-eval \
             .#checks.x86_64-linux.rpi5-development-mutation-station-eval \
             .#checks.x86_64-linux.rpi5-provisioning-image-eval \
+            .#checks.x86_64-linux.rpi5-v016-signed-target-image-eval \
             .#checks.x86_64-linux.rpi5-prototype-signed-release-eval \
             .#checks.x86_64-linux.rpi5-v016-operational-payload-reconstruction \
             .#checks.x86_64-linux.rpi5-root-integrity-record \
@@ -99,7 +100,7 @@ jobs:
     name: ARM64 production packages
     needs: quality
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 60
     outputs:
       provisioning_receipt_sha256: ${{ steps.provisioning_receipt.outputs.sha256 }}
     steps:
@@ -147,6 +148,17 @@ jobs:
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-pages
+
+      - name: Verify the signed target SD image release binding
+        run: |
+          contract=.#packages.aarch64-linux.rpi5-v016-signed-target-sd-image.kaibaRpi5SignedTargetImage
+          test "$(nix eval --raw "$contract.expectedArchiveDigest")" = \
+            sha256:c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a
+          test "$(nix eval --json "$contract.expectedArchiveSizeBytes")" = 1166253581
+          test "$(nix eval --raw "$contract.expectedMediaDigest")" = \
+            sha256:9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5
+          test "$(nix eval --raw "$contract.sourceURL")" = \
+            https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst
 
       - name: Build the native provisioning test result
         run: nix build ./nix/provisioning#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L
