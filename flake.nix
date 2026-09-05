@@ -999,14 +999,42 @@
             let
               verifiedSignedRelease = rpi5V016DirectMutationDeployment.recoveredSignedRelease;
               releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
-              verifiedBundles = releaseContract.verifiedRPIBootBundles;
-              operationalPayload = rpi5V016DirectMutationDeployment.mutationStation.operationalPayload;
+              recoveryContract = verifiedSignedRelease.kaibaPrototypeSignedReleaseRecovery;
+              releaseIntentContract = releaseContract.releaseIntent.kaibaRpi5ReleaseIntent;
+              unsignedContract = releaseContract.unsignedArtifacts.kaibaUnsignedArtifacts;
+              operationalPayload = provisioning.lib.mkRpi5DevelopmentSecureBootOperationalPayload {
+                inherit system;
+                operationalPayloadManifest = v016OperationalPayloadManifest;
+                payloadSourceRevision = recoveryContract.payloadSourceRevision;
+                publicSignedInputSource = v016PublicSignedInputSource;
+                name = "kaiba-rpi5-v016-${system}-operational-payload-check";
+              };
+              releaseGraphContract =
+                recoveryContract.payloadSourceRevision == "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598"
+                && !recoveryContract.privateKeyAccess
+                && !recoveryContract.signingAuthorityConfigured
+                && !recoveryContract.hardwareAccess
+                && !recoveryContract.mutationCapable
+                && releaseContract.artifactRoleCount == 18
+                && releaseContract.authenticatedSigningReceiptCount == 5
+                && releaseContract.contentAddressedPublication
+                && releaseContract.verificationMode == "pure_offline_replay"
+                && !releaseContract.privateKeyAccess
+                && !releaseContract.signingAuthorityConfigured
+                && releaseIntentContract.sourceRevision == recoveryContract.payloadSourceRevision
+                && unsignedContract.sourceRevision == recoveryContract.payloadSourceRevision
+                &&
+                  releaseIntentContract.expectedCustomerKeyHash
+                  == v016OperationalPayloadManifest.expected_customer_key_hash
+                &&
+                  releaseIntentContract.publicKeyFingerprint == v016OperationalPayloadManifest.public_key_fingerprint;
             in
+            assert lib.assertMsg releaseGraphContract
+              "the pinned v0.1.6 recovered-release graph does not match the operational payload";
             pkgs.runCommand "kaiba-rpi5-v016-operational-payload-reconstruction-check"
               {
                 nativeBuildInputs = [
                   pkgs.coreutils
-                  pkgs.diffutils
                   pkgs.jq
                 ];
               }
@@ -1014,36 +1042,60 @@
                 set -euo pipefail
                 export LC_ALL=C
 
-                verified_release=${lib.escapeShellArg (toString verifiedSignedRelease)}
-                verified_bundles=${lib.escapeShellArg (toString verifiedBundles)}
+                public_source=${lib.escapeShellArg (toString v016PublicSignedInputSource)}
                 operational_payload=${lib.escapeShellArg (toString operationalPayload)}
                 operational_manifest="$operational_payload/manifest.json"
-                publication="$verified_release/publication.json"
 
-                release_manifest_digest="$(jq -er \
-                  .signed_release_manifest_digest "$publication")"
-                test "$(jq -er .signed_release_manifest_digest \
-                  "$operational_manifest")" = "$release_manifest_digest"
-                release_manifest_hex="''${release_manifest_digest#sha256:}"
-                release_manifest="$verified_release/manifests/sha256/$release_manifest_hex.json"
-                test -f "$release_manifest"
+                cd "$public_source"
+                sha256sum --check --strict SHA256SUMS
+                cmp operational-payload-manifest.json "$operational_manifest"
 
-                while IFS=$'\t' read -r role directory; do
-                  diff --recursive --no-dereference \
-                    "$verified_bundles/$directory" \
-                    "$operational_payload/$directory"
-                  operational_digest="$(jq -er --arg role "$role" '
-                    .bundles[] | select(.role == $role) | .digest
-                  ' "$operational_manifest")"
-                  release_digest="$(jq -er --arg role "$role" '
-                    .artifacts[] | select(.role == $role) | .digest
-                  ' "$release_manifest")"
-                  test "$operational_digest" = "$release_digest"
-                done <<'EOF'
-                rpi5.fresh_commit_bundle	fresh-commit
-                rpi5.fresh_readback_bundle	fresh-readback
-                rpi5.owned_readback_bundle	owned-readback
-                EOF
+                jq -e \
+                  --slurpfile boot signed-inputs/boot-signed/signing-result.json \
+                  --slurpfile eeprom signed-inputs/eeprom-signed/result.json \
+                  --slurpfile owned signed-inputs/owned-recovery-signed/result.json \
+                  --slurpfile receipts signed-inputs/signing-receipts.json \
+                  --slurpfile grants signed-inputs/signing-grants.json \
+                  '
+                    .payload_source_revision == "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598"
+                    and .release_intent_digest == $boot[0].release_intent_digest
+                    and .release_intent_digest == $eeprom[0].release_intent_digest
+                    and .release_intent_digest == $owned[0].release_intent_digest
+                    and .expected_boot_image_digest == $boot[0].boot_image_digest
+                    and .expected_customer_key_hash == $eeprom[0].customer_key_hash
+                    and .expected_customer_key_hash == $owned[0].customer_key_hash
+                    and .expected_eeprom_hash == $eeprom[0].signed_eeprom.digest
+                    and .expected_eeprom_hash == $owned[0].replayed_signed_eeprom.digest
+                    and .public_key_fingerprint == $boot[0].public_key_fingerprint
+                    and .public_key_fingerprint == $eeprom[0].public_key_fingerprint
+                    and .public_key_fingerprint == $owned[0].public_key_fingerprint
+                    and $receipts[0].release_intent_digest == .release_intent_digest
+                    and $receipts[0].public_key_fingerprint == .public_key_fingerprint
+                    and ($receipts[0].receipts | length) == 5
+                    and ($grants[0].grants | length) == 5
+                  ' "$operational_manifest"
+
+                test "sha256:$(sha256sum signed-inputs/boot-signed/boot.sig | cut -d ' ' -f 1)" = \
+                  "$(jq -er .boot_signature_digest signed-inputs/boot-signed/signing-result.json)"
+                test "sha256:$(sha256sum signed-inputs/eeprom-signed/pieeprom.bin | cut -d ' ' -f 1)" = \
+                  "$(jq -er .signed_eeprom.digest signed-inputs/eeprom-signed/result.json)"
+                test "sha256:$(sha256sum signed-inputs/eeprom-signed/pieeprom.sig | cut -d ' ' -f 1)" = \
+                  "$(jq -er .eeprom_update_metadata.digest signed-inputs/eeprom-signed/result.json)"
+                test "sha256:$(sha256sum signed-inputs/eeprom-signed/bootcode5.bin | cut -d ' ' -f 1)" = \
+                  "$(jq -er .fresh_recovery_bootcode.digest signed-inputs/eeprom-signed/result.json)"
+                test "sha256:$(sha256sum signed-inputs/owned-recovery-signed/bootcode5.bin | cut -d ' ' -f 1)" = \
+                  "$(jq -er .owned_recovery_bootcode.digest signed-inputs/owned-recovery-signed/result.json)"
+
+                cmp signed-inputs/eeprom-signed/bootcode5.bin \
+                  "$operational_payload/fresh-commit/bootcode5.bin"
+                cmp signed-inputs/eeprom-signed/pieeprom.bin \
+                  "$operational_payload/fresh-commit/pieeprom.bin"
+                cmp signed-inputs/eeprom-signed/pieeprom.sig \
+                  "$operational_payload/fresh-commit/pieeprom.sig"
+                cmp signed-inputs/eeprom-signed/bootcode5.bin \
+                  "$operational_payload/fresh-readback/bootcode5.bin"
+                cmp signed-inputs/owned-recovery-signed/bootcode5.bin \
+                  "$operational_payload/owned-readback/bootcode5.bin"
 
                 mkdir -p "$out"
                 touch "$out/passed"

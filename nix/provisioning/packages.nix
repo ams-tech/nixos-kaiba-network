@@ -1089,11 +1089,11 @@ let
     };
 
   # Assemble the exact files needed by the development appliance from the
-  # checked, public v0.1.6 inputs.  The manifest is independently compared
-  # with a completely reconstructed signed release by the root-flake x86
-  # verification check.  Keeping that x86-only reconstruction out of this
-  # derivation lets the final image build natively on ARM while the output
-  # remains content-bound to the verified release.
+  # checked, public v0.1.6 inputs.  The root-flake verification check binds
+  # this manifest to the complete pinned recovered-release graph and checks
+  # the signed result records and assembled bytes natively on every host.
+  # Keeping the cross-architecture release outputs out of this derivation lets
+  # the final image build natively on ARM while preserving that lineage.
   mkRpi5DevelopmentSecureBootOperationalPayload =
     {
       operationalPayloadManifest,
@@ -1153,7 +1153,7 @@ let
         passthru.kaibaDevelopmentSecureBootOperationalPayload = {
           inherit payloadSourceRevision;
           signedReleaseManifestDigest = manifest.signed_release_manifest_digest;
-          verificationMode = "sha_inventory_plus_x86_reconstruction_comparison";
+          verificationMode = "sha_inventory_plus_pinned_release_graph";
           privateKeyAccess = false;
           signingAuthorityConfigured = false;
           signingCapable = false;
