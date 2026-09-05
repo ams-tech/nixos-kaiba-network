@@ -67,6 +67,7 @@ jobs:
             .#checks.x86_64-linux.rpi5-development-mutation-station-eval \
             .#checks.x86_64-linux.rpi5-provisioning-image-eval \
             .#checks.x86_64-linux.rpi5-prototype-signed-release-eval \
+            .#checks.x86_64-linux.rpi5-v016-operational-payload-reconstruction \
             .#checks.x86_64-linux.rpi5-root-integrity-record \
             .#checks.x86_64-linux.rpi5-production-media-staging \
             .#checks.x86_64-linux.rpi5-qualification-ceremony \

@@ -9,5 +9,8 @@ verifier before the unattended development secure-boot station can be built.
 That verifier binds the signatures, grants, receipts, payload source revision,
 customer-key hash, EEPROM hash, boot image, and RPIBOOT bundles.
 
-`SHA256SUMS` covers every checked-in input file. The Nix build additionally
-performs the repository's complete signed-release verification.
+`SHA256SUMS` covers every checked-in input file and the exact operational
+payload manifest. Native ARM image assembly verifies that inventory before it
+copies the three required RPIBOOT bundles. The x86 verification check
+independently reconstructs the complete signed release and byte-compares those
+bundles and their signed-release manifest binding.

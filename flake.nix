@@ -531,6 +531,7 @@
           laneID,
           manualLaneQualificationDigest,
           manualLaneQualificationSourceRevision,
+          operationalPayload,
           operatorName ? "provisioner",
           payloadSourceRevision,
           rpibootSysfsPath,
@@ -549,6 +550,7 @@
             manualLaneQualificationDigest
             manualLaneQualificationSourceRevision
             nixos-raspberrypi
+            operationalPayload
             operatorName
             payloadSourceRevision
             provisioning
@@ -573,6 +575,7 @@
         fixedSourceRevision = defaultTargetSourceRevision;
         manualLaneQualificationDigest = "sha256:4ca8f4c40084311266e1a6f828a14b716eb73935079355044ecf1e6387b60c27";
         payload = v016Payload;
+        publicSignedInputSource = v016PublicSignedInputSource;
         rpibootSysfsPath = "/sys/bus/usb/devices/1-1";
       };
     in
@@ -896,12 +899,26 @@
                   // overrides
                 );
               mutationStation = mkFixtureMutationStation { };
+              fixtureOperationalPayload =
+                pkgs.runCommand "fixture-operational-payload"
+                  {
+                    passthru.kaibaDevelopmentSecureBootOperationalPayload = {
+                      payloadSourceRevision = fixturePayloadSourceRevision;
+                      privateKeyAccess = false;
+                      signingAuthorityConfigured = false;
+                      signingCapable = false;
+                    };
+                  }
+                  ''
+                    mkdir -p "$out"
+                  '';
               directMutationStation = mkRpi5DevelopmentDirectMutationStation {
                 acceptedTargetFingerprint = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
                 hardwareQualificationDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
                 laneID = "lane-1";
                 manualLaneQualificationDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
                 manualLaneQualificationSourceRevision = fixturePayloadSourceRevision;
+                operationalPayload = fixtureOperationalPayload;
                 operatorName = "provisioner";
                 payloadSourceRevision = fixturePayloadSourceRevision;
                 rpibootSysfsPath = "/sys/bus/usb/devices/3-1";
@@ -974,6 +991,59 @@
               ;
             prototype = rpi5PrototypeRelease;
           };
+          rpi5-v016-operational-payload-reconstruction =
+            let
+              verifiedSignedRelease = rpi5V016DirectMutationDeployment.recoveredSignedRelease;
+              releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
+              verifiedBundles = releaseContract.verifiedRPIBootBundles;
+              operationalPayload = rpi5V016DirectMutationDeployment.mutationStation.operationalPayload;
+            in
+            pkgs.runCommand "kaiba-rpi5-v016-operational-payload-reconstruction-check"
+              {
+                nativeBuildInputs = [
+                  pkgs.coreutils
+                  pkgs.diffutils
+                  pkgs.jq
+                ];
+              }
+              ''
+                set -euo pipefail
+                export LC_ALL=C
+
+                verified_release=${lib.escapeShellArg (toString verifiedSignedRelease)}
+                verified_bundles=${lib.escapeShellArg (toString verifiedBundles)}
+                operational_payload=${lib.escapeShellArg (toString operationalPayload)}
+                operational_manifest="$operational_payload/manifest.json"
+                publication="$verified_release/publication.json"
+
+                release_manifest_digest="$(jq -er \
+                  .signed_release_manifest_digest "$publication")"
+                test "$(jq -er .signed_release_manifest_digest \
+                  "$operational_manifest")" = "$release_manifest_digest"
+                release_manifest_hex="''${release_manifest_digest#sha256:}"
+                release_manifest="$verified_release/manifests/sha256/$release_manifest_hex.json"
+                test -f "$release_manifest"
+
+                while IFS=$'\t' read -r role directory; do
+                  diff --recursive --no-dereference \
+                    "$verified_bundles/$directory" \
+                    "$operational_payload/$directory"
+                  operational_digest="$(jq -er --arg role "$role" '
+                    .bundles[] | select(.role == $role) | .digest
+                  ' "$operational_manifest")"
+                  release_digest="$(jq -er --arg role "$role" '
+                    .artifacts[] | select(.role == $role) | .digest
+                  ' "$release_manifest")"
+                  test "$operational_digest" = "$release_digest"
+                done <<'EOF'
+                rpi5.fresh_commit_bundle	fresh-commit
+                rpi5.fresh_readback_bundle	fresh-readback
+                rpi5.owned_readback_bundle	owned-readback
+                EOF
+
+                mkdir -p "$out"
+                touch "$out/passed"
+              '';
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
           rpi5-secure-boot-target-eval = import ./tests/rpi5-secure-boot-target-eval.nix {

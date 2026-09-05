@@ -1,0 +1,104 @@
+{
+  "bundles": [
+    {
+      "digest": "sha256:e07a6880d7477d347e150d628948808a64aff50b71ad3684f083ceb987738e83",
+      "relative_path": "fresh-commit",
+      "role": "rpi5.fresh_commit_bundle",
+      "size_bytes": 2202681,
+      "tree": {
+        "entries": [
+          {
+            "digest": "sha256:73dab9a01c139b7d995ac9a4055ee0d15551d7f8dbf1c2605bae584ef7126e0c",
+            "mode": "0444",
+            "path": "bootcode5.bin",
+            "size_bytes": 105396,
+            "type": "regular_file"
+          },
+          {
+            "digest": "sha256:47841fc50e20b77fa4ed88df32c3d7eb594ee375e5e0d0e963dcfb325237034b",
+            "mode": "0444",
+            "path": "config.txt",
+            "size_bytes": 53,
+            "type": "regular_file"
+          },
+          {
+            "digest": "sha256:d69f3454d838bd23bd9730ecbcebf0ca2f2353ceadca0d56abd2f54e1b82d19e",
+            "mode": "0444",
+            "path": "pieeprom.bin",
+            "size_bytes": 2097152,
+            "type": "regular_file"
+          },
+          {
+            "digest": "sha256:f638c4b2b35c2ae5695e85c4bf952b5e86b826ba15be7a854ea543b8b69f3edb",
+            "mode": "0444",
+            "path": "pieeprom.sig",
+            "size_bytes": 80,
+            "type": "regular_file"
+          }
+        ],
+        "root_mode": "0555",
+        "schema_version": "kaiba.provisioning.rpiboot-directory-tree/v1alpha1"
+      }
+    },
+    {
+      "digest": "sha256:24175fb5c03198d8c3de9c5d1d200eb4b7e13f3c84b1733acce9d065f34617da",
+      "relative_path": "fresh-readback",
+      "role": "rpi5.fresh_readback_bundle",
+      "size_bytes": 105432,
+      "tree": {
+        "entries": [
+          {
+            "digest": "sha256:73dab9a01c139b7d995ac9a4055ee0d15551d7f8dbf1c2605bae584ef7126e0c",
+            "mode": "0444",
+            "path": "bootcode5.bin",
+            "size_bytes": 105396,
+            "type": "regular_file"
+          },
+          {
+            "digest": "sha256:7456c79433bd06e1923ea93e7db7f40a14402c442dcb031419d6edd1ab1ef180",
+            "mode": "0444",
+            "path": "config.txt",
+            "size_bytes": 36,
+            "type": "regular_file"
+          }
+        ],
+        "root_mode": "0555",
+        "schema_version": "kaiba.provisioning.rpiboot-directory-tree/v1alpha1"
+      }
+    },
+    {
+      "digest": "sha256:3b222efcaffac6a2d656ffe970780318b91b3e02dd04091a919b7cb5c8a3e6d3",
+      "relative_path": "owned-readback",
+      "role": "rpi5.owned_readback_bundle",
+      "size_bytes": 105964,
+      "tree": {
+        "entries": [
+          {
+            "digest": "sha256:6ebcc382649a5d18095fa3f31a348e95ddfc6ca04df4a81fd7188afae956e95b",
+            "mode": "0444",
+            "path": "bootcode5.bin",
+            "size_bytes": 105928,
+            "type": "regular_file"
+          },
+          {
+            "digest": "sha256:7456c79433bd06e1923ea93e7db7f40a14402c442dcb031419d6edd1ab1ef180",
+            "mode": "0444",
+            "path": "config.txt",
+            "size_bytes": 36,
+            "type": "regular_file"
+          }
+        ],
+        "root_mode": "0555",
+        "schema_version": "kaiba.provisioning.rpiboot-directory-tree/v1alpha1"
+      }
+    }
+  ],
+  "expected_boot_image_digest": "sha256:071b804beba56860049ac758c332d3981e4908187d9ae29865aab9e53fec1ae3",
+  "expected_customer_key_hash": "sha256:b8818acea4e71173903ee003e33ed37e969def7d2ea67bec15c0b73cb36c3895",
+  "expected_eeprom_hash": "sha256:d69f3454d838bd23bd9730ecbcebf0ca2f2353ceadca0d56abd2f54e1b82d19e",
+  "payload_source_revision": "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598",
+  "public_key_fingerprint": "sha256:0e68e7196fedc382ca435b995598e92d0fe36e4b1a1f949f85f5f2e6e2920fb9",
+  "release_intent_digest": "sha256:f95a2fca02cacac15eb4f8037a58443816dabfc5c34cce83c0e6959981ed5af1",
+  "schema_version": "kaiba.provisioning.rpi5-development-operational-payload/v1alpha1",
+  "signed_release_manifest_digest": "sha256:c4bf57fe369a22b685876c70558da6261ee3fda2107be814119e7717411fc541"
+}

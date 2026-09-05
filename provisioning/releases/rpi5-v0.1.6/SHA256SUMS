@@ -1,3 +1,4 @@
+743fb82bb867d1c8736d2f14c85a9b561bbd3afd14714cdb0f5adaad40ac1859  operational-payload-manifest.json
 f3a71792962c153db56bb317a82ba9d7354feb474cbb34484a7751009b8b83f9  signed-inputs/boot-signed/boot.sig
 052efa4d2b4be64af63c19b24b5fa3e5cf3afb68dd88b617b5901f03c95822b5  signed-inputs/boot-signed/signing-result.json
 73dab9a01c139b7d995ac9a4055ee0d15551d7f8dbf1c2605bae584ef7126e0c  signed-inputs/eeprom-signed/bootcode5.bin

@@ -6,6 +6,7 @@
   manualLaneQualificationDigest,
   manualLaneQualificationSourceRevision,
   nixos-raspberrypi,
+  operationalPayload,
   operatorName ? "provisioner",
   payloadSourceRevision,
   provisioning,
@@ -28,11 +29,6 @@ let
   releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease or { };
   releaseIntentContract = (releaseContract.releaseIntent or { }).kaibaRpi5ReleaseIntent or { };
   unsignedContract = (releaseContract.unsignedArtifacts or { }).kaibaUnsignedArtifacts or { };
-  operationalPayload = provisioning.lib.mkRpi5DevelopmentSecureBootOperationalPayload {
-    system = "aarch64-linux";
-    inherit payloadSourceRevision verifiedSignedRelease;
-    name = "kaiba-rpi5-v016-development-secure-boot-operational-payload";
-  };
   secureBootRunner = provisioning.lib.mkRpi5DevelopmentSecureBootRunner {
     system = "aarch64-linux";
     inherit
@@ -80,6 +76,16 @@ assert lib.assertMsg sourceRevisionIsCanonical
   "the direct development mutation station requires a canonical station source revision";
 assert lib.assertMsg payloadSourceRevisionIsCanonical
   "the direct development mutation station requires a canonical payload source revision";
+assert lib.assertMsg (
+  builtins.isAttrs operationalPayload
+  && operationalPayload ? kaibaDevelopmentSecureBootOperationalPayload
+  &&
+    (operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.payloadSourceRevision or null)
+    == payloadSourceRevision
+  && !operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.privateKeyAccess
+  && !operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.signingAuthorityConfigured
+  && !operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.signingCapable
+) "the direct development mutation station requires the checked public operational payload";
 assert lib.assertMsg
   (
     builtins.isAttrs recoveryContract
