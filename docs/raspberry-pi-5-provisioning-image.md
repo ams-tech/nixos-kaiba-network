@@ -140,7 +140,7 @@ result/sd-image/kaiba-rpi5-provisioning.img.zst
 This read-only qualification image remains buildable as
 `packages.aarch64-linux.rpi5-provisioning-sd-image`, but stable releases from
 v0.1.11 onward publish only the direct, mutation-capable development
-secure-boot station. Starting with v0.1.12, the operator launches its fixed
+secure-boot station. Starting with v0.1.13, the operator launches its fixed
 runner in the foreground instead of a boot-time service. Use the [secure-boot
 station release and physical boot
 procedure](raspberry-pi-5-development-secure-boot-station.md) for the GitHub

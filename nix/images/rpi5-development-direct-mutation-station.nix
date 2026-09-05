@@ -24,13 +24,22 @@
 
 let
   runner = "${secureBootRunner}/bin/kaiba-rpi5-development-secure-boot";
-  operatorCommand = pkgs.writeShellApplication {
-    name = "kaiba-secure-boot";
-    runtimeInputs = [ pkgs.sudo ];
-    text = ''
-      exec sudo -- ${runner} "$@"
-    '';
-  };
+  operatorCommandText = ''
+    exec ${config.security.wrapperDir}/sudo -- ${runner} "$@"
+  '';
+  operatorCommand =
+    (pkgs.writeShellApplication {
+      name = "kaiba-secure-boot";
+      text = operatorCommandText;
+    }).overrideAttrs
+      (old: {
+        passthru = (old.passthru or { }) // {
+          kaibaSecureBootOperatorCommand = {
+            privilegeWrapper = "${config.security.wrapperDir}/sudo";
+            script = operatorCommandText;
+          };
+        };
+      });
   inventoryCommand = pkgs.writeShellApplication {
     name = "kaiba-secure-boot-inventory";
     text = ''
