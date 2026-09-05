@@ -153,7 +153,7 @@ pkgs.runCommand name
 
     mkdir -p "$out"
     readonly archive="$out/${imageFileName}"
-    emit_image | zstd --compress --threads=2 -10 --no-progress --output "$archive"
+    emit_image | zstd --compress --threads=2 -10 --no-progress -o "$archive"
     zstd --test "$archive"
     test "sha256:$(zstd --decompress --stdout "$archive" | sha256sum | cut -d ' ' -f 1)" = \
       "$expected_media_digest"
