@@ -149,23 +149,16 @@ jobs:
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-pages
 
-      - name: Build and verify the signed target SD image
+      - name: Verify the signed target SD image release binding
         run: |
-          nix --accept-flake-config build -L \
-            --out-link signed-target-image \
-            .#packages.aarch64-linux.rpi5-v016-signed-target-sd-image
-          image=signed-target-image/kaiba-rpi5-development-secure-boot-target.img.zst
-          if [[ -L "$image" || ! -f "$image" ]]; then
-            echo "::error title=Image unavailable::Expected one regular image at $image."
-            exit 1
-          fi
-          zstd --test "$image"
-          image_size="$(stat --format=%s "$image")"
-          if (( image_size >= 2147483648 )); then
-            echo "::error title=Image too large::The compressed image exceeds GitHub's 2 GiB release-asset limit."
-            exit 1
-          fi
-          sha256sum "$image"
+          contract=.#packages.aarch64-linux.rpi5-v016-signed-target-sd-image.kaibaRpi5SignedTargetImage
+          test "$(nix eval --raw "$contract.expectedArchiveDigest")" = \
+            sha256:c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a
+          test "$(nix eval --json "$contract.expectedArchiveSizeBytes")" = 1166253581
+          test "$(nix eval --raw "$contract.expectedMediaDigest")" = \
+            sha256:9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5
+          test "$(nix eval --raw "$contract.sourceURL")" = \
+            https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst
 
       - name: Build the native provisioning test result
         run: nix build ./nix/provisioning#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L

@@ -592,11 +592,15 @@
         rpibootSysfsPath = "/sys/bus/usb/devices/1-1";
       };
       rpi5V016SignedTargetImage = import ./nix/rpi5-signed-target-image.nix {
-        bootSignedOutput = v016PublicSignedInputs.bootSignedOutput;
         expectedArchiveDigest = "sha256:c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a";
+        expectedArchiveSizeBytes = 1166253581;
         pkgs = import nixpkgs { system = "aarch64-linux"; };
-        unsignedArtifacts = v016Payload.packages.aarch64-linux.rpi5-prototype-unsigned-artifacts;
         payloadSourceRevision = "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
+        sourceArchive = (import nixpkgs { system = "aarch64-linux"; }).fetchurl {
+          url = "https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst";
+          sha256 = "c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a";
+        };
+        sourceURL = "https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst";
         expectedBootImageDigest = v016OperationalPayloadManifest.expected_boot_image_digest;
         expectedBootSignatureDigest = "sha256:f3a71792962c153db56bb317a82ba9d7354feb474cbb34484a7751009b8b83f9";
         expectedMediaDigest = "sha256:9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5";

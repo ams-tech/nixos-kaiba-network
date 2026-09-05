@@ -52,10 +52,13 @@ kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst.sha256
 ```
 
 It is a fixed 3 GiB whole-disk GPT image and therefore requires a nominal 4 GB
-or larger SD card. It reconstructs the public signed v0.1.6 payload at source
-revision `8e9f1d5cd97ff46d8b56b1128251ca70b7fec598`, verifies its signature and
-release lineage, and contains the immutable dm-verity root and hash tree. It
-contains no signing key or signing capability.
+or larger SD card. It contains the exact public signed v0.1.6 payload from
+source revision `8e9f1d5cd97ff46d8b56b1128251ca70b7fec598`, including the immutable
+dm-verity root and hash tree. The archive and decompressed whole-disk image are
+bound to fixed SHA-256 digests because a clean rebuild of the historical
+unsigned boot filesystem is not byte-reproducible and therefore cannot be
+paired safely with the existing signature. It contains no signing key or
+signing capability.
 
 Download and verify both target-image assets:
 

@@ -48,39 +48,53 @@ jobs:
           SOURCE_REVISION: ${{ github.sha }}
         run: bash scripts/ci/verify_release_tag.sh "$RELEASE_TAG" "$SOURCE_REVISION" origin/main
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          enable_kvm: false
-          extra_nix_config: |
-            extra-substituters = https://nixos-raspberrypi.cachix.org https://nixos-kaiba-network.cachix.org
-            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
-          github_access_token: ${{ github.token }}
-
-      - name: Build the signed secure-boot target SD image
-        run: |
-          nix --accept-flake-config build -L \
-            --out-link target-image \
-            .#packages.aarch64-linux.rpi5-v016-signed-target-sd-image
-
-      - name: Stage and verify the release assets
+      - name: Await, stage, and verify the prebuilt release image
         env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          source_image=target-image/kaiba-rpi5-development-secure-boot-target.img.zst
+          image_name="kaiba-rpi5-development-secure-boot-target-${RELEASE_TAG}.img.zst"
+          mkdir -p target-image
+          for attempt in $(seq 1 90); do
+            if gh release download "$RELEASE_TAG" \
+              --pattern "$image_name" \
+              --dir target-image \
+              --clobber 2>/dev/null; then
+              break
+            fi
+            if (( attempt == 90 )); then
+              echo "::error title=Prebuilt image unavailable::The digest-pinned image was not uploaded to the draft release."
+              exit 1
+            fi
+            sleep 10
+          done
+
+          source_image="target-image/$image_name"
           if [[ -L "$source_image" || ! -f "$source_image" ]]; then
             echo "::error title=Image unavailable::Expected one regular image at $source_image."
             exit 1
           fi
           zstd --test "$source_image"
 
-          image_size="$(stat --format=%s "$source_image")"
-          if (( image_size >= 2147483648 )); then
-            echo "::error title=Image too large::The compressed image exceeds GitHub's 2 GiB release-asset limit."
+          expected_archive_sha256=c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a
+          if [[ "$(sha256sum "$source_image" | cut -d ' ' -f 1)" != "$expected_archive_sha256" ]]; then
+            echo "::error title=Archive digest mismatch::The uploaded image is not the verified target archive."
             exit 1
           fi
 
-          image_name="kaiba-rpi5-development-secure-boot-target-${RELEASE_TAG}.img.zst"
+          expected_media_sha256=9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5
+          if [[ "$(zstd --decompress --stdout "$source_image" | sha256sum | cut -d ' ' -f 1)" != "$expected_media_sha256" ]]; then
+            echo "::error title=Media digest mismatch::The uploaded archive does not contain the verified target image."
+            exit 1
+          fi
+
+          image_size="$(stat --format=%s "$source_image")"
+          if (( image_size != 1166253581 || image_size >= 2147483648 )); then
+            echo "::error title=Image size mismatch::The uploaded image has an unexpected size."
+            exit 1
+          fi
+
           mkdir -p release-assets
           install --mode=0644 "$source_image" "release-assets/$image_name"
           (
@@ -157,7 +171,7 @@ jobs:
             sha256sum --check --strict "$image_name.sha256"
           )
 
-          release_marker="Raspberry Pi 5 signed secure-boot target SD image built from commit ${SOURCE_REVISION}."
+          release_marker="Raspberry Pi 5 signed secure-boot target SD image verified for release at commit ${SOURCE_REVISION}."
           release_notes="$release_marker
 
           This development target image contains the verified public v0.1.6

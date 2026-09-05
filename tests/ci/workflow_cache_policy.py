@@ -160,11 +160,11 @@ def main() -> None:
         for name, body in release_jobs.items()
         if CACHE_URL in body
     }
-    if release_config_jobs != {"build-image"}:
+    if release_config_jobs:
         fail(
             f"{release_path} configured cache jobs are "
             f"{sorted(release_config_jobs)}, "
-            "expected ['build-image']"
+            "expected none for fixed-archive publication"
         )
     release_cache_jobs = {
         name
@@ -176,8 +176,6 @@ def main() -> None:
             f"{release_path} must not expose a cache publisher, found "
             f"{sorted(release_cache_jobs)}"
         )
-    check_reader(release_jobs["build-image"], f"{release_path}:build-image")
-
     print("cache workflow policy passed")
 
 
