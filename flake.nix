@@ -582,6 +582,26 @@
         publicSignedInputSource = v016PublicSignedInputSource;
         rpibootSysfsPath = "/sys/bus/usb/devices/1-1";
       };
+      rpi5V016SignedTargetMedia = provisioning.lib.mkRpi5ProductionMedia {
+        system = "x86_64-linux";
+        verifiedSignedRelease = rpi5V016DirectMutationDeployment.recoveredSignedRelease;
+        transactionID = "release:rpi5-v0.1.6-signed-target:1";
+        target = {
+          # A 3 GiB image fits nominal 4 GB SD cards while retaining a fixed,
+          # independently verified backup GPT and immutable dm-verity layout.
+          sizeBytes = 3 * 1024 * 1024 * 1024;
+          logicalSectorSizeBytes = 512;
+        };
+        hardwareConfiguration =
+          provisioning.lib.hardwareConfigurations.malakRaspberryPi5SacrificialDevelopmentUsbSd;
+        name = "kaiba-rpi5-v016-signed-target-media";
+      };
+      rpi5V016SignedTargetImage = import ./nix/rpi5-signed-target-image.nix {
+        pkgs = import nixpkgs { system = "x86_64-linux"; };
+        productionMedia = rpi5V016SignedTargetMedia;
+        payloadSourceRevision = "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
+        expectedBootImageDigest = v016OperationalPayloadManifest.expected_boot_image_digest;
+      };
     in
     {
       nixosModules = {
@@ -671,6 +691,7 @@
         // lib.optionalAttrs (system == "x86_64-linux") {
           development-signing = developmentSigning.signing;
           kaiba-provision-signing-ceremony = developmentSigningCeremonyFor system;
+          rpi5-v016-signed-target-sd-image = rpi5V016SignedTargetImage;
           rpi5-prototype-eeprom-signing-inputs = rpi5PrototypeRelease.eepromSigningInputs;
           rpi5-prototype-eeprom-signing-plan = rpi5PrototypeRelease.eepromSigningPlan;
           rpi5-prototype-release-intent = rpi5PrototypeRelease.releaseIntent;
@@ -829,6 +850,12 @@
               ;
             imageConfig = rpi5ProvisioningSystem.config;
             kaibaProvisionPackage = provisioning.packages.aarch64-linux.kaiba-provision;
+          };
+          rpi5-v016-signed-target-image-eval = import ./tests/rpi5-v016-signed-target-image-eval.nix {
+            expectedBootImageDigest = v016OperationalPayloadManifest.expected_boot_image_digest;
+            image = rpi5V016SignedTargetImage;
+            inherit lib pkgs;
+            payloadSourceRevision = "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
           };
           rpi5-development-mutation-station-eval =
             let

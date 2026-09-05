@@ -18,7 +18,7 @@ jobs:
   quality:
     name: Formatting, unit tests, and module evaluation
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,6 +66,7 @@ jobs:
             .#checks.x86_64-linux.module-eval \
             .#checks.x86_64-linux.rpi5-development-mutation-station-eval \
             .#checks.x86_64-linux.rpi5-provisioning-image-eval \
+            .#checks.x86_64-linux.rpi5-v016-signed-target-image-eval \
             .#checks.x86_64-linux.rpi5-prototype-signed-release-eval \
             .#checks.x86_64-linux.rpi5-v016-operational-payload-reconstruction \
             .#checks.x86_64-linux.rpi5-root-integrity-record \
@@ -94,6 +95,24 @@ jobs:
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-station \
             ./nix/dns#checks.x86_64-linux.module-eval \
             ./nix/dns#checks.x86_64-linux.report-unit
+
+      - name: Build and verify the signed target SD image
+        run: |
+          nix --accept-flake-config build -L \
+            --out-link signed-target-image \
+            .#packages.x86_64-linux.rpi5-v016-signed-target-sd-image
+          image=signed-target-image/kaiba-rpi5-development-secure-boot-target.img.zst
+          if [[ -L "$image" || ! -f "$image" ]]; then
+            echo "::error title=Image unavailable::Expected one regular image at $image."
+            exit 1
+          fi
+          zstd --test "$image"
+          image_size="$(stat --format=%s "$image")"
+          if (( image_size >= 2147483648 )); then
+            echo "::error title=Image too large::The compressed image exceeds GitHub's 2 GiB release-asset limit."
+            exit 1
+          fi
+          sha256sum "$image"
 
   aarch64-packages:
     name: ARM64 production packages
