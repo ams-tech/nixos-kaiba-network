@@ -174,7 +174,6 @@ let
     && mismatchedUnsignedArtifactSourceRevisionRejected;
   qualificationBindingContract = toString bindingGuardA != toString bindingGuardB;
   directConfig = directMutationStation.nixosSystem.config;
-  directProvisioningUnit = directConfig.systemd.services.kaiba-development-secure-boot;
   directSystemPackageNames = map lib.getName directConfig.environment.systemPackages;
   directOperatorSudoCommands = builtins.concatMap (
     rule:
@@ -198,7 +197,8 @@ let
     && !directMutationStation.secureBootRunner.kaibaDevelopmentSecureBoot.remoteAuthorityRequired
     && !directMutationStation.secureBootRunner.kaibaDevelopmentSecureBoot.signingCapable
     && directMutationStation.metadata.command == "kaiba-secure-boot provision"
-    && directMutationStation.metadata.automaticAtBoot
+    && !directMutationStation.metadata.automaticAtBoot
+    && directMutationStation.metadata.execution == "operator_foreground"
     && !directMutationStation.metadata.remoteAuthorityRequired
     && !directMutationStation.metadata.signingCapable
     && builtins.elem "kaiba-secure-boot" directSystemPackageNames
@@ -209,14 +209,9 @@ let
     && lib.hasInfix "kaiba-rpi5-development-secure-boot" (builtins.head directOperatorSudoCommands)
     .command
     && builtins.elem "NOPASSWD" (builtins.head directOperatorSudoCommands).options
-    && directProvisioningUnit.wantedBy == [ "multi-user.target" ]
-    &&
-      directProvisioningUnit.serviceConfig.ExecStart
-      == "${directMutationStation.secureBootRunner}/bin/kaiba-rpi5-development-secure-boot provision"
-    && directProvisioningUnit.serviceConfig.StandardInput == "null"
-    && directProvisioningUnit.serviceConfig.Restart == "no"
-    && directProvisioningUnit.serviceConfig.Type == "oneshot"
-    && directProvisioningUnit.serviceConfig.RemainAfterExit
+    && !(builtins.hasAttr "kaiba-development-secure-boot" directConfig.systemd.services)
+    && lib.hasInfix "run: kaiba-secure-boot provision" directConfig.environment.etc.issue.text
+    && directConfig.i18n.defaultLocale == "C.UTF-8"
     && builtins.elem "d /var/lib/kaiba-development-secure-boot 0700 root root - -" directConfig.systemd.tmpfiles.rules
     && directConfig.swapDevices == [ ]
     && !directConfig.zramSwap.enable

@@ -5,7 +5,7 @@ Raspberry Pi 5 v0.1.6 payload. It intentionally contains no private key,
 signer, PIN, or signing provider.
 
 The root flake passes these files through the v0.1.6 signed-release recovery
-verifier before the unattended development secure-boot station can be built.
+verifier before the development secure-boot station can be built.
 That verifier binds the signatures, grants, receipts, payload source revision,
 customer-key hash, EEPROM hash, boot image, and RPIBOOT bundles.
 

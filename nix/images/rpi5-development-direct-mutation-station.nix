@@ -70,6 +70,8 @@ in
     useNetworkd = true;
   };
 
+  i18n.defaultLocale = "C.UTF-8";
+
   hardware = {
     enableAllHardware = lib.mkForce false;
     raspberry-pi.config.all.base-dt-params.strict_gpiod.enable = true;
@@ -154,24 +156,6 @@ in
       "d /var/lib/kaiba-development-secure-boot 0700 root root - -"
     ];
     services.register-nix-paths.enable = false;
-    services.kaiba-development-secure-boot = {
-      description = "Unattended Kaiba Raspberry Pi 5 development secure-boot provisioning";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "systemd-udev-settle.service" ];
-      wants = [ "systemd-udev-settle.service" ];
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = "${runner} provision";
-        User = "root";
-        Group = "root";
-        UMask = "0077";
-        StandardInput = "null";
-        StandardOutput = "journal+console";
-        StandardError = "journal+console";
-        Restart = "no";
-        RemainAfterExit = true;
-      };
-    };
   };
 
   environment = {
@@ -199,8 +183,9 @@ in
       "issue".text = ''
         Kaiba Raspberry Pi 5 development secure-boot station
         No signing or remote authority is present on this image.
-        Provisioning starts automatically. Plug in the fixed target and use BOOTSEL when the station is waiting.
-        Resume/status: kaiba-secure-boot status
+        Keep the target disconnected, then run: kaiba-secure-boot provision
+        The foreground command prints each physical action and detects USB transitions automatically.
+        Resume/status after interruption: kaiba-secure-boot status
 
       '';
       "kaiba-provisioning/source-revision".text = "${sourceRevision}\n";
