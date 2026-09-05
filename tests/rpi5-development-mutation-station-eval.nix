@@ -208,6 +208,10 @@ let
     && builtins.elem "kaiba-secure-boot-inventory" directSystemPackageNames
     && lib.isDerivation directOperatorCommand
     && directConfig.security.wrapperDir == "/run/wrappers/bin"
+    && directConfig.security.wrappers.sudo.enable
+    && directConfig.security.wrappers.sudo.owner == "root"
+    && directConfig.security.wrappers.sudo.group == "root"
+    && directConfig.security.wrappers.sudo.setuid
     && directOperatorCommand.kaibaSecureBootOperatorCommand.privilegeWrapper == "/run/wrappers/bin/sudo"
     && lib.hasPrefix "exec /run/wrappers/bin/sudo -- " directOperatorCommand.kaibaSecureBootOperatorCommand.script
     && !(lib.hasInfix "-sudo-" directOperatorCommand.kaibaSecureBootOperatorCommand.script)
