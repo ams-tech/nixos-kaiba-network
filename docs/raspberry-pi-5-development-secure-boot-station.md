@@ -16,13 +16,13 @@ USB-path, or UART-path overrides. It never asks for a typed
 irreversible-operation phrase; direct observation of the fixed USB path advances
 each physical transition.
 
-## v0.1.12 release image
+## v0.1.13 release image
 
-The v0.1.12 GitHub release contains exactly:
+The v0.1.13 GitHub release contains exactly:
 
 ```text
-kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst
-kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst.sha256
+kaiba-rpi5-development-secure-boot-station-v0.1.13.img.zst
+kaiba-rpi5-development-secure-boot-station-v0.1.13.img.zst.sha256
 ```
 
 Download and verify both files before writing the compressed image with
@@ -30,12 +30,12 @@ Raspberry Pi Imager or another Zstandard-aware disk writer:
 
 ```console
 curl --fail --location --remote-name \
-  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.12/kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst
+  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.13/kaiba-rpi5-development-secure-boot-station-v0.1.13.img.zst
 curl --fail --location --remote-name \
-  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.12/kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst.sha256
+  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.13/kaiba-rpi5-development-secure-boot-station-v0.1.13.img.zst.sha256
 sha256sum --check --strict \
-  kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst.sha256
-zstd --test kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst
+  kaiba-rpi5-development-secure-boot-station-v0.1.13.img.zst.sha256
+zstd --test kaiba-rpi5-development-secure-boot-station-v0.1.13.img.zst
 ```
 
 The sacrificial Pi's verified signed v0.1.6 target media must already be

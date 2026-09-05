@@ -175,6 +175,9 @@ let
   qualificationBindingContract = toString bindingGuardA != toString bindingGuardB;
   directConfig = directMutationStation.nixosSystem.config;
   directSystemPackageNames = map lib.getName directConfig.environment.systemPackages;
+  directOperatorCommand = lib.findFirst (
+    package: lib.getName package == "kaiba-secure-boot"
+  ) null directConfig.environment.systemPackages;
   directOperatorSudoCommands = builtins.concatMap (
     rule:
     if builtins.elem directMutationStation.metadata.operatorName (rule.users or [ ]) then
@@ -203,6 +206,11 @@ let
     && !directMutationStation.metadata.signingCapable
     && builtins.elem "kaiba-secure-boot" directSystemPackageNames
     && builtins.elem "kaiba-secure-boot-inventory" directSystemPackageNames
+    && lib.isDerivation directOperatorCommand
+    && directConfig.security.wrapperDir == "/run/wrappers/bin"
+    && directOperatorCommand.kaibaSecureBootOperatorCommand.privilegeWrapper == "/run/wrappers/bin/sudo"
+    && lib.hasPrefix "exec /run/wrappers/bin/sudo -- " directOperatorCommand.kaibaSecureBootOperatorCommand.script
+    && !(lib.hasInfix "-sudo-" directOperatorCommand.kaibaSecureBootOperatorCommand.script)
     && !(builtins.elem "kaiba-provision-lane-workflow" directSystemPackageNames)
     && !(builtins.elem "kaiba-mutation-release-binding" directSystemPackageNames)
     && builtins.length directOperatorSudoCommands == 1
