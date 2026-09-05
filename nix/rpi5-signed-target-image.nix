@@ -167,7 +167,7 @@ pkgs.runCommand name
     chmod 0444 "$archive"
     test -f "$archive"
     test ! -L "$archive"
-    readonly output_entries="$(find "$out" -mindepth 1 -maxdepth 1 -printf '%f\\n')"
+    readonly output_entries="$(find "$out" -mindepth 1 -maxdepth 1 -printf '%f\n')"
     printf 'verified output entry: %s\n' "$output_entries"
     test "$output_entries" = ${pkgs.lib.escapeShellArg imageFileName}
     echo 'signed target image archive verification complete'
