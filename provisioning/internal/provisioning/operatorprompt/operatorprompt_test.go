@@ -270,7 +270,10 @@ func TestConcurrentReplayOnlyOneAcknowledgementWins(t *testing.T) {
 
 func TestOnlyOneActivePromptAndCloseReleasesWaiter(t *testing.T) {
 	server, _ := testServer(t, fixedPeer())
-	prompt := testPrompt(t, testAction(laneguard.BootModeRPIBoot), KindHoldBOOTSEL, 3*time.Second)
+	// This test exercises active-prompt exclusion and server shutdown, not
+	// expiry. Keep the absolute deadline well clear of scheduler stalls on
+	// loaded native ARM CI runners.
+	prompt := testPrompt(t, testAction(laneguard.BootModeRPIBoot), KindHoldBOOTSEL, 30*time.Second)
 	result := presentAsync(server, prompt)
 	time.Sleep(10 * time.Millisecond)
 	if _, err := server.Present(context.Background(), prompt); !errors.Is(err, ErrPromptActive) {
