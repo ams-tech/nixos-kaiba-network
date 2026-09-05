@@ -24,6 +24,12 @@
       inputs.provisioning.follows = "provisioning";
     };
     v016Payload.url = "github:ams-tech/nixos-kaiba-network/8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
+    v017Recovery = {
+      url = "github:ams-tech/nixos-kaiba-network/e9925a3b2c080c67cec624e8ccae3dd17276fb75";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.nixos-raspberrypi.follows = "nixos-raspberrypi";
+      inputs.dns.follows = "dns";
+    };
   };
 
   outputs =
@@ -34,6 +40,7 @@
       provisioning,
       dns,
       v016Payload,
+      v017Recovery,
     }:
     let
       lib = nixpkgs.lib;
@@ -78,23 +85,23 @@
 
       v016PublicSignedInputs = {
         bootSignedOutput = builtins.path {
-          name = "kaiba-rpi5-v016-boot-signed";
+          name = "boot-signed";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/boot-signed;
         };
         eepromSignedOutput = builtins.path {
-          name = "kaiba-rpi5-v016-eeprom-signed";
+          name = "eeprom-signed";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/eeprom-signed;
         };
         ownedRecoverySignedOutput = builtins.path {
-          name = "kaiba-rpi5-v016-owned-recovery-signed";
+          name = "owned-recovery-signed";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/owned-recovery-signed;
         };
         signingGrantRegistry = builtins.path {
-          name = "kaiba-rpi5-v016-signing-grants.json";
+          name = "signing-grants.json";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-grants.json;
         };
         signingReceiptExport = builtins.path {
-          name = "kaiba-rpi5-v016-signing-receipts.json";
+          name = "signing-receipts.json";
           path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-receipts.json;
         };
       };
@@ -580,6 +587,8 @@
         operationalPayloadManifest = v016OperationalPayloadManifest;
         payload = v016Payload;
         publicSignedInputSource = v016PublicSignedInputSource;
+        recovery = v017Recovery;
+        recoverySourceRevision = "e9925a3b2c080c67cec624e8ccae3dd17276fb75";
         rpibootSysfsPath = "/sys/bus/usb/devices/1-1";
       };
       rpi5V016SignedTargetMedia = provisioning.lib.mkRpi5ProductionMedia {

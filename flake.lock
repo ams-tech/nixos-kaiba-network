@@ -301,13 +301,33 @@
         "v016Payload"
       ]
     },
+    "provisioning_3": {
+      "inputs": {
+        "nixpkgs": [
+          "v017Recovery",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./nix/provisioning",
+        "type": "path"
+      },
+      "original": {
+        "path": "./nix/provisioning",
+        "type": "path"
+      },
+      "parent": [
+        "v017Recovery"
+      ]
+    },
     "root": {
       "inputs": {
         "dns": "dns",
         "nixos-raspberrypi": "nixos-raspberrypi",
         "nixpkgs": "nixpkgs_2",
         "provisioning": "provisioning",
-        "v016Payload": "v016Payload"
+        "v016Payload": "v016Payload",
+        "v017Recovery": "v017Recovery"
       }
     },
     "v016Payload": {
@@ -329,6 +349,34 @@
         "owner": "ams-tech",
         "repo": "nixos-kaiba-network",
         "rev": "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598",
+        "type": "github"
+      }
+    },
+    "v017Recovery": {
+      "inputs": {
+        "dns": [
+          "dns"
+        ],
+        "nixos-raspberrypi": [
+          "nixos-raspberrypi"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "provisioning": "provisioning_3"
+      },
+      "locked": {
+        "lastModified": 1788235204,
+        "narHash": "sha256-UdIE8NuTBuX6tk2DTUo3g3uzso7VIZ5FePhNlnKACvk=",
+        "owner": "ams-tech",
+        "repo": "nixos-kaiba-network",
+        "rev": "e9925a3b2c080c67cec624e8ccae3dd17276fb75",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ams-tech",
+        "repo": "nixos-kaiba-network",
+        "rev": "e9925a3b2c080c67cec624e8ccae3dd17276fb75",
         "type": "github"
       }
     }
