@@ -102,6 +102,9 @@
         name = "kaiba-rpi5-v016-public-signed-input-source";
         path = ./provisioning/releases/rpi5-v0.1.6;
       };
+      v016OperationalPayloadManifest = builtins.fromJSON (
+        builtins.readFile ./provisioning/releases/rpi5-v0.1.6/operational-payload-manifest.json
+      );
 
       # Keep this list deliberately small and literal.  The target module
       # filters the kernel DTBs to the single supported Pi 5 Model B base file.
@@ -574,6 +577,7 @@
         fixed = self;
         fixedSourceRevision = defaultTargetSourceRevision;
         manualLaneQualificationDigest = "sha256:4ca8f4c40084311266e1a6f828a14b716eb73935079355044ecf1e6387b60c27";
+        operationalPayloadManifest = v016OperationalPayloadManifest;
         payload = v016Payload;
         publicSignedInputSource = v016PublicSignedInputSource;
         rpibootSysfsPath = "/sys/bus/usb/devices/1-1";

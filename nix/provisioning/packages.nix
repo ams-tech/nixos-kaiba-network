@@ -1096,6 +1096,7 @@ let
   # remains content-bound to the verified release.
   mkRpi5DevelopmentSecureBootOperationalPayload =
     {
+      operationalPayloadManifest,
       payloadSourceRevision,
       publicSignedInputSource,
       name ? "kaiba-rpi5-development-secure-boot-operational-payload",
@@ -1106,8 +1107,7 @@ let
       builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" payloadSourceRevision != null
     ) "development secure-boot payload revision must be canonical";
     let
-      manifestPath = "${publicSignedInputSource}/operational-payload-manifest.json";
-      manifest = builtins.fromJSON (builtins.readFile manifestPath);
+      manifest = operationalPayloadManifest;
       canonicalDigests = lib.all (value: builtins.match "sha256:[0-9a-f]{64}" value != null) [
         (manifest.release_intent_digest or "")
         (manifest.signed_release_manifest_digest or "")

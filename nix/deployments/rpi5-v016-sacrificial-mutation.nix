@@ -4,6 +4,7 @@
   fixed,
   fixedSourceRevision,
   manualLaneQualificationDigest,
+  operationalPayloadManifest,
   ownedRecoverySignedOutput,
   payload,
   publicSignedInputSource,
@@ -31,7 +32,7 @@ let
   unsignedContract = releaseContract.unsignedArtifacts.kaibaUnsignedArtifacts;
   operationalPayload = fixed.lib.mkRpi5DevelopmentSecureBootOperationalPayload {
     system = "aarch64-linux";
-    inherit payloadSourceRevision publicSignedInputSource;
+    inherit operationalPayloadManifest payloadSourceRevision publicSignedInputSource;
     name = "kaiba-rpi5-v016-development-secure-boot-operational-payload";
   };
   mutationStation = fixed.lib.mkRpi5DevelopmentDirectMutationStation {
