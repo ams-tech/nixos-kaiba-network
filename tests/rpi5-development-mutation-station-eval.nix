@@ -174,6 +174,7 @@ let
     && mismatchedUnsignedArtifactSourceRevisionRejected;
   qualificationBindingContract = toString bindingGuardA != toString bindingGuardB;
   directConfig = directMutationStation.nixosSystem.config;
+  directProvisioningUnit = directConfig.systemd.services.kaiba-development-secure-boot;
   directSystemPackageNames = map lib.getName directConfig.environment.systemPackages;
   directOperatorSudoCommands = builtins.concatMap (
     rule:
@@ -188,9 +189,16 @@ let
     && directConfig.image.baseName == "kaiba-rpi5-development-secure-boot-station"
     && lib.isDerivation directMutationStation.sdImage
     && directMutationStation.secureBootRunner ? kaibaDevelopmentSecureBoot
+    && directMutationStation.operationalPayload ? kaibaDevelopmentSecureBootOperationalPayload
+    &&
+      directMutationStation.secureBootRunner.kaibaDevelopmentSecureBoot.operationalPayload
+      == directMutationStation.operationalPayload
+    && !directMutationStation.operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.privateKeyAccess
+    && !directMutationStation.operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.signingCapable
     && !directMutationStation.secureBootRunner.kaibaDevelopmentSecureBoot.remoteAuthorityRequired
     && !directMutationStation.secureBootRunner.kaibaDevelopmentSecureBoot.signingCapable
-    && directMutationStation.metadata.command == "kaiba-secure-boot run"
+    && directMutationStation.metadata.command == "kaiba-secure-boot provision"
+    && directMutationStation.metadata.automaticAtBoot
     && !directMutationStation.metadata.remoteAuthorityRequired
     && !directMutationStation.metadata.signingCapable
     && builtins.elem "kaiba-secure-boot" directSystemPackageNames
@@ -201,6 +209,14 @@ let
     && lib.hasInfix "kaiba-rpi5-development-secure-boot" (builtins.head directOperatorSudoCommands)
     .command
     && builtins.elem "NOPASSWD" (builtins.head directOperatorSudoCommands).options
+    && directProvisioningUnit.wantedBy == [ "multi-user.target" ]
+    &&
+      directProvisioningUnit.serviceConfig.ExecStart
+      == "${directMutationStation.secureBootRunner}/bin/kaiba-rpi5-development-secure-boot provision"
+    && directProvisioningUnit.serviceConfig.StandardInput == "null"
+    && directProvisioningUnit.serviceConfig.Restart == "no"
+    && directProvisioningUnit.serviceConfig.Type == "oneshot"
+    && directProvisioningUnit.serviceConfig.RemainAfterExit
     && builtins.elem "d /var/lib/kaiba-development-secure-boot 0700 root root - -" directConfig.systemd.tmpfiles.rules
     && directConfig.swapDevices == [ ]
     && !directConfig.zramSwap.enable

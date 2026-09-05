@@ -169,10 +169,12 @@ Actions artifacts provide per-run history.
 
 Pushing a stable `vMAJOR.MINOR.PATCH` tag for a reviewed `main` commit runs
 `.github/workflows/release.yml`. After confirming that the commit's main-branch
-CI run succeeded, the workflow rebuilds the provisioning image from that exact
-tag on native ARM64, verifies the compressed archive, and publishes the image
-and its SHA-256 checksum in a GitHub release. See the [image release
-procedure](docs/raspberry-pi-5-provisioning-image.md#release-the-image).
+CI run succeeded, the workflow rebuilds the unattended development secure-boot
+station image from that exact tag on native ARM64, verifies the compressed
+archive, and publishes the image and its SHA-256 checksum in a GitHub release.
+This image can program OTP on its one compiled sacrificial Pi; it is not the
+read-only qualification image. See the [secure-boot station release and boot
+procedure](docs/raspberry-pi-5-development-secure-boot-station.md).
 
 ### Nix binary cache
 

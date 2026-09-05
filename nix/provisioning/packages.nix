@@ -1088,6 +1088,216 @@ let
       };
     };
 
+  # Reduce a completely verified signed release to the exact files needed by
+  # the development appliance. The build-time release dependency is
+  # intentional; the output contains no Nix-store references, so the target
+  # system, signing plans, and verification toolchain do not enter the image's
+  # runtime closure.
+  mkRpi5DevelopmentSecureBootOperationalPayload =
+    {
+      payloadSourceRevision,
+      verifiedSignedRelease,
+      name ? "kaiba-rpi5-development-secure-boot-operational-payload",
+    }:
+    assert lib.assertMsg (storeBacked verifiedSignedRelease)
+      "verifiedSignedRelease must be one fixed Nix-store path";
+    assert lib.assertMsg (
+      builtins.isAttrs verifiedSignedRelease && verifiedSignedRelease ? kaibaVerifiedSignedRelease
+    ) "verifiedSignedRelease must be produced by mkRpi5VerifiedSignedRelease";
+    assert lib.assertMsg (
+      builtins.match "([0-9a-f]{40}|[0-9a-f]{64})" payloadSourceRevision != null
+    ) "development secure-boot payload revision must be canonical";
+    let
+      releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
+      releaseIntentContract = releaseContract.releaseIntent.kaibaRpi5ReleaseIntent or { };
+      verifiedRPIBootBundles = releaseContract.verifiedRPIBootBundles or null;
+      verifiedReleaseContract =
+        (releaseContract.artifactRoleCount or null) == 18
+        && (releaseContract.authenticatedSigningReceiptCount or null) == 5
+        && (releaseContract.contentAddressedPublication or false)
+        && (releaseContract.verificationMode or "") == "pure_offline_replay"
+        && (releaseIntentContract.sourceRevision or null) == payloadSourceRevision
+        && builtins.match "sha256:[0-9a-f]{64}" (releaseIntentContract.publicKeyFingerprint or "") != null
+        && verifiedRPIBootBundles != null
+        && storeBacked verifiedRPIBootBundles
+        && builtins.isAttrs verifiedRPIBootBundles
+        && verifiedRPIBootBundles ? kaibaVerifiedRPIBootBundles
+        && lib.all (value: value == false) [
+          (releaseContract.blockDeviceWriteCapable or null)
+          (releaseContract.directHardwareAccess or null)
+          (releaseContract.eepromProgrammingCapable or null)
+          (releaseContract.mutationCapable or null)
+          (releaseContract.oneTimeSettingCapable or null)
+          (releaseContract.otpCapable or null)
+          (releaseContract.privateKeyAccess or null)
+        ];
+    in
+    assert lib.assertMsg verifiedReleaseContract
+      "verifiedSignedRelease does not expose the complete pure verified release contract";
+    pkgs.runCommand name
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.gnugrep
+          pkgs.jq
+        ];
+        passthru.kaibaDevelopmentSecureBootOperationalPayload = {
+          inherit payloadSourceRevision verifiedSignedRelease;
+          privateKeyAccess = false;
+          signingAuthorityConfigured = false;
+          signingCapable = false;
+        };
+      }
+      ''
+        set -euo pipefail
+        export LC_ALL=C
+
+        verified_release=${lib.escapeShellArg (toString verifiedSignedRelease)}
+        publication="$verified_release/publication.json"
+        test -f "$publication"
+        test ! -L "$publication"
+        test "$(jq -er .schema_version "$publication")" = \
+          kaiba.provisioning.rpi5-signed-release-publication/v1alpha1
+
+        manifest_digest="$(jq -er '
+          .signed_release_manifest_digest
+          | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$publication")"
+        manifest_hex="''${manifest_digest#sha256:}"
+        manifest_relative="$(jq -er --arg expected \
+          "manifests/sha256/$manifest_hex.json" \
+          '.manifest_path | select(. == $expected)' "$publication")"
+        manifest="$verified_release/$manifest_relative"
+        test -f "$manifest"
+        test ! -L "$manifest"
+        calculated_manifest_digest="sha256:$({
+          printf '%s\0' kaiba.provisioning.rpi5-signed-release-manifest.v1alpha2
+          head -c -1 "$manifest"
+        } | sha256sum | cut -d ' ' -f 1)"
+        test "$calculated_manifest_digest" = "$manifest_digest"
+
+        release_intent_digest="$(jq -er '
+          .release_intent_digest | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$manifest")"
+        expected_customer_key_hash="$(jq -er '
+          .expected_customer_key_hash | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$manifest")"
+        test "$expected_customer_key_hash" = \
+          ${lib.escapeShellArg releaseIntentContract.expectedCustomerKeyHash}
+
+        manifest_role() {
+          jq -ce --arg role "$1" --arg kind "$2" '
+            [.artifacts[] | select(.role == $role and .kind == $kind)]
+            | if length == 1 then .[0] else error("missing or duplicate manifest role") end
+          ' "$manifest"
+        }
+
+        boot_image="$(manifest_role rpi5.boot_image regular_file)"
+        signed_eeprom="$(manifest_role rpi5.signed_eeprom_image regular_file)"
+        fresh_commit="$(manifest_role rpi5.fresh_commit_bundle directory_tree)"
+        fresh_readback="$(manifest_role rpi5.fresh_readback_bundle directory_tree)"
+        owned_readback="$(manifest_role rpi5.owned_readback_bundle directory_tree)"
+
+        verified_bundles=${lib.escapeShellArg (toString verifiedRPIBootBundles)}
+        mkdir -p "$out"
+        for bundle in fresh-commit fresh-readback owned-readback; do
+          source_bundle="$verified_bundles/$bundle"
+          test -d "$source_bundle"
+          test ! -L "$source_bundle"
+          cp -R --no-preserve=mode,ownership "$source_bundle" "$out/$bundle"
+        done
+
+        find "$out" -type f -printf '%P\n' | sort > actual-files
+        printf '%s\n' \
+          fresh-commit/bootcode5.bin \
+          fresh-commit/config.txt \
+          fresh-commit/pieeprom.bin \
+          fresh-commit/pieeprom.sig \
+          fresh-readback/bootcode5.bin \
+          fresh-readback/config.txt \
+          owned-readback/bootcode5.bin \
+          owned-readback/config.txt \
+          | sort > expected-files
+        cmp expected-files actual-files
+
+        jq --null-input --sort-keys \
+          --arg schema_version kaiba.provisioning.rpi5-development-operational-payload/v1alpha1 \
+          --arg payload_source_revision ${lib.escapeShellArg payloadSourceRevision} \
+          --arg release_intent_digest "$release_intent_digest" \
+          --arg signed_release_manifest_digest "$manifest_digest" \
+          --arg public_key_fingerprint \
+            ${lib.escapeShellArg releaseIntentContract.publicKeyFingerprint} \
+          --arg expected_customer_key_hash "$expected_customer_key_hash" \
+          --argjson boot_image "$boot_image" \
+          --argjson signed_eeprom "$signed_eeprom" \
+          --argjson fresh_commit "$fresh_commit" \
+          --argjson fresh_readback "$fresh_readback" \
+          --argjson owned_readback "$owned_readback" '
+            def bundle($entry; $relative_path): {
+              role: $entry.role,
+              relative_path: $relative_path,
+              digest: $entry.digest,
+              size_bytes: $entry.size_bytes,
+              tree: $entry.tree
+            };
+            {
+              schema_version: $schema_version,
+              payload_source_revision: $payload_source_revision,
+              release_intent_digest: $release_intent_digest,
+              signed_release_manifest_digest: $signed_release_manifest_digest,
+              public_key_fingerprint: $public_key_fingerprint,
+              expected_customer_key_hash: $expected_customer_key_hash,
+              expected_eeprom_hash: $signed_eeprom.digest,
+              expected_boot_image_digest: $boot_image.digest,
+              bundles: [
+                bundle($fresh_commit; "fresh-commit"),
+                bundle($fresh_readback; "fresh-readback"),
+                bundle($owned_readback; "owned-readback")
+              ]
+            }
+          ' > "$out/manifest.json"
+
+        jq -er '
+          .bundles[]
+          | .relative_path as $directory
+          | .tree.entries[]
+          | [$directory + "/" + .path, (.size_bytes | tostring), .digest]
+          | @tsv
+        ' "$out/manifest.json" | while IFS=$'\t' read -r relative size digest; do
+          candidate="$out/$relative"
+          test -f "$candidate"
+          test ! -L "$candidate"
+          test "$(stat --format=%s "$candidate")" = "$size"
+          test "sha256:$(sha256sum "$candidate" | cut -d ' ' -f 1)" = "$digest"
+        done
+
+        if test -n "$(find "$out" -type l -print -quit)"; then
+          echo "operational payload contains a symbolic link" >&2
+          exit 1
+        fi
+        if test -n "$(find "$out" ! -type d ! -type f -print -quit)"; then
+          echo "operational payload contains an unsupported filesystem object" >&2
+          exit 1
+        fi
+        if grep --recursive --binary-files=text --extended-regexp \
+          -- '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----' "$out"
+        then
+          echo "operational payload contains private-key material" >&2
+          exit 1
+        fi
+        if grep --recursive --binary-files=text --extended-regexp \
+          -- '/nix/store/[0-9a-z]{32}-' "$out"
+        then
+          echo "operational payload retained a Nix-store reference" >&2
+          exit 1
+        fi
+
+        find "$out" -exec touch --date=@315532800 '{}' +
+        find "$out" -type d -exec chmod 0555 '{}' +
+        find "$out" -type f -exec chmod 0444 '{}' +
+      '';
+
   # A deliberately narrow development appliance for bringing one already
   # signed sacrificial Pi 5 across the secure-boot boundary. Unlike the
   # campaign lane guard, this has no authority bridge, approval protocol, or
@@ -1101,18 +1311,15 @@ let
       hardwareQualificationDigest,
       laneID,
       manualLaneQualificationDigest,
+      operationalPayload,
       payloadSourceRevision,
       stationID,
       stationSourceRevision,
       unfusedCompatibilityUARTDigest,
-      verifiedSignedRelease,
       name ? "kaiba-rpi5-development-secure-boot",
     }:
-    assert lib.assertMsg (storeBacked verifiedSignedRelease)
-      "verifiedSignedRelease must be one fixed Nix-store path";
-    assert lib.assertMsg (
-      builtins.isAttrs verifiedSignedRelease && verifiedSignedRelease ? kaibaVerifiedSignedRelease
-    ) "verifiedSignedRelease must be produced by mkRpi5VerifiedSignedRelease";
+    assert lib.assertMsg (storeBacked operationalPayload)
+      "operationalPayload must be one fixed Nix-store path";
     assert lib.assertMsg (
       builtins.match "sha256:[0-9a-f]{64}" expectedTargetFingerprint != null
     ) "expectedTargetFingerprint must be canonical";
@@ -1131,30 +1338,16 @@ let
       manualLaneQualificationDigest
       unfusedCompatibilityUARTDigest
     ]) "development secure-boot evidence digests must be canonical";
-    let
-      releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease;
-      verifiedRPIBootBundles = releaseContract.verifiedRPIBootBundles or null;
-      verifiedReleaseContract =
-        (releaseContract.artifactRoleCount or null) == 18
-        && (releaseContract.authenticatedSigningReceiptCount or null) == 5
-        && (releaseContract.contentAddressedPublication or false)
-        && (releaseContract.verificationMode or "") == "pure_offline_replay"
-        && verifiedRPIBootBundles != null
-        && storeBacked verifiedRPIBootBundles
-        && builtins.isAttrs verifiedRPIBootBundles
-        && verifiedRPIBootBundles ? kaibaVerifiedRPIBootBundles
-        && lib.all (value: value == false) [
-          (releaseContract.blockDeviceWriteCapable or null)
-          (releaseContract.directHardwareAccess or null)
-          (releaseContract.eepromProgrammingCapable or null)
-          (releaseContract.mutationCapable or null)
-          (releaseContract.oneTimeSettingCapable or null)
-          (releaseContract.otpCapable or null)
-          (releaseContract.privateKeyAccess or null)
-        ];
-    in
-    assert lib.assertMsg verifiedReleaseContract
-      "verifiedSignedRelease does not expose the complete pure verified release contract";
+    assert lib.assertMsg (
+      builtins.isAttrs operationalPayload
+      && operationalPayload ? kaibaDevelopmentSecureBootOperationalPayload
+      && !operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.privateKeyAccess
+      && !operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.signingAuthorityConfigured
+      && !operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.signingCapable
+      &&
+        operationalPayload.kaibaDevelopmentSecureBootOperationalPayload.payloadSourceRevision
+        == payloadSourceRevision
+    ) "operationalPayload must be the public factory-produced payload";
     pkgs.buildGoModule {
       pname = name;
       inherit version;
@@ -1164,7 +1357,7 @@ let
       doCheck = true;
       checkPhase = ''
         runHook preCheck
-        go test \
+        GOMAXPROCS=2 go test -p 2 -timeout 5m \
           ./cmd/kaiba-rpi5-development-secure-boot \
           ./internal/provisioning/physicalrpi5 \
           ./internal/provisioning/rpi5
@@ -1176,48 +1369,22 @@ let
         "-w"
       ];
       preBuild = ''
-        set -euo pipefail
+        # buildGoModule's build hook intentionally probes optional shell
+        # variables after preBuild, so do not leave nounset enabled here.
+        set -eo pipefail
 
-        verified_release=${lib.escapeShellArg (toString verifiedSignedRelease)}
-        publication="$verified_release/publication.json"
-        test -f "$publication"
-        test ! -L "$publication"
-        test "$(${pkgs.jq}/bin/jq -er .schema_version "$publication")" = \
-          kaiba.provisioning.rpi5-signed-release-publication/v1alpha1
-
-        manifest_digest="$(${pkgs.jq}/bin/jq -er '
-          .signed_release_manifest_digest
-          | select(test("^sha256:[0-9a-f]{64}$"))
-        ' "$publication")"
-        manifest_hex="$(printf '%s' "$manifest_digest" | cut -c 8-)"
-        manifest_relative="$(${pkgs.jq}/bin/jq -er --arg expected \
-          "manifests/sha256/$manifest_hex.json" \
-          '.manifest_path | select(. == $expected)' "$publication")"
-        manifest="$verified_release/$manifest_relative"
+        operational_payload=${lib.escapeShellArg (toString operationalPayload)}
+        manifest="$operational_payload/manifest.json"
         test -f "$manifest"
         test ! -L "$manifest"
-        test "$(tail -c 1 "$manifest" | od -An -tu1 | tr -d ' ')" = 10
-        calculated_manifest_digest="sha256:$({
-          printf '%s\0' kaiba.provisioning.rpi5-signed-release-manifest.v1alpha2
-          head -c -1 "$manifest"
-        } | sha256sum | cut -d ' ' -f 1)"
-        test "$calculated_manifest_digest" = "$manifest_digest"
         test "$(${pkgs.jq}/bin/jq -er .schema_version "$manifest")" = \
-          kaiba.provisioning.rpi5-signed-release-manifest/v1alpha2
+          kaiba.provisioning.rpi5-development-operational-payload/v1alpha1
+        test "$(${pkgs.jq}/bin/jq -er .payload_source_revision "$manifest")" = \
+          ${lib.escapeShellArg payloadSourceRevision}
 
-        manifest_role_digest() {
-          ${pkgs.jq}/bin/jq -er --arg role "$1" --arg kind "$2" '
-            [.artifacts[]
-              | select(.role == $role and .kind == $kind)
-              | .digest
-              | select(test("^sha256:[0-9a-f]{64}$"))]
-            | if length == 1 then .[0] else error("missing or duplicate manifest role") end
-          ' "$manifest"
-        }
-
-        fresh_commit_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/fresh-commit"}
-        fresh_readback_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/fresh-readback"}
-        owned_readback_bundle=${lib.escapeShellArg "${toString verifiedRPIBootBundles}/owned-readback"}
+        fresh_commit_bundle="$operational_payload/fresh-commit"
+        fresh_readback_bundle="$operational_payload/fresh-readback"
+        owned_readback_bundle="$operational_payload/owned-readback"
         for bundle_path in \
           "$fresh_commit_bundle" \
           "$fresh_readback_bundle" \
@@ -1229,8 +1396,15 @@ let
         expected_customer_key_hash="$(${pkgs.jq}/bin/jq -er '
           .expected_customer_key_hash | select(test("^sha256:[0-9a-f]{64}$"))
         ' "$manifest")"
-        expected_eeprom_hash="$(manifest_role_digest rpi5.signed_eeprom_image regular_file)"
-        expected_boot_image_digest="$(manifest_role_digest rpi5.boot_image regular_file)"
+        expected_eeprom_hash="$(${pkgs.jq}/bin/jq -er '
+          .expected_eeprom_hash | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$manifest")"
+        expected_boot_image_digest="$(${pkgs.jq}/bin/jq -er '
+          .expected_boot_image_digest | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$manifest")"
+        manifest_digest="$(${pkgs.jq}/bin/jq -er '
+          .signed_release_manifest_digest | select(test("^sha256:[0-9a-f]{64}$"))
+        ' "$manifest")"
 
         go_string() {
           ${pkgs.jq}/bin/jq -Rn --arg value "$1" '$value'
@@ -1267,11 +1441,11 @@ let
           hardwareQualificationDigest
           laneID
           manualLaneQualificationDigest
+          operationalPayload
           payloadSourceRevision
           stationID
           stationSourceRevision
           unfusedCompatibilityUARTDigest
-          verifiedSignedRelease
           ;
         remoteAuthorityRequired = false;
         signingCapable = false;
@@ -1680,6 +1854,7 @@ in
     mkRpi5EEPROMReleaseSigningInputs
     mkRpi5EEPROMSigningPlan
     mkRpi5PhysicalLaneGuard
+    mkRpi5DevelopmentSecureBootOperationalPayload
     mkRpi5DevelopmentSecureBootRunner
     mkRpi5ProductionMedia
     mkRpi5MediaStagingFixture

@@ -28,15 +28,20 @@ let
   releaseContract = verifiedSignedRelease.kaibaVerifiedSignedRelease or { };
   releaseIntentContract = (releaseContract.releaseIntent or { }).kaibaRpi5ReleaseIntent or { };
   unsignedContract = (releaseContract.unsignedArtifacts or { }).kaibaUnsignedArtifacts or { };
+  operationalPayload = provisioning.lib.mkRpi5DevelopmentSecureBootOperationalPayload {
+    system = "aarch64-linux";
+    inherit payloadSourceRevision verifiedSignedRelease;
+    name = "kaiba-rpi5-v016-development-secure-boot-operational-payload";
+  };
   secureBootRunner = provisioning.lib.mkRpi5DevelopmentSecureBootRunner {
     system = "aarch64-linux";
     inherit
       hardwareQualificationDigest
       laneID
       manualLaneQualificationDigest
+      operationalPayload
       payloadSourceRevision
       stationID
-      verifiedSignedRelease
       ;
     expectedTargetFingerprint = acceptedTargetFingerprint;
     fixedRPIBootSysfsPath = rpibootSysfsPath;
@@ -90,7 +95,7 @@ assert lib.assertMsg (
   && (unsignedContract.sourceRevision or null) == payloadSourceRevision
 ) "the recovered release is not bound to the expected payload revision";
 {
-  inherit nixosSystem secureBootRunner;
+  inherit nixosSystem operationalPayload secureBootRunner;
   sdImage = nixosSystem.config.system.build.sdImage;
   system = nixosSystem.config.system.build.toplevel;
   metadata = {
@@ -100,6 +105,7 @@ assert lib.assertMsg (
       laneID
       manualLaneQualificationDigest
       manualLaneQualificationSourceRevision
+      operationalPayload
       operatorName
       payloadSourceRevision
       rpibootSysfsPath
@@ -108,7 +114,8 @@ assert lib.assertMsg (
       uartPath
       unfusedCompatibilityUARTDigest
       ;
-    command = "kaiba-secure-boot run";
+    command = "kaiba-secure-boot provision";
+    automaticAtBoot = true;
     enableMutations = true;
     powerControl = "manual";
     remoteAuthorityRequired = false;

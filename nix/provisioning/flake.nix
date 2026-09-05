@@ -70,6 +70,12 @@
           { system, ... }@args:
           (packagesFor system).mkRpi5DevelopmentSecureBootRunner (builtins.removeAttrs args [ "system" ]);
 
+        mkRpi5DevelopmentSecureBootOperationalPayload =
+          { system, ... }@args:
+          (packagesFor system).mkRpi5DevelopmentSecureBootOperationalPayload (
+            builtins.removeAttrs args [ "system" ]
+          );
+
         mkRpi5BootSigningPlan =
           { system, ... }@args:
           (packagesFor system).mkRpi5BootSigningPlan (builtins.removeAttrs args [ "system" ]);

@@ -23,6 +23,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.provisioning.follows = "provisioning";
     };
+    v016Payload.url = "github:ams-tech/nixos-kaiba-network/8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
   };
 
   outputs =
@@ -32,6 +33,7 @@
       nixos-raspberrypi,
       provisioning,
       dns,
+      v016Payload,
     }:
     let
       lib = nixpkgs.lib;
@@ -73,6 +75,33 @@
           sourceRevision
         else
           throw "mkRpi5SecureBootTarget requires a clean Git source or an explicit canonical sourceRevision";
+
+      v016PublicSignedInputs = {
+        bootSignedOutput = builtins.path {
+          name = "kaiba-rpi5-v016-boot-signed";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/boot-signed;
+        };
+        eepromSignedOutput = builtins.path {
+          name = "kaiba-rpi5-v016-eeprom-signed";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/eeprom-signed;
+        };
+        ownedRecoverySignedOutput = builtins.path {
+          name = "kaiba-rpi5-v016-owned-recovery-signed";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/owned-recovery-signed;
+        };
+        signingGrantRegistry = builtins.path {
+          name = "kaiba-rpi5-v016-signing-grants.json";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-grants.json;
+        };
+        signingReceiptExport = builtins.path {
+          name = "kaiba-rpi5-v016-signing-receipts.json";
+          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-receipts.json;
+        };
+      };
+      v016PublicSignedInputSource = builtins.path {
+        name = "kaiba-rpi5-v016-public-signed-input-source";
+        path = ./provisioning/releases/rpi5-v0.1.6;
+      };
 
       # Keep this list deliberately small and literal.  The target module
       # filters the kernel DTBs to the single supported Pi 5 Model B base file.
@@ -531,6 +560,21 @@
             verifiedSignedRelease
             ;
         };
+
+      rpi5V016DirectMutationDeployment = import ./nix/deployments/rpi5-v016-sacrificial-mutation.nix {
+        inherit (v016PublicSignedInputs)
+          bootSignedOutput
+          eepromSignedOutput
+          ownedRecoverySignedOutput
+          signingGrantRegistry
+          signingReceiptExport
+          ;
+        fixed = self;
+        fixedSourceRevision = defaultTargetSourceRevision;
+        manualLaneQualificationDigest = "sha256:4ca8f4c40084311266e1a6f828a14b716eb73935079355044ecf1e6387b60c27";
+        payload = v016Payload;
+        rpibootSysfsPath = "/sys/bus/usb/devices/1-1";
+      };
     in
     {
       nixosModules = {
@@ -636,6 +680,7 @@
             ;
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
+          rpi5-development-secure-boot-station-sd-image = rpi5V016DirectMutationDeployment.image;
           rpi5-provisioning-sd-image = rpi5ProvisioningSystem.config.system.build.sdImage;
           rpi5-prototype-unsigned-artifacts = rpi5PrototypeRelease.unsignedArtifacts;
         }
@@ -664,6 +709,46 @@
           development-yubikey-signing = provisioning.checks.${system}.development-yubikey-signing;
           device-profile-schema = provisioning.checks.${system}.device-profile-schema;
           rpi5-development-posture = provisioning.checks.${system}.rpi5-development-posture;
+          rpi5-v016-public-signed-inputs =
+            pkgs.runCommand "kaiba-rpi5-v016-public-signed-inputs-check"
+              {
+                nativeBuildInputs = with pkgs.buildPackages; [
+                  coreutils
+                  findutils
+                  gnugrep
+                ];
+              }
+              ''
+                set -euo pipefail
+                export LC_ALL=C
+
+                release=${v016PublicSignedInputSource}
+                cd "$release"
+                sha256sum --check --strict SHA256SUMS
+
+                file_count="$(find signed-inputs -type f | wc -l)"
+                if test "$file_count" -ne 12; then
+                  echo "expected exactly 12 public signed input files, found $file_count" >&2
+                  exit 1
+                fi
+                if test -n "$(find signed-inputs -type l -print -quit)"; then
+                  echo "public signed inputs contain a symbolic link" >&2
+                  exit 1
+                fi
+                if test -n "$(find signed-inputs ! -type d ! -type f -print -quit)"; then
+                  echo "public signed inputs contain an unsupported filesystem object" >&2
+                  exit 1
+                fi
+                if grep --recursive --binary-files=text --extended-regexp \
+                  -- '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----' signed-inputs
+                then
+                  echo "public signed inputs contain private-key material" >&2
+                  exit 1
+                fi
+
+                mkdir -p "$out"
+                touch "$out/passed"
+              '';
           rpi5-probe-bundle = provisioning.checks.${system}.rpi5-probe-bundle;
           module-eval = moduleEval;
           provisioning-test-result = provisioning.checks.${system}.provisioning-test-result;
@@ -903,7 +988,10 @@
         }
       );
 
-      nixosConfigurations.rpi5-provisioning-station = rpi5ProvisioningSystem;
+      nixosConfigurations = {
+        rpi5-development-secure-boot-station = rpi5V016DirectMutationDeployment.mutationStation.nixosSystem;
+        rpi5-provisioning-station = rpi5ProvisioningSystem;
+      };
 
       apps.x86_64-linux.dns-test-driver = dns.apps.x86_64-linux.dns-test-driver;
 

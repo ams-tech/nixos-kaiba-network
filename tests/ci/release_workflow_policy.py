@@ -20,6 +20,18 @@ REMOTE_TAG_OBJECT_QUERY = "--jq '[.sha, .object.type, .object.sha] | @tsv'"
 MAIN_LINEAGE_CHECK = (
     'if ! git merge-base --is-ancestor "$SOURCE_REVISION" origin/main; then'
 )
+DIRECT_IMAGE_TARGET = (
+    ".#packages.aarch64-linux."
+    "rpi5-development-secure-boot-station-sd-image"
+)
+DIRECT_IMAGE_SOURCE = (
+    "provisioning-image/sd-image/"
+    "kaiba-rpi5-development-secure-boot-station.img.zst"
+)
+DIRECT_IMAGE_NAME = (
+    'image_name="kaiba-rpi5-development-secure-boot-station-'
+    '${RELEASE_TAG}.img.zst"'
+)
 
 
 def fail(message: str) -> None:
@@ -57,6 +69,29 @@ def main() -> None:
         fail("main-lineage and annotated-tag checks must follow checkout and precede Nix")
     if workflow.count("persist-credentials: false") != 2:
         fail("both checkouts must disable persisted GitHub credentials")
+
+    build_target = require_once(workflow, DIRECT_IMAGE_TARGET)
+    source_image = require_once(workflow, DIRECT_IMAGE_SOURCE)
+    image_names = [
+        match.start()
+        for match in re.finditer(re.escape(DIRECT_IMAGE_NAME), workflow)
+    ]
+    if len(image_names) != 2:
+        fail(
+            "the exact direct station release filename must appear in both "
+            f"jobs, found {len(image_names)}"
+        )
+    if not (
+        install_nix
+        < build_target
+        < source_image
+        < image_names[0]
+        < publish_checkout
+        < image_names[1]
+    ):
+        fail("the direct station build, source path, and release names are out of order")
+    if ".#packages.aarch64-linux.rpi5-provisioning-sd-image" in workflow:
+        fail("the release workflow still builds the read-only qualification image")
 
     remote_guard_call = require_once(workflow, REMOTE_GUARD_COMMAND)
     require_once(workflow, REMOTE_GUARD_ARGUMENTS)
