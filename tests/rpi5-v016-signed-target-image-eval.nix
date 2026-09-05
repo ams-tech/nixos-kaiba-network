@@ -8,7 +8,7 @@
 
 let
   contract = image.kaibaRpi5SignedTargetImage;
-  mediaContract = contract.productionMedia.kaibaRpi5ProductionMedia;
+  unsignedContract = contract.unsignedArtifacts.kaibaUnsignedArtifacts;
   imageContract =
     lib.isDerivation image
     && contract.imageFileName == "kaiba-rpi5-development-secure-boot-target.img.zst"
@@ -18,30 +18,34 @@ let
     && contract.wholeDeviceImage
     && contract.compressed
     && contract.payloadSourceRevision == payloadSourceRevision
-    && contract.expectedBootImageDigest == expectedBootImageDigest;
+    && contract.expectedBootImageDigest == expectedBootImageDigest
+    &&
+      contract.expectedArchiveDigest
+      == "sha256:c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a"
+    &&
+      contract.expectedMediaDigest
+      == "sha256:9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5";
   authorityContract =
     !contract.directHardwareAccess
     && !contract.mutationCapable
     && !contract.privateKeyAccess
     && !contract.signingAuthorityConfigured
     && !contract.signingCapable
-    && !mediaContract.blockDeviceWriteCapable
-    && !mediaContract.directHardwareAccess
-    && !mediaContract.signingAuthorityConfigured;
-  mediaContractValid =
-    mediaContract.transactionID == "release:rpi5-v0.1.6-signed-target:1"
-    && mediaContract.targetGeometry.sizeBytes == contract.imageSizeBytes
-    && mediaContract.targetGeometry.logicalSectorSizeBytes == contract.logicalSectorSizeBytes
-    && mediaContract.verificationMode == "pure_offline_plan_derivation"
-    && lib.isDerivation mediaContract.fixtureStager
-    && lib.isDerivation mediaContract.regularVerifier
-    && lib.isDerivation mediaContract.softwareCheck;
+    && !unsignedContract.blockDeviceWriteCapable
+    && !unsignedContract.directHardwareAccess
+    && !unsignedContract.signingAuthorityConfigured;
+  sourceContractValid =
+    lib.isDerivation contract.unsignedArtifacts
+    && unsignedContract.schemaVersion == "provisioning.kaiba.network/unsigned-artifact-set/v1alpha1"
+    && unsignedContract.sourceRevision == payloadSourceRevision
+    && unsignedContract.signingStatus == "unsigned"
+    && contract.inputVerificationMode == "pinned_unsigned_artifacts_plus_checked_signed_boot";
 in
 assert lib.assertMsg imageContract "the v0.1.6 signed target image identity or geometry changed";
 assert lib.assertMsg authorityContract
   "the v0.1.6 signed target image unexpectedly carries authority";
-assert lib.assertMsg mediaContractValid
-  "the v0.1.6 signed target image lost its verified production-media lineage";
+assert lib.assertMsg sourceContractValid
+  "the v0.1.6 signed target image lost its pinned target-only input lineage";
 pkgs.runCommand "kaiba-rpi5-v016-signed-target-image-eval" { } ''
   mkdir -p "$out"
   touch "$out/passed"

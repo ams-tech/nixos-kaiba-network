@@ -591,25 +591,18 @@
         recoverySourceRevision = "e9925a3b2c080c67cec624e8ccae3dd17276fb75";
         rpibootSysfsPath = "/sys/bus/usb/devices/1-1";
       };
-      rpi5V016SignedTargetMedia = provisioning.lib.mkRpi5ProductionMedia {
-        system = "aarch64-linux";
-        verifiedSignedRelease = rpi5V016DirectMutationDeployment.recoveredSignedRelease;
-        transactionID = "release:rpi5-v0.1.6-signed-target:1";
-        target = {
-          # A 3 GiB image fits nominal 4 GB SD cards while retaining a fixed,
-          # independently verified backup GPT and immutable dm-verity layout.
-          sizeBytes = 3 * 1024 * 1024 * 1024;
-          logicalSectorSizeBytes = 512;
-        };
-        hardwareConfiguration =
-          provisioning.lib.hardwareConfigurations.malakRaspberryPi5SacrificialDevelopmentUsbSd;
-        name = "kaiba-rpi5-v016-signed-target-media";
-      };
       rpi5V016SignedTargetImage = import ./nix/rpi5-signed-target-image.nix {
+        bootSignedOutput = v016PublicSignedInputs.bootSignedOutput;
+        expectedArchiveDigest = "sha256:c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a";
         pkgs = import nixpkgs { system = "aarch64-linux"; };
-        productionMedia = rpi5V016SignedTargetMedia;
+        unsignedArtifacts = v016Payload.packages.aarch64-linux.rpi5-prototype-unsigned-artifacts;
         payloadSourceRevision = "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
         expectedBootImageDigest = v016OperationalPayloadManifest.expected_boot_image_digest;
+        expectedBootSignatureDigest = "sha256:f3a71792962c153db56bb317a82ba9d7354feb474cbb34484a7751009b8b83f9";
+        expectedMediaDigest = "sha256:9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5";
+        expectedRootDataDigest = "sha256:4c0898995e6562cb4be8244b9aa410df64a9c8b7c748990b0f753c9f68b0d0ad";
+        expectedRootHashDigest = "sha256:6443329ece3c73f32bdfc7f986c46778b8f80dbb6ecf8238acf4f06a01ec65a2";
+        expectedRootIntegrityDigest = "sha256:093618422f01ec7aec8578f8f27001b6ec7b8734c1fcc2343c57997ff4da73fb";
       };
     in
     {
