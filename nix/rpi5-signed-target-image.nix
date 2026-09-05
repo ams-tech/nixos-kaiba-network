@@ -137,10 +137,15 @@ pkgs.runCommand name
       local path="$1"
       local size="$2"
       local digest="$3"
+      local actual_size actual_digest
       test -f "$path"
       test ! -L "$path"
-      test "$(stat --format=%s "$path")" -eq "$size"
-      test "sha256:$(sha256sum "$path" | cut -d ' ' -f 1)" = "$digest"
+      actual_size="$(stat --format=%s "$path")"
+      actual_digest="sha256:$(sha256sum "$path" | cut -d ' ' -f 1)"
+      printf 'verified public input: %s expected=%s/%s actual=%s/%s\n' \
+        "$(basename "$path")" "$size" "$digest" "$actual_size" "$actual_digest"
+      test "$actual_size" -eq "$size"
+      test "$actual_digest" = "$digest"
     }
 
     verify_regular "$unsigned_manifest" 2099 \
