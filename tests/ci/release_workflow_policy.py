@@ -21,7 +21,7 @@ MAIN_LINEAGE_CHECK = (
     'if ! git merge-base --is-ancestor "$SOURCE_REVISION" origin/main; then'
 )
 DIRECT_IMAGE_TARGET = (
-    ".#packages.x86_64-linux."
+    ".#packages.aarch64-linux."
     "rpi5-v016-signed-target-sd-image"
 )
 DIRECT_IMAGE_SOURCE = (

@@ -592,7 +592,7 @@
         rpibootSysfsPath = "/sys/bus/usb/devices/1-1";
       };
       rpi5V016SignedTargetMedia = provisioning.lib.mkRpi5ProductionMedia {
-        system = "x86_64-linux";
+        system = "aarch64-linux";
         verifiedSignedRelease = rpi5V016DirectMutationDeployment.recoveredSignedRelease;
         transactionID = "release:rpi5-v0.1.6-signed-target:1";
         target = {
@@ -606,7 +606,7 @@
         name = "kaiba-rpi5-v016-signed-target-media";
       };
       rpi5V016SignedTargetImage = import ./nix/rpi5-signed-target-image.nix {
-        pkgs = import nixpkgs { system = "x86_64-linux"; };
+        pkgs = import nixpkgs { system = "aarch64-linux"; };
         productionMedia = rpi5V016SignedTargetMedia;
         payloadSourceRevision = "8e9f1d5cd97ff46d8b56b1128251ca70b7fec598";
         expectedBootImageDigest = v016OperationalPayloadManifest.expected_boot_image_digest;
@@ -700,7 +700,6 @@
         // lib.optionalAttrs (system == "x86_64-linux") {
           development-signing = developmentSigning.signing;
           kaiba-provision-signing-ceremony = developmentSigningCeremonyFor system;
-          rpi5-v016-signed-target-sd-image = rpi5V016SignedTargetImage;
           rpi5-prototype-eeprom-signing-inputs = rpi5PrototypeRelease.eepromSigningInputs;
           rpi5-prototype-eeprom-signing-plan = rpi5PrototypeRelease.eepromSigningPlan;
           rpi5-prototype-release-intent = rpi5PrototypeRelease.releaseIntent;
@@ -719,6 +718,7 @@
         // lib.optionalAttrs (system == "aarch64-linux") {
           rpi5-development-secure-boot-station-sd-image = rpi5V016DirectMutationDeployment.image;
           rpi5-provisioning-sd-image = rpi5ProvisioningSystem.config.system.build.sdImage;
+          rpi5-v016-signed-target-sd-image = rpi5V016SignedTargetImage;
           rpi5-prototype-unsigned-artifacts = rpi5PrototypeRelease.unsignedArtifacts;
         }
       );

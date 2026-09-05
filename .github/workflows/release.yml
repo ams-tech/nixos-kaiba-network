@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build-image:
     name: Build the Raspberry Pi 5 signed secure-boot target image
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
       - name: Validate the release tag
@@ -61,7 +61,7 @@ jobs:
         run: |
           nix --accept-flake-config build -L \
             --out-link target-image \
-            .#packages.x86_64-linux.rpi5-v016-signed-target-sd-image
+            .#packages.aarch64-linux.rpi5-v016-signed-target-sd-image
 
       - name: Stage and verify the release assets
         env:

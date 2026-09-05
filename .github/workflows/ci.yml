@@ -96,29 +96,11 @@ jobs:
             ./nix/dns#checks.x86_64-linux.module-eval \
             ./nix/dns#checks.x86_64-linux.report-unit
 
-      - name: Build and verify the signed target SD image
-        run: |
-          nix --accept-flake-config build -L \
-            --out-link signed-target-image \
-            .#packages.x86_64-linux.rpi5-v016-signed-target-sd-image
-          image=signed-target-image/kaiba-rpi5-development-secure-boot-target.img.zst
-          if [[ -L "$image" || ! -f "$image" ]]; then
-            echo "::error title=Image unavailable::Expected one regular image at $image."
-            exit 1
-          fi
-          zstd --test "$image"
-          image_size="$(stat --format=%s "$image")"
-          if (( image_size >= 2147483648 )); then
-            echo "::error title=Image too large::The compressed image exceeds GitHub's 2 GiB release-asset limit."
-            exit 1
-          fi
-          sha256sum "$image"
-
   aarch64-packages:
     name: ARM64 production packages
     needs: quality
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 60
     outputs:
       provisioning_receipt_sha256: ${{ steps.provisioning_receipt.outputs.sha256 }}
     steps:
@@ -166,6 +148,24 @@ jobs:
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-pages
+
+      - name: Build and verify the signed target SD image
+        run: |
+          nix --accept-flake-config build -L \
+            --out-link signed-target-image \
+            .#packages.aarch64-linux.rpi5-v016-signed-target-sd-image
+          image=signed-target-image/kaiba-rpi5-development-secure-boot-target.img.zst
+          if [[ -L "$image" || ! -f "$image" ]]; then
+            echo "::error title=Image unavailable::Expected one regular image at $image."
+            exit 1
+          fi
+          zstd --test "$image"
+          image_size="$(stat --format=%s "$image")"
+          if (( image_size >= 2147483648 )); then
+            echo "::error title=Image too large::The compressed image exceeds GitHub's 2 GiB release-asset limit."
+            exit 1
+          fi
+          sha256sum "$image"
 
       - name: Build the native provisioning test result
         run: nix build ./nix/provisioning#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L
