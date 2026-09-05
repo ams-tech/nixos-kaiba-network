@@ -155,13 +155,20 @@ pkgs.runCommand name
     readonly archive="$out/${imageFileName}"
     emit_image | zstd --compress --threads=2 -10 --no-progress -o "$archive"
     zstd --test "$archive"
-    test "sha256:$(zstd --decompress --stdout "$archive" | sha256sum | cut -d ' ' -f 1)" = \
-      "$expected_media_digest"
-    test "$(zstd --decompress --stdout "$archive" | wc --bytes)" -eq "$target_size"
+    readonly decompressed_digest="sha256:$(
+      zstd --decompress --stdout "$archive" | sha256sum | cut -d ' ' -f 1
+    )"
+    readonly decompressed_size="$(zstd --decompress --stdout "$archive" | wc --bytes)"
+    printf 'verified archive digest: %s\n' "$decompressed_digest"
+    printf 'verified archive size: %s bytes\n' "$decompressed_size"
+    test "$decompressed_digest" = "$expected_media_digest"
+    test "$decompressed_size" -eq "$target_size"
 
     chmod 0444 "$archive"
     test -f "$archive"
     test ! -L "$archive"
-    test "$(find "$out" -mindepth 1 -maxdepth 1 -printf '%f\\n')" = \
-      ${pkgs.lib.escapeShellArg imageFileName}
+    readonly output_entries="$(find "$out" -mindepth 1 -maxdepth 1 -printf '%f\\n')"
+    printf 'verified output entry: %s\n' "$output_entries"
+    test "$output_entries" = ${pkgs.lib.escapeShellArg imageFileName}
+    echo 'signed target image archive verification complete'
   ''
