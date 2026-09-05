@@ -10,8 +10,6 @@
 let
   contract = productionMedia.kaibaRpi5ProductionMedia or { };
   targetGeometry = contract.targetGeometry or { };
-  fixtureStager = contract.fixtureStager or null;
-  regularVerifier = contract.regularVerifier or null;
   canonicalDigest =
     value: builtins.isString value && builtins.match "sha256:[0-9a-f]{64}" value != null;
   canonicalRevision =
@@ -25,8 +23,8 @@ assert contract.signingAuthorityConfigured or null == false;
 assert builtins.isInt (targetGeometry.sizeBytes or null);
 assert targetGeometry.sizeBytes == 3 * 1024 * 1024 * 1024;
 assert targetGeometry.logicalSectorSizeBytes or null == 512;
-assert fixtureStager != null;
-assert regularVerifier != null;
+assert contract.fixtureStager or null != null;
+assert contract.regularVerifier or null != null;
 assert canonicalDigest expectedBootImageDigest;
 assert canonicalRevision payloadSourceRevision;
 assert builtins.match "[a-z0-9.-]+\\.img\\.zst" imageFileName != null;
@@ -34,10 +32,9 @@ pkgs.runCommand name
   {
     nativeBuildInputs = [
       pkgs.coreutils
+      pkgs.cryptsetup
       pkgs.jq
       pkgs.zstd
-      fixtureStager
-      regularVerifier
     ];
     preferLocalBuild = true;
     passthru.kaibaRpi5SignedTargetImage = {
@@ -70,10 +67,12 @@ pkgs.runCommand name
     umask 022
 
     readonly plan=${productionMedia}/plan.json
-    readonly target="$TMPDIR/kaiba-rpi5-development-secure-boot-target.img"
-    readonly fixture_result="$TMPDIR/fixture-result.json"
-    readonly verification_report="$TMPDIR/verification-report.json"
     readonly target_size=${toString targetGeometry.sizeBytes}
+    readonly primary_gpt=${productionMedia}/primary-gpt.img
+    readonly boot_filesystem=${productionMedia}/boot-filesystem.img
+    readonly root_data=${contract.rootDataSource}
+    readonly root_hash=${contract.rootHashSource}
+    readonly backup_gpt=${productionMedia}/backup-gpt.img
 
     test -f "$plan"
     test ! -L "$plan"
@@ -85,49 +84,80 @@ pkgs.runCommand name
       | .digest
     ' "$plan")" = ${pkgs.lib.escapeShellArg expectedBootImageDigest}
 
-    truncate --size="$target_size" "$target"
-    kaiba-provision-media-fixture-stager stage \
-      --plan "$plan" \
-      --target "$target" \
-      --result "$fixture_result"
-
-    jq -e \
-      --arg expected "$(cat ${productionMedia}/expected-media-digest)" '
-        .status == "fixture_staged_and_reopened"
-        and .evidence_mode == "regular_file_fixture"
-        and .full_media_digest == $expected
-        and .reopened_target == true
-        and .block_device_access == false
-        and .hardware_observed == false
-        and .security_enforced == false
-        and .mutation_eligible == false
-      ' "$fixture_result" > /dev/null
-
-    kaiba-provision-media-verifier verify-regular-file \
-      --plan "$plan" \
-      --target "$target" > "$verification_report"
-    jq -e '
-      .gpt_verified == true
-      and .fat_verified == true
-      and .partition_digests_verified == true
-      and .dm_verity_verified == true
-      and .boot_signature_verified == true
-      and .release_lineage_verified == true
-      and .hardware_observed == false
-      and .security_enforced == false
-      and .mutation_eligible == false
-    ' "$verification_report" > /dev/null
-
-    readonly actual_media_digest="sha256:$(sha256sum "$target" | cut -d ' ' -f 1)"
     readonly expected_media_digest="$(cat ${productionMedia}/expected-media-digest)"
+    readonly primary_size="$(stat --format=%s "$primary_gpt")"
+    readonly boot_size="$(stat --format=%s "$boot_filesystem")"
+    readonly root_data_size="$(stat --format=%s "$root_data")"
+    readonly root_hash_size="$(stat --format=%s "$root_hash")"
+    readonly backup_size="$(stat --format=%s "$backup_gpt")"
+    readonly root_data_partition_size="$(jq -er '
+      .layout.partitions[] | select(.role == "root-data") | .size_bytes
+    ' "$plan")"
+    readonly root_hash_partition_size="$(jq -er '
+      .layout.partitions[] | select(.role == "root-hash") | .size_bytes
+    ' "$plan")"
+    readonly tail_size="$(jq -er '
+      .layout.regions[] | select(.role == "tail-zero") | .size_bytes
+    ' "$plan")"
+
+    verify_source() {
+      local role="$1"
+      local path="$2"
+      local expected_size expected_digest
+      expected_size="$(jq -er --arg role "$role" '
+        .layout.sources[] | select(.role == $role) | .size_bytes
+      ' "$plan")"
+      expected_digest="$(jq -er --arg role "$role" '
+        .layout.sources[] | select(.role == $role) | .digest
+      ' "$plan")"
+      test -f "$path"
+      test ! -L "$path"
+      test "$(stat --format=%s "$path")" -eq "$expected_size"
+      test "sha256:$(sha256sum "$path" | cut -d ' ' -f 1)" = "$expected_digest"
+    }
+    verify_source primary-gpt "$primary_gpt"
+    verify_source boot-filesystem "$boot_filesystem"
+    verify_source root-data "$root_data"
+    verify_source root-hash "$root_hash"
+    verify_source backup-gpt "$backup_gpt"
+
+    test "$root_data_size" -le "$root_data_partition_size"
+    test "$root_hash_size" -le "$root_hash_partition_size"
+    test $((
+      primary_size
+      + boot_size
+      + root_data_partition_size
+      + root_hash_partition_size
+      + tail_size
+      + backup_size
+    )) -eq "$target_size"
+
+    readonly verity_root_hash="$(jq -er '
+      .layout.verity.root_hash | sub("^sha256:"; "")
+    ' "$plan")"
+    veritysetup verify "$root_data" "$root_hash" "$verity_root_hash"
+
+    emit_image() {
+      cat "$primary_gpt"
+      cat "$boot_filesystem"
+      cat "$root_data"
+      head --bytes=$((root_data_partition_size - root_data_size)) /dev/zero
+      cat "$root_hash"
+      head --bytes=$((root_hash_partition_size - root_hash_size)) /dev/zero
+      head --bytes="$tail_size" /dev/zero
+      cat "$backup_gpt"
+    }
+
+    readonly actual_media_digest="sha256:$(emit_image | sha256sum | cut -d ' ' -f 1)"
     test "$actual_media_digest" = "$expected_media_digest"
 
     mkdir -p "$out"
     readonly archive="$out/${imageFileName}"
-    zstd --compress --threads=2 -10 --no-progress "$target" --output "$archive"
+    emit_image | zstd --compress --threads=2 -10 --no-progress --output "$archive"
     zstd --test "$archive"
     test "sha256:$(zstd --decompress --stdout "$archive" | sha256sum | cut -d ' ' -f 1)" = \
       "$expected_media_digest"
+    test "$(zstd --decompress --stdout "$archive" | wc --bytes)" -eq "$target_size"
 
     chmod 0444 "$archive"
     test -f "$archive"
