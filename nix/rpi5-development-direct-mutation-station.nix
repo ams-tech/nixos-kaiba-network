@@ -121,7 +121,8 @@ assert lib.assertMsg (
       unfusedCompatibilityUARTDigest
       ;
     command = "kaiba-secure-boot provision";
-    automaticAtBoot = true;
+    automaticAtBoot = false;
+    execution = "operator_foreground";
     enableMutations = true;
     powerControl = "manual";
     remoteAuthorityRequired = false;

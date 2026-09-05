@@ -1,4 +1,4 @@
-name: Release unattended secure-boot provisioning image
+name: Release operator-started secure-boot provisioning image
 
 on:
   push:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build-image:
-    name: Build the Raspberry Pi 5 unattended secure-boot station image
+    name: Build the Raspberry Pi 5 operator-started secure-boot station image
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
@@ -57,7 +57,7 @@ jobs:
             extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
           github_access_token: ${{ github.token }}
 
-      - name: Build the unattended secure-boot station SD image
+      - name: Build the operator-started secure-boot station SD image
         run: |
           nix --accept-flake-config build -L \
             --out-link provisioning-image \
@@ -131,7 +131,7 @@ jobs:
           image="release-assets/$image_name"
           checksum="$image.sha256"
           checksum_name="$image_name.sha256"
-          release_title="Kaiba unattended secure-boot provisioning image $RELEASE_TAG"
+          release_title="Kaiba operator-started secure-boot provisioning image $RELEASE_TAG"
 
           mapfile -d '' assets < <(find release-assets -mindepth 1 -maxdepth 1 -print0)
           if (( ${#assets[@]} != 2 )); then
@@ -157,13 +157,14 @@ jobs:
             sha256sum --check --strict "$image_name.sha256"
           )
 
-          release_marker="Raspberry Pi 5 unattended secure-boot provisioning-station SD image built from commit ${SOURCE_REVISION}."
+          release_marker="Raspberry Pi 5 operator-started secure-boot provisioning-station SD image built from commit ${SOURCE_REVISION}."
           release_notes="$release_marker
 
           This development image is mutation-capable for one fixed sacrificial
           Raspberry Pi 5, USB lane, and UART adapter. It contains the verified
           public v0.1.6 signed payload and no signing key. Boot the provisioning
-          Pi with the target disconnected; the service starts automatically."
+          Pi with the target disconnected, then run \`kaiba-secure-boot
+          provision\` at the autologin shell."
 
           verify_remote_tag() {
             bash scripts/ci/verify_remote_release_tag.sh \

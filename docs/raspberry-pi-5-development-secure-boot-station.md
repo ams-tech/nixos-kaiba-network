@@ -7,20 +7,22 @@ then prove that the signed system boots.
 It does not contain a signer, a signing credential, a remote authority bridge,
 or an approval workflow. The v0.1.6 signed release, target fingerprint,
 RPIBOOT USB path, and receive-only UART path are compiled into one local
-runner. A root service starts that runner automatically when the station boots.
+runner. The operator starts that runner in the foreground after the station
+boots.
 
-There is no service to activate and no root shell procedure. The installed
-wrapper has permission to execute only the fixed runner, and the runner accepts
-no artifact, target, USB-path, or UART-path overrides. The automatic path has
-no stdin and never asks for Enter or a typed irreversible-operation phrase.
+There is no provisioning systemd service. The installed wrapper has permission
+to execute only the fixed runner, and the runner accepts no artifact, target,
+USB-path, or UART-path overrides. It never asks for a typed
+irreversible-operation phrase; direct observation of the fixed USB path advances
+each physical transition.
 
-## v0.1.11 release image
+## v0.1.12 release image
 
-The v0.1.11 GitHub release contains exactly:
+The v0.1.12 GitHub release contains exactly:
 
 ```text
-kaiba-rpi5-development-secure-boot-station-v0.1.11.img.zst
-kaiba-rpi5-development-secure-boot-station-v0.1.11.img.zst.sha256
+kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst
+kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst.sha256
 ```
 
 Download and verify both files before writing the compressed image with
@@ -28,12 +30,12 @@ Raspberry Pi Imager or another Zstandard-aware disk writer:
 
 ```console
 curl --fail --location --remote-name \
-  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.11/kaiba-rpi5-development-secure-boot-station-v0.1.11.img.zst
+  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.12/kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst
 curl --fail --location --remote-name \
-  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.11/kaiba-rpi5-development-secure-boot-station-v0.1.11.img.zst.sha256
+  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.12/kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst.sha256
 sha256sum --check --strict \
-  kaiba-rpi5-development-secure-boot-station-v0.1.11.img.zst.sha256
-zstd --test kaiba-rpi5-development-secure-boot-station-v0.1.11.img.zst
+  kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst.sha256
+zstd --test kaiba-rpi5-development-secure-boot-station-v0.1.12.img.zst
 ```
 
 The sacrificial Pi's verified signed v0.1.6 target media must already be
@@ -42,9 +44,15 @@ target media and contains no private key or signing capability.
 
 ## Physical interface
 
-Boot the station with the target disconnected. Provisioning starts
-automatically. Watch the station console and perform the physical transitions
-when its `WAITING` messages describe the state it is observing:
+Boot the station with the target disconnected. At the autologin shell, start
+the foreground workflow:
+
+```console
+kaiba-secure-boot provision
+```
+
+Leave that command running and perform the physical transitions when its
+`WAITING` messages describe the state it is observing:
 
 1. Hold BOOTSEL and connect the target to the fixed provisioning USB lane for
    the read-only blank-state observation. Release BOOTSEL once RPIBOOT appears.
@@ -55,10 +63,11 @@ when its `WAITING` messages describe the state it is observing:
 4. Disconnect provisioning USB, leave BOOTSEL untouched, and start the target
    normally with the verified signed v0.1.6 SD card installed.
 
-The service advances from direct USB disappearance and exact-path reappearance,
-not from console input. The second exact RPIBOOT connection is the physical
-trigger for applying the signed payload, but only after the first connection
-returned the compiled target fingerprint and a blank customer-key state.
+The foreground command advances from direct USB disappearance and exact-path
+reappearance, not from console input. The second exact RPIBOOT connection is
+the physical trigger for applying the signed payload, but only after the first
+connection returned the compiled target fingerprint and a blank customer-key
+state.
 
 The command succeeds only after it observes the expected customer-key hash,
 rejects any conflicting EEPROM hash, and receives exactly one
@@ -96,7 +105,7 @@ permits another explicitly started commit attempt; every other result remains
 stopped.
 
 Then run `kaiba-secure-boot provision` to finish the readback and signed UART
-boot. The normal boot-time service does not automatically reconcile or repeat
-an uncertain commit.
+boot. No boot-time service automatically reconciles or repeats an uncertain
+commit.
 
 `kaiba-secure-boot inventory` prints the compiled release and lane identity.
