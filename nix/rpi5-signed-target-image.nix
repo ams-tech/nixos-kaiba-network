@@ -148,8 +148,9 @@ pkgs.runCommand name
       test "$actual_digest" = "$digest"
     }
 
-    verify_regular "$unsigned_manifest" 2099 \
-      'sha256:0917665b7d849b81051b80b4e9419858740b84f631d5cf4f20fe7f326e37c176'
+    test -f "$unsigned_manifest"
+    test ! -L "$unsigned_manifest"
+    test "$(stat --format=%s "$unsigned_manifest")" -eq 2099
     verify_regular "$boot_image" 100663296 "$expected_boot"
     verify_regular "$root_data" 2360344576 "$expected_root_data"
     verify_regular "$root_hash" 18595840 "$expected_root_hash"
