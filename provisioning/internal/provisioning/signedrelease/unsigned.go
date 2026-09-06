@@ -20,10 +20,13 @@ const (
 )
 
 var (
-	sourceRevisionPattern     = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-	versionPattern            = regexp.MustCompile(`^[ -~]{1,128}$`)
-	uuidPattern               = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	partUUIDPattern           = regexp.MustCompile(`^PARTUUID=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	sourceRevisionPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+	versionPattern        = regexp.MustCompile(`^[ -~]{1,128}$`)
+	uuidPattern           = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	partUUIDPattern       = regexp.MustCompile(`^PARTUUID=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	// Keep the already-signed v0.1.6 profile valid while admitting one separate,
+	// exact profile for development USB access. Neither profile permits an
+	// arbitrary overlay or an unordered superset.
 	reviewedFirmwareAllowlist = []string{
 		"config.txt",
 		"kaiba-root-integrity.json",
@@ -33,6 +36,18 @@ var (
 		"nixos/default/kernel.img",
 		"nixos/default/overlays/README",
 		"nixos/default/overlays/bcm2712d0.dtbo",
+		"nixos/default/overlays/overlay_map.dtb",
+	}
+	reviewedDevelopmentAccessFirmwareAllowlist = []string{
+		"config.txt",
+		"kaiba-root-integrity.json",
+		"nixos/default/bcm2712-rpi-5-b.dtb",
+		"nixos/default/cmdline.txt",
+		"nixos/default/initrd",
+		"nixos/default/kernel.img",
+		"nixos/default/overlays/README",
+		"nixos/default/overlays/bcm2712d0.dtbo",
+		"nixos/default/overlays/dwc2.dtbo",
 		"nixos/default/overlays/overlay_map.dtb",
 	}
 )
@@ -127,13 +142,9 @@ func (m unsignedArtifactSet) validate() error {
 		m.BootCommandLinePath != "nixos/default/cmdline.txt" {
 		return errors.New("unsigned artifact set does not use a recognized boot policy and fixed command-line path")
 	}
-	if len(m.FirmwareAllowlist) != len(reviewedFirmwareAllowlist) {
-		return errors.New("unsigned firmware_allowlist is not the fixed reviewed set")
-	}
-	for index := range reviewedFirmwareAllowlist {
-		if m.FirmwareAllowlist[index] != reviewedFirmwareAllowlist[index] {
-			return errors.New("unsigned firmware_allowlist is not the fixed reviewed set")
-		}
+	if !matchesFirmwareAllowlist(m.FirmwareAllowlist, reviewedFirmwareAllowlist) &&
+		!matchesFirmwareAllowlist(m.FirmwareAllowlist, reviewedDevelopmentAccessFirmwareAllowlist) {
+		return errors.New("unsigned firmware_allowlist is not a recognized fixed reviewed set")
 	}
 	if m.BootImageSizeBytes < 32*1024*1024 || m.BootImageSizeBytes > 96*1024*1024 {
 		return errors.New("unsigned boot_image_size_bytes is outside the reviewed 32-96 MiB range")
@@ -172,6 +183,18 @@ func (m unsignedArtifactSet) validate() error {
 		return errors.New("unsigned dm-verity parameters are not canonical")
 	}
 	return nil
+}
+
+func matchesFirmwareAllowlist(actual, expected []string) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	for index := range expected {
+		if actual[index] != expected[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m unsignedArtifactSet) validateEEPROMBootConfig(config []byte) error {

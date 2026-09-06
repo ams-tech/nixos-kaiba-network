@@ -214,6 +214,22 @@ func TestUnsignedArtifactSetRequiresReviewedD0OverlayFiles(t *testing.T) {
 	})
 }
 
+func TestUnsignedArtifactSetAcceptsReviewedDevelopmentAccessOverlay(t *testing.T) {
+	valid, err := parseUnsignedArtifactSet(validUnsignedArtifactSet(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid.FirmwareAllowlist = append([]string(nil), reviewedDevelopmentAccessFirmwareAllowlist...)
+	if err := valid.validate(); err != nil {
+		t.Fatalf("development-access firmware allowlist error=%v, want accepted", err)
+	}
+
+	valid.FirmwareAllowlist[8] = "nixos/default/overlays/unreviewed.dtbo"
+	if err := valid.validate(); err == nil || !strings.Contains(err.Error(), "firmware_allowlist") {
+		t.Fatalf("development-access firmware allowlist with substituted overlay error=%v, want rejection", err)
+	}
+}
+
 func TestUnsignedArtifactSetRequiresDistinctCanonicalPARTUUIDSelectors(t *testing.T) {
 	valid, err := parseUnsignedArtifactSet(validUnsignedArtifactSet(t))
 	if err != nil {
