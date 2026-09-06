@@ -217,6 +217,7 @@ pkgs.runCommand "kaiba-rpi5-secure-boot-target-evaluation"
     readonly firmware=${target.firmwareTree}
     readonly kernel_dtbs=${cfg.hardware.deviceTree.dtbSource}
     readonly root_image=${target.rootImage}
+    readonly etc_tree="$(readlink -f ${target.system}/etc)"
     readonly dbus_unit="$(readlink -f ${target.system}/etc/systemd/system/dbus.service)"
 
     (
@@ -238,8 +239,13 @@ pkgs.runCommand "kaiba-rpi5-secure-boot-target-evaluation"
     test ! -L "$TMPDIR/etc/machine-id"
     test ! -s "$TMPDIR/etc/machine-id"
     test "$(stat --format=%a "$TMPDIR/etc/machine-id")" = 444
+    # The EROFS layer carries metadata only; regular-file payloads come from
+    # the immutable lower /etc tree.
+    test -f "$TMPDIR/etc/ssh/authorized_keys.d/codex"
+    test ! -L "$TMPDIR/etc/ssh/authorized_keys.d/codex"
+    test "$(stat --format=%a "$TMPDIR/etc/ssh/authorized_keys.d/codex")" = 444
     grep -Fx ${lib.escapeShellArg developmentAccessKey} \
-      "$TMPDIR/etc/ssh/authorized_keys.d/codex" > /dev/null
+      "$etc_tree/ssh/authorized_keys.d/codex" > /dev/null
 
     for stage1_mountpoint in dev proc run sys; do
       debugfs -R "stat /$stage1_mountpoint" "$root_image" 2>&1 \
