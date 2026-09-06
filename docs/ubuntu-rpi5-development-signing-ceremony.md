@@ -113,12 +113,14 @@ or hardware operation. It always stops at the human boundaries in the role
 model above. The detailed commands below remain the auditable reference and
 the required path for those manual boundaries.
 
-## 1. Pin the new release everywhere
+## 1. Pin the release source and reserve the tag name everywhere
 
 Perform this check independently on each checkout used by the preparer,
 reviewer, signing operator, and offline verifier. Replace the two quoted
-values. `EXPECTED_COMMIT` must come from the approved, green post-merge release,
-not from the local tag lookup alone.
+values. `EXPECTED_COMMIT` must come from the approved, green post-merge release.
+When the final annotated tag binds the completed media archive, that tag must
+not exist yet; the ceremony reserves its stable name while binding all signing
+inputs directly to the immutable commit.
 
 ```console
 set -euo pipefail
@@ -132,11 +134,10 @@ test "${#EXPECTED_COMMIT}" -eq 40
 test -z "${EXPECTED_COMMIT//[0-9a-f]/}"
 
 git fetch upstream main --tags
-test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
-test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$EXPECTED_COMMIT"
+test -z "$(git tag --list "$RELEASE_TAG")"
 git merge-base --is-ancestor "$EXPECTED_COMMIT" upstream/main
 
-git switch --detach "$RELEASE_TAG"
+git switch --detach "$EXPECTED_COMMIT"
 test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
 test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
@@ -180,7 +181,7 @@ test -x "$CEREMONY_TOOL/bin/kaiba-provision-signing-ceremony"
 
 "$CEREMONY_TOOL/bin/kaiba-provision-signing-ceremony" prepare-public \
   --repository "$REPOSITORY_ROOT" \
-  --release-tag "$RELEASE_TAG" \
+  --planned-release-tag "$RELEASE_TAG" \
   --expected-commit "$EXPECTED_COMMIT" \
   --main-ref upstream/main \
   --ceremony-dir "$CEREMONY_DIR"
@@ -966,12 +967,15 @@ cat "$SIGNED_RELEASE/publication-digest"
 
 At this point the software-only ceremony is complete. Preserve the approval,
 registry, live results, receipt digests, authenticated receipt export, offline
-verification, publication digest, exact tag, and exact commit as the release
-evidence set. Keep the automated ceremony directory, including its indirect GC
-roots, until those records and the final release have been retained under the
-reviewed evidence policy. The resulting release is ready for a separately authorized
-sacrificial-board test plan; it is not authority to write NVMe, program EEPROM,
-change OTP/JTAG posture, or promote the development signer to production.
+verification, publication digest, reserved tag name, and exact commit as the
+release evidence set. Create the final annotated tag only after the whole-disk
+archive exists, using the repository's release-binding format to bind that
+archive to this same commit. Keep the automated ceremony directory, including
+its indirect GC roots, until those records and the final release have been
+retained under the reviewed evidence policy. The resulting release is ready
+for a separately authorized sacrificial-board test plan; it is not authority
+to write NVMe, program EEPROM, change OTP/JTAG posture, or promote the
+development signer to production.
 
 ## 12. Recovery from a software-only finalizer defect
 

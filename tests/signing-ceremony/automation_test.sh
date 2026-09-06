@@ -500,6 +500,32 @@ expect_failure 'release tag does not identify the independently supplied commit'
   --ceremony-dir "$work/wrong-commit"
 [[ ! -s "$invocations" ]] || fail 'wrong commit reached Nix'
 
+expect_failure 'planned release tag must not exist before artifact binding' \
+  prepare-public \
+  --repository "$repository" \
+  --planned-release-tag v1.2.3 \
+  --expected-commit "$commit" \
+  --main-ref origin/main \
+  --ceremony-dir "$work/existing-planned-tag"
+[[ ! -s "$invocations" ]] || fail 'existing planned tag reached Nix'
+
+planned_ceremony="$work/planned-ceremony"
+expect_failure 'unsigned-artifacts build failed with status 23' \
+  prepare-public \
+  --repository "$repository" \
+  --planned-release-tag v1.2.6 \
+  --expected-commit "$commit" \
+  --main-ref origin/main \
+  --ceremony-dir "$planned_ceremony"
+jq --exit-status \
+  --arg commit "$commit" \
+  '.release_tag == "v1.2.6"
+   and .release_tag_state == "planned"
+   and .source_revision == $commit' \
+  "$planned_ceremony/ceremony.json" >/dev/null ||
+  fail 'planned ceremony session is not bound to the reserved tag and exact source'
+: > "$invocations"
+
 printf '%s\n' dirty > "$repository/untracked"
 expect_failure 'checkout must be clean' \
   prepare-public \
@@ -526,6 +552,7 @@ jq --exit-status \
   --arg commit "$commit" \
   '.schema_version == "kaiba.provisioning.development-signing-ceremony-session/v1alpha1"
    and .release_tag == "v1.2.3"
+   and .release_tag_state == "published"
    and .source_revision == $commit' \
   "$ceremony/ceremony.json" >/dev/null || fail 'ceremony session is not bound to the exact release'
 [[ -f "$ceremony/logs/unsigned-artifacts.attempt-1.log" ]] || fail 'first failed build log was not retained'
