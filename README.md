@@ -168,25 +168,35 @@ the homepage, canonical report, and station simulation together; the retained
 Actions artifacts provide per-run history.
 
 Pushing a stable `vMAJOR.MINOR.PATCH` tag for a reviewed `main` commit runs
-`.github/workflows/release.yml`. After confirming that the commit's main-branch
-CI run succeeded, the workflow rebuilds the operator-started development
-secure-boot station image from that exact tag on native ARM64, verifies the
-compressed archive, and publishes the image and its SHA-256 checksum in a
-GitHub release.
-This image can program OTP on its one compiled sacrificial Pi; it is not the
-read-only qualification image. See the [secure-boot station release and boot
-procedure](docs/raspberry-pi-5-development-secure-boot-station.md).
-The next signed sacrificial-target build exposes the separately documented
+`.github/workflows/release.yml`. A read-only job first validates the tagged
+revision and its immutable image binding. A narrowly scoped fetch job then uses
+repository-contents write permission to read the otherwise private draft
+release, without checking out the repository or invoking its scripts, and
+passes the unverified image through a one-day Actions artifact. A job with all
+`GITHUB_TOKEN` permissions disabled verifies the bound archive digest, media
+digest, and size on native ARM64 before a separate publication job confirms
+the successful main-branch CI run, rechecks the archive binding, and publishes
+the image and its SHA-256 checksum.
+The temporary artifact is visible to repository readers, so it must contain no
+secret material. The target image contains no signing key or signing
+capability; install it only after the designated sacrificial Pi completes the
+qualification path. See the
+[secure-boot station release and boot procedure](docs/raspberry-pi-5-development-secure-boot-station.md).
+The signed sacrificial-target image exposes the separately documented
 [development USB SSH and software RPIBOOT interface](docs/raspberry-pi-5-development-target-access.md).
 
 ### Nix binary cache
 
 The Nix-building jobs use the public `nixos-kaiba-network` Cachix cache. Pull
 access is public. Pull requests, manual runs, the provisioning-image job, and
-the release workflow are read-only; only reusable package and check outputs
-from a protected `main` push may be published. This keeps image archives out of
-the project cache and prevents an untrusted workflow trigger from receiving a
-write token. The workflows pin the verified cache signing key
+the release validation job are read-only; image verification has all
+`GITHUB_TOKEN` permissions disabled. Only reusable package and check outputs
+from a protected `main` push may be published to the cache. The release
+workflow confines write permission for repository contents to its no-checkout
+draft fetch and its post-verification
+publication job. This keeps image archives out of the project cache and
+prevents an untrusted workflow trigger from receiving the cache write token.
+The workflows pin the verified cache signing key
 `nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=`.
 
 Before enabling this workflow configuration, a repository administrator must:
@@ -232,8 +242,11 @@ Enable the site once in **Settings → Pages → Build and deployment** by selec
 normalized evidence public, including for some private-repository plans. All
 referenced actions are pinned to immutable commit SHAs. Test jobs keep read-only
 repository access; only the main-only deployment job receives Pages write and
-OIDC token permissions, and only the isolated release-publication job receives
-repository-contents write permission.
+OIDC token permissions. In the release workflow, repository-contents write
+permission is limited to the isolated publication job after verification and a
+draft-image fetch job that never checks out the repository or invokes its
+scripts; the workflow uses that permission only to fetch and hand the image to
+the verifier with all `GITHUB_TOKEN` permissions disabled.
 
 ## Device API
 
