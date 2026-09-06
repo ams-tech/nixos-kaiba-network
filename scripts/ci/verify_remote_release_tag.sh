@@ -2,14 +2,15 @@
 
 set -euo pipefail
 
-if (( $# != 3 )); then
-  echo "usage: verify_remote_release_tag.sh GH_REPO RELEASE_TAG SOURCE_REVISION" >&2
+if (( $# != 4 )); then
+  echo "usage: verify_remote_release_tag.sh GH_REPO RELEASE_TAG SOURCE_REVISION EXPECTED_TAG_OBJECT_SHA" >&2
   exit 2
 fi
 
 gh_repo="$1"
 release_tag="$2"
 source_revision="$3"
+expected_tag_object_sha="$4"
 
 if [[ ! "$gh_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
   echo "::error title=Invalid repository::The GitHub repository name is malformed."
@@ -21,6 +22,10 @@ if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]
 fi
 if [[ ! "$source_revision" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
   echo "::error title=Invalid source revision::The release source revision is malformed."
+  exit 1
+fi
+if [[ ! "$expected_tag_object_sha" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+  echo "::error title=Invalid tag object::The expected release tag object ID is malformed."
   exit 1
 fi
 
@@ -35,6 +40,10 @@ IFS=$'\t' read -r remote_ref remote_tag_type tag_object_sha <<< "$ref_fields"
 if [[ "$remote_ref" != "refs/tags/$release_tag" || "$remote_tag_type" != tag ]] || \
   [[ ! "$tag_object_sha" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
   echo "::error title=Annotated release tag required::$release_tag is not a valid annotated tag ref."
+  exit 1
+fi
+if [[ "$tag_object_sha" != "$expected_tag_object_sha" ]]; then
+  echo "::error title=Release tag replaced::$release_tag no longer names the verified tag object."
   exit 1
 fi
 

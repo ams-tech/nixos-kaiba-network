@@ -17,6 +17,8 @@ jobs:
     name: Build the Raspberry Pi 5 signed secure-boot target image
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
+    outputs:
+      tag_object_sha: ${{ steps.image-binding.outputs.tag_object_sha }}
     steps:
       - name: Validate the release tag
         env:
@@ -48,8 +50,30 @@ jobs:
           SOURCE_REVISION: ${{ github.sha }}
         run: bash scripts/ci/verify_release_tag.sh "$RELEASE_TAG" "$SOURCE_REVISION" origin/main
 
+      - name: Read the immutable release image binding
+        id: image-binding
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          binding="$(
+            bash scripts/ci/read_release_image_binding.sh \
+              "$RELEASE_TAG" "$SOURCE_REVISION"
+          )"
+          IFS=$'\t' read -r archive_sha256 media_sha256 archive_size_bytes tag_object_sha \
+            <<< "$binding"
+          {
+            echo "archive_sha256=$archive_sha256"
+            echo "media_sha256=$media_sha256"
+            echo "archive_size_bytes=$archive_size_bytes"
+            echo "tag_object_sha=$tag_object_sha"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Await, stage, and verify the prebuilt release image
         env:
+          EXPECTED_ARCHIVE_SHA256: ${{ steps.image-binding.outputs.archive_sha256 }}
+          EXPECTED_ARCHIVE_SIZE_BYTES: ${{ steps.image-binding.outputs.archive_size_bytes }}
+          EXPECTED_MEDIA_SHA256: ${{ steps.image-binding.outputs.media_sha256 }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
@@ -77,20 +101,18 @@ jobs:
           fi
           zstd --test "$source_image"
 
-          expected_archive_sha256=c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a
-          if [[ "$(sha256sum "$source_image" | cut -d ' ' -f 1)" != "$expected_archive_sha256" ]]; then
+          if [[ "$(sha256sum "$source_image" | cut -d ' ' -f 1)" != "$EXPECTED_ARCHIVE_SHA256" ]]; then
             echo "::error title=Archive digest mismatch::The uploaded image is not the verified target archive."
             exit 1
           fi
 
-          expected_media_sha256=9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5
-          if [[ "$(zstd --decompress --stdout "$source_image" | sha256sum | cut -d ' ' -f 1)" != "$expected_media_sha256" ]]; then
+          if [[ "$(zstd --decompress --stdout "$source_image" | sha256sum | cut -d ' ' -f 1)" != "$EXPECTED_MEDIA_SHA256" ]]; then
             echo "::error title=Media digest mismatch::The uploaded archive does not contain the verified target image."
             exit 1
           fi
 
           image_size="$(stat --format=%s "$source_image")"
-          if (( image_size != 1166253581 || image_size >= 2147483648 )); then
+          if (( image_size != EXPECTED_ARCHIVE_SIZE_BYTES || image_size >= 2147483648 )); then
             echo "::error title=Image size mismatch::The uploaded image has an unexpected size."
             exit 1
           fi
@@ -140,6 +162,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
           SOURCE_REVISION: ${{ github.sha }}
+          EXPECTED_TAG_OBJECT_SHA: ${{ needs.build-image.outputs.tag_object_sha }}
         run: |
           image_name="kaiba-rpi5-development-secure-boot-target-${RELEASE_TAG}.img.zst"
           image="release-assets/$image_name"
@@ -174,14 +197,17 @@ jobs:
           release_marker="Raspberry Pi 5 signed secure-boot target SD image verified for release at commit ${SOURCE_REVISION}."
           release_notes="$release_marker
 
-          This development target image contains the verified public v0.1.6
-          signed boot payload and dm-verity root, with no signing key or
-          signing capability. Write it to a 4 GB-or-larger SD card, install it
-          in the provisioned target Pi, and boot normally with BOOTSEL untouched."
+          This development target image contains the signed boot payload and
+          dm-verity root built from ${SOURCE_REVISION}. It enables the fixed
+          development-only USB SSH interface documented by that revision and
+          contains no signing key or signing capability. Write it to a 4
+          GB-or-larger SD card, install it in the provisioned target Pi, and
+          boot normally with BOOTSEL untouched."
 
           verify_remote_tag() {
             bash scripts/ci/verify_remote_release_tag.sh \
-              "$GH_REPO" "$RELEASE_TAG" "$SOURCE_REVISION"
+              "$GH_REPO" "$RELEASE_TAG" "$SOURCE_REVISION" \
+              "$EXPECTED_TAG_OBJECT_SHA"
           }
 
           verify_remote_tag

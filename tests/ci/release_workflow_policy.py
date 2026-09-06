@@ -12,7 +12,11 @@ GUARD_COMMAND = (
     '"$SOURCE_REVISION" origin/main'
 )
 REMOTE_GUARD_COMMAND = "bash scripts/ci/verify_remote_release_tag.sh"
-REMOTE_GUARD_ARGUMENTS = '"$GH_REPO" "$RELEASE_TAG" "$SOURCE_REVISION"'
+REMOTE_GUARD_ARGUMENTS = (
+    '"$GH_REPO" "$RELEASE_TAG" "$SOURCE_REVISION" \\\n'
+    '              "$EXPECTED_TAG_OBJECT_SHA"'
+)
+BINDING_COMMAND = "bash scripts/ci/read_release_image_binding.sh"
 REMOTE_TAG_REF_ENDPOINT = '"repos/$gh_repo/git/ref/tags/$release_tag"'
 REMOTE_TAG_OBJECT_ENDPOINT = '"repos/$gh_repo/git/tags/$tag_object_sha"'
 REMOTE_TAG_REF_QUERY = "--jq '[.ref, .object.type, .object.sha] | @tsv'"
@@ -59,21 +63,55 @@ def main() -> None:
     full_checkout = require_once(workflow, "fetch-depth: 0")
     main_lineage = require_once(workflow, MAIN_LINEAGE_CHECK)
     guard = require_once(workflow, GUARD_COMMAND)
+    binding = require_once(workflow, BINDING_COMMAND)
     seed_download = require_once(workflow, 'gh release download "$RELEASE_TAG"')
-    if not build_checkout < full_checkout < main_lineage < guard < seed_download:
-        fail("main-lineage and annotated-tag checks must precede the archive download")
+    if not (
+        build_checkout
+        < full_checkout
+        < main_lineage
+        < guard
+        < binding
+        < seed_download
+    ):
+        fail(
+            "main-lineage, annotated-tag, and image-binding checks must "
+            "precede the archive download"
+        )
     if workflow.count("persist-credentials: false") != 2:
         fail("both checkouts must disable persisted GitHub credentials")
 
     source_image = require_once(workflow, DIRECT_IMAGE_SOURCE)
     archive_digest = require_once(
         workflow,
-        "c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a",
+        '"$EXPECTED_ARCHIVE_SHA256"',
     )
     media_digest = require_once(
         workflow,
-        "9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5",
+        '"$EXPECTED_MEDIA_SHA256"',
     )
+    archive_size = require_once(
+        workflow,
+        "image_size != EXPECTED_ARCHIVE_SIZE_BYTES",
+    )
+    for binding_output in (
+        "archive_sha256=$archive_sha256",
+        "media_sha256=$media_sha256",
+        "archive_size_bytes=$archive_size_bytes",
+        "tag_object_sha=$tag_object_sha",
+        "EXPECTED_ARCHIVE_SHA256: ${{ steps.image-binding.outputs.archive_sha256 }}",
+        "EXPECTED_MEDIA_SHA256: ${{ steps.image-binding.outputs.media_sha256 }}",
+        "EXPECTED_ARCHIVE_SIZE_BYTES: ${{ steps.image-binding.outputs.archive_size_bytes }}",
+        "tag_object_sha: ${{ steps.image-binding.outputs.tag_object_sha }}",
+        "EXPECTED_TAG_OBJECT_SHA: ${{ needs.build-image.outputs.tag_object_sha }}",
+    ):
+        require_once(workflow, binding_output)
+    for obsolete_binding in (
+        "c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a",
+        "9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5",
+        "1166253581",
+    ):
+        if obsolete_binding in workflow:
+            fail("the release workflow retains a v0.1.14 artifact binding")
     image_names = [
         match.start()
         for match in re.finditer(re.escape(DIRECT_IMAGE_NAME), workflow)
@@ -89,6 +127,7 @@ def main() -> None:
         < source_image
         < archive_digest
         < media_digest
+        < archive_size
         < publish_checkout
         < image_names[1]
     ):
@@ -113,6 +152,7 @@ def main() -> None:
         "if ! ref_fields=\"$(",
         "if ! tag_fields=\"$(",
         '"$remote_tag_type" != tag',
+        '"$tag_object_sha" != "$expected_tag_object_sha"',
         '"$returned_tag_sha" != "$tag_object_sha"',
         '"$target_type" != commit',
         '"$remote_revision" != "$source_revision"',

@@ -1,9 +1,8 @@
 # Raspberry Pi 5 development-target access
 
 This document describes the development-only management interface built into
-the next signed Raspberry Pi 5 target image. It does not describe the published
-v0.1.14 target image, which remains immutable and does not contain this access
-path.
+the signed Raspberry Pi 5 v0.1.15 target image. The published v0.1.14 target
+image remains immutable and does not contain this access path.
 
 The development target uses its USB-C power/RPIBOOT connector as a USB Ethernet
 gadget during a normal signed boot. The same cable returns to BCM2712 RPIBOOT
@@ -115,8 +114,9 @@ minimize attached peripherals, and reject any UART undervoltage report.
 
 The SSH server and `codex` key are part of the dm-verity-protected root selected
 by the signed boot image. They therefore require a new signed boot payload; they
-cannot be retrofitted into the already published v0.1.14 image without breaking
-its signatures and verified-root digest.
+could not be retrofitted into the already published v0.1.14 image without
+breaking its signatures and verified-root digest. The v0.1.15 image carries a
+new signature over the updated boot payload and its new verified-root digest.
 
 This interface intentionally grants complete control after public-key
 authentication. It is suitable for the designated development Pi only. A
