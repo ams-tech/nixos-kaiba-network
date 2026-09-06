@@ -1,4 +1,5 @@
 {
+  developmentSSHAuthorizedKey,
   expectedCustomerKeyHash,
   sourceRevision,
 }:
@@ -30,6 +31,17 @@
       message = "the secure-boot target base-DTB set must contain only the Raspberry Pi 5 Model B DTB";
     }
     {
+      assertion = config.hardware.raspberry-pi.usb-gadget-ethernet.enable;
+      message = "the development target must expose its fixed USB Ethernet management lane";
+    }
+    {
+      assertion =
+        config.hardware.raspberry-pi.config.all.dt-overlays.dwc2.enable
+        && config.hardware.raspberry-pi.config.all.dt-overlays.dwc2.params.dr_mode.enable
+        && config.hardware.raspberry-pi.config.all.dt-overlays.dwc2.params.dr_mode.value == "peripheral";
+      message = "the development target USB-C controller must be fixed in peripheral mode";
+    }
+    {
       assertion =
         !config.hardware.raspberry-pi.config.all.options.camera_auto_detect.enable
         && !config.hardware.raspberry-pi.config.all.options.display_auto_detect.enable
@@ -43,6 +55,10 @@
   kaiba.secureBootTarget = {
     enable = true;
     inherit expectedCustomerKeyHash sourceRevision;
+    developmentAccess = {
+      enable = true;
+      authorizedKey = developmentSSHAuthorizedKey;
+    };
   };
 
   documentation.enable = false;
@@ -54,9 +70,10 @@
   };
   networking = {
     hostName = "kaiba-rpi5-secure-target";
-    # This sealed target has no configured network interfaces.  resolvconf's
-    # activation unit tries to replace and chmod /etc/resolv.conf, which is
-    # incompatible with the immutable /etc metadata mount.
+    # The development USB lane has a fixed, route-free address and needs no
+    # resolver. resolvconf's activation unit also tries to replace and chmod
+    # /etc/resolv.conf, which is incompatible with the immutable metadata
+    # mount.
     resolvconf.enable = false;
   };
   # dbus-broker repeatedly exits during stage 2 on the immutable Raspberry Pi
@@ -82,17 +99,29 @@
   hardware = {
     enableAllHardware = lib.mkForce false;
     deviceTree.filter = "bcm2712-rpi-5-b.dtb";
-    raspberry-pi.config.all = {
-      # The sealed appliance is headless. These defaults request optional
-      # overlays that are deliberately absent from the minimal signed boot
-      # image and can vary with attached display or camera hardware.
-      options = {
-        camera_auto_detect.enable = lib.mkForce false;
-        display_auto_detect.enable = lib.mkForce false;
-        max_framebuffers.enable = lib.mkForce false;
+    raspberry-pi = {
+      usb-gadget-ethernet.enable = true;
+      config.all = {
+        # The sealed appliance is headless. These defaults request optional
+        # overlays that are deliberately absent from the minimal signed boot
+        # image and can vary with attached display or camera hardware.
+        options = {
+          camera_auto_detect.enable = lib.mkForce false;
+          display_auto_detect.enable = lib.mkForce false;
+          max_framebuffers.enable = lib.mkForce false;
+        };
+        base-dt-params.audio.enable = lib.mkForce false;
+        dt-overlays = {
+          vc4-kms-v3d.enable = lib.mkForce false;
+          dwc2 = {
+            enable = true;
+            params.dr_mode = {
+              enable = true;
+              value = "peripheral";
+            };
+          };
+        };
       };
-      base-dt-params.audio.enable = lib.mkForce false;
-      dt-overlays.vc4-kms-v3d.enable = lib.mkForce false;
     };
   };
 

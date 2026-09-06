@@ -176,6 +176,8 @@ GitHub release.
 This image can program OTP on its one compiled sacrificial Pi; it is not the
 read-only qualification image. See the [secure-boot station release and boot
 procedure](docs/raspberry-pi-5-development-secure-boot-station.md).
+The next signed sacrificial-target build exposes the separately documented
+[development USB SSH and software RPIBOOT interface](docs/raspberry-pi-5-development-target-access.md).
 
 ### Nix binary cache
 
