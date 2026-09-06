@@ -21,12 +21,14 @@ signing_package=''
 deployment=''
 approval_tool=''
 receipts_tool=''
+release_tag_state=''
 
 usage() {
   cat >&2 <<'EOF'
 usage:
   kaiba-provision-signing-ceremony prepare-public \
-    --repository ABSOLUTE_DIR --release-tag TAG --expected-commit HEX \
+    --repository ABSOLUTE_DIR \
+    (--release-tag TAG | --planned-release-tag TAG) --expected-commit HEX \
     --main-ref REF --ceremony-dir NEW_ABSOLUTE_DIR
   kaiba-provision-signing-ceremony verify-authorization \
     --ceremony-dir ABSOLUTE_DIR --received-authorization ABSOLUTE_DIR \
@@ -165,6 +167,7 @@ write_session() {
   jq --null-input \
     --arg schema_version "$session_schema" \
     --arg release_tag "$release_tag" \
+    --arg release_tag_state "$release_tag_state" \
     --arg source_revision "$expected_commit" \
     --arg repository "$repository" \
     --arg flake_ref "$flake_ref" \
@@ -172,6 +175,7 @@ write_session() {
     '{
       schema_version: $schema_version,
       release_tag: $release_tag,
+      release_tag_state: $release_tag_state,
       source_revision: $source_revision,
       repository: $repository,
       flake_ref: $flake_ref,
@@ -190,12 +194,14 @@ load_session() {
     --arg schema "$session_schema" '
       .schema_version == $schema
       and (.release_tag | type == "string")
+      and (.release_tag_state == "published" or .release_tag_state == "planned")
       and (.source_revision | type == "string")
       and (.repository | type == "string")
       and (.flake_ref | type == "string")
       and (.created_at | type == "string")
     ' "$session_path" >/dev/null || fail 'ceremony session is invalid'
   release_tag="$(jq --exit-status --raw-output '.release_tag' "$session_path")"
+  release_tag_state="$(jq --exit-status --raw-output '.release_tag_state' "$session_path")"
   expected_commit="$(jq --exit-status --raw-output '.source_revision' "$session_path")"
   repository="$(jq --exit-status --raw-output '.repository' "$session_path")"
   flake_ref="$(jq --exit-status --raw-output '.flake_ref' "$session_path")"
@@ -247,6 +253,7 @@ resolve_public_paths() {
     jq --exit-status \
       --arg schema "$inventory_schema" \
       --arg tag "$release_tag" \
+      --arg tag_state "$release_tag_state" \
       --arg revision "$expected_commit" \
       --arg ref "$flake_ref" \
       --arg unsigned "$unsigned_artifacts" \
@@ -260,6 +267,7 @@ resolve_public_paths() {
       --arg receipts "$receipts_tool" '
         .schema_version == $schema
         and .release_tag == $tag
+        and .release_tag_state == $tag_state
         and .source_revision == $revision
         and .flake_ref == $ref
         and .paths.unsigned_artifacts == $unsigned
@@ -338,19 +346,31 @@ prepare_public() {
   local main_ref=''
   repository=''
   release_tag=''
+  release_tag_state=''
   expected_commit=''
   ceremony_dir=''
   while (($#)); do
     case "$1" in
       --repository) repository="${2-}"; shift 2 ;;
-      --release-tag) release_tag="${2-}"; shift 2 ;;
+      --release-tag)
+        [[ -z "$release_tag_state" ]] || { usage; exit 2; }
+        release_tag="${2-}"
+        release_tag_state=published
+        shift 2
+        ;;
+      --planned-release-tag)
+        [[ -z "$release_tag_state" ]] || { usage; exit 2; }
+        release_tag="${2-}"
+        release_tag_state=planned
+        shift 2
+        ;;
       --expected-commit) expected_commit="${2-}"; shift 2 ;;
       --main-ref) main_ref="${2-}"; shift 2 ;;
       --ceremony-dir) ceremony_dir="${2-}"; shift 2 ;;
       *) usage; exit 2 ;;
     esac
   done
-  [[ -n "$repository" && -n "$release_tag" && -n "$expected_commit" &&
+  [[ -n "$repository" && -n "$release_tag" && -n "$release_tag_state" && -n "$expected_commit" &&
     -n "$main_ref" && -n "$ceremony_dir" ]] || { usage; exit 2; }
   require_existing_directory 'repository' "$repository"
   [[ "$repository" =~ ^/[0-9A-Za-z._/+:-]+$ ]] ||
@@ -367,17 +387,21 @@ prepare_public() {
   [[ "$main_ref" =~ ^[0-9A-Za-z._/-]+$ && "$main_ref" != -* ]] || fail 'main ref is invalid'
   require_clean_absolute_path 'ceremony directory' "$ceremony_dir"
 
-  [[ "$(git -C "$repository" cat-file -t "refs/tags/$release_tag")" == tag ]] ||
-    fail 'release tag must be annotated'
-  local tagged_object
-  tagged_object="$(git -C "$repository" cat-file -p "refs/tags/$release_tag" | sed -n 's/^object //p')"
-  require_hex 'release tag target object' "$tagged_object" '40:64'
-  [[ "$(git -C "$repository" cat-file -t "$tagged_object")" == commit ]] ||
-    fail 'release tag must directly annotate a commit'
-  [[ "$tagged_object" == "$expected_commit" ]] ||
-    fail 'release tag does not identify the independently supplied commit'
-  [[ "$(git -C "$repository" rev-parse "$release_tag^{commit}")" == "$expected_commit" ]] ||
-    fail 'release tag does not identify the independently supplied commit'
+  if [[ "$release_tag_state" == published ]]; then
+    [[ "$(git -C "$repository" cat-file -t "refs/tags/$release_tag")" == tag ]] ||
+      fail 'release tag must be annotated'
+    local tagged_object
+    tagged_object="$(git -C "$repository" cat-file -p "refs/tags/$release_tag" | sed -n 's/^object //p')"
+    require_hex 'release tag target object' "$tagged_object" '40:64'
+    [[ "$(git -C "$repository" cat-file -t "$tagged_object")" == commit ]] ||
+      fail 'release tag must directly annotate a commit'
+    [[ "$tagged_object" == "$expected_commit" ]] ||
+      fail 'release tag does not identify the independently supplied commit'
+    [[ "$(git -C "$repository" rev-parse "$release_tag^{commit}")" == "$expected_commit" ]] ||
+      fail 'release tag does not identify the independently supplied commit'
+  elif git -C "$repository" show-ref --verify --quiet "refs/tags/$release_tag"; then
+    fail 'planned release tag must not exist before artifact binding'
+  fi
   [[ "$(git -C "$repository" rev-parse HEAD)" == "$expected_commit" ]] ||
     fail 'checkout HEAD does not equal the expected commit'
   git -C "$repository" rev-parse --verify "$main_ref^{commit}" >/dev/null ||
@@ -404,10 +428,12 @@ prepare_public() {
   else
     local requested_repository="$repository"
     local requested_release_tag="$release_tag"
+    local requested_release_tag_state="$release_tag_state"
     local requested_commit="$expected_commit"
     require_private_directory 'ceremony directory' "$ceremony_dir"
     load_session "$ceremony_dir"
     [[ "$repository" == "$requested_repository" && "$release_tag" == "$requested_release_tag" &&
+      "$release_tag_state" == "$requested_release_tag_state" &&
       "$expected_commit" == "$requested_commit" ]] ||
       fail 'existing ceremony session binds different release inputs'
     require_private_directory 'public result directory' "$ceremony_dir/public"
@@ -456,6 +482,7 @@ prepare_public() {
   jq --null-input \
     --arg schema_version "$inventory_schema" \
     --arg release_tag "$release_tag" \
+    --arg release_tag_state "$release_tag_state" \
     --arg source_revision "$expected_commit" \
     --arg flake_ref "$flake_ref" \
     --arg unsigned_artifacts "$unsigned_artifacts" \
@@ -472,6 +499,7 @@ prepare_public() {
     '{
       schema_version: $schema_version,
       release_tag: $release_tag,
+      release_tag_state: $release_tag_state,
       source_revision: $source_revision,
       flake_ref: $flake_ref,
       paths: {
