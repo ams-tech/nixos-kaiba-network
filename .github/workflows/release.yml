@@ -13,11 +13,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-image:
-    name: Build the Raspberry Pi 5 signed secure-boot target image
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+  validate-release:
+    name: Validate the signed target release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
+      archive_sha256: ${{ steps.image-binding.outputs.archive_sha256 }}
+      archive_size_bytes: ${{ steps.image-binding.outputs.archive_size_bytes }}
+      media_sha256: ${{ steps.image-binding.outputs.media_sha256 }}
       tag_object_sha: ${{ steps.image-binding.outputs.tag_object_sha }}
     steps:
       - name: Validate the release tag
@@ -69,26 +74,36 @@ jobs:
             echo "tag_object_sha=$tag_object_sha"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Await, stage, and verify the prebuilt release image
+  fetch-draft-image:
+    name: Fetch the pre-staged draft release image
+    needs: validate-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # GitHub only exposes draft releases to callers with push access. Keep this
+    # permission in a job that neither checks out the repository nor invokes
+    # its scripts.
+    permissions:
+      contents: write
+    steps:
+      - name: Await and stage the prebuilt release image
         env:
-          EXPECTED_ARCHIVE_SHA256: ${{ steps.image-binding.outputs.archive_sha256 }}
-          EXPECTED_ARCHIVE_SIZE_BYTES: ${{ steps.image-binding.outputs.archive_size_bytes }}
-          EXPECTED_MEDIA_SHA256: ${{ steps.image-binding.outputs.media_sha256 }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           image_name="kaiba-rpi5-development-secure-boot-target-${RELEASE_TAG}.img.zst"
           mkdir -p target-image
+          download_error="$RUNNER_TEMP/release-download-error.log"
           for attempt in $(seq 1 90); do
             if gh release download "$RELEASE_TAG" \
               --pattern "$image_name" \
               --dir target-image \
-              --clobber 2>/dev/null; then
+              --clobber 2>"$download_error"; then
               break
             fi
             if (( attempt == 90 )); then
-              echo "::error title=Prebuilt image unavailable::The digest-pinned image was not uploaded to the draft release."
+              cat "$download_error" >&2
+              echo "::error title=Prebuilt image unavailable::The digest-pinned image could not be downloaded from the draft release."
               exit 1
             fi
             sleep 10
@@ -97,6 +112,51 @@ jobs:
           source_image="target-image/$image_name"
           if [[ -L "$source_image" || ! -f "$source_image" ]]; then
             echo "::error title=Image unavailable::Expected one regular image at $source_image."
+            exit 1
+          fi
+
+      - name: Upload the unverified release image for validation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kaiba-rpi5-development-secure-boot-target-unverified-${{ github.sha }}
+          path: target-image/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+
+  build-image:
+    name: Verify the Raspberry Pi 5 signed secure-boot target image
+    needs:
+      - validate-release
+      - fetch-draft-image
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions: {}
+    steps:
+      - name: Download the unverified release image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: kaiba-rpi5-development-secure-boot-target-unverified-${{ github.sha }}
+          path: target-image
+
+      - name: Verify the prebuilt release image
+        env:
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.validate-release.outputs.archive_sha256 }}
+          EXPECTED_ARCHIVE_SIZE_BYTES: ${{ needs.validate-release.outputs.archive_size_bytes }}
+          EXPECTED_MEDIA_SHA256: ${{ needs.validate-release.outputs.media_sha256 }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          image_name="kaiba-rpi5-development-secure-boot-target-${RELEASE_TAG}.img.zst"
+          mapfile -d '' image_entries < <(find target-image -mindepth 1 -maxdepth 1 -print0)
+          if (( ${#image_entries[@]} != 1 )); then
+            echo "::error title=Unexpected image contents::Expected exactly one staged target image."
+            exit 1
+          fi
+
+          source_image="target-image/$image_name"
+          if [[ -L "$source_image" || ! -f "$source_image" ]]; then
+            echo "::error title=Unsafe image::Expected one regular image at $source_image."
             exit 1
           fi
           zstd --test "$source_image"
@@ -137,7 +197,9 @@ jobs:
 
   publish-release:
     name: Publish the GitHub release
-    needs: build-image
+    needs:
+      - validate-release
+      - build-image
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -162,7 +224,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
           SOURCE_REVISION: ${{ github.sha }}
-          EXPECTED_TAG_OBJECT_SHA: ${{ needs.build-image.outputs.tag_object_sha }}
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.validate-release.outputs.archive_sha256 }}
+          EXPECTED_ARCHIVE_SIZE_BYTES: ${{ needs.validate-release.outputs.archive_size_bytes }}
+          EXPECTED_TAG_OBJECT_SHA: ${{ needs.validate-release.outputs.tag_object_sha }}
         run: |
           image_name="kaiba-rpi5-development-secure-boot-target-${RELEASE_TAG}.img.zst"
           image="release-assets/$image_name"
@@ -182,9 +246,19 @@ jobs:
             fi
           done
 
-          mapfile -t checksum_lines < "$checksum"
           actual_sha256="$(sha256sum "$image" | cut -d ' ' -f 1)"
-          expected_checksum_line="$actual_sha256  $image_name"
+          if [[ "$actual_sha256" != "$EXPECTED_ARCHIVE_SHA256" ]]; then
+            echo "::error title=Archive digest mismatch::The verified handoff is not bound to the release tag."
+            exit 1
+          fi
+          image_size="$(stat --format=%s "$image")"
+          if [[ "$image_size" != "$EXPECTED_ARCHIVE_SIZE_BYTES" ]]; then
+            echo "::error title=Image size mismatch::The verified handoff has an unexpected size."
+            exit 1
+          fi
+
+          mapfile -t checksum_lines < "$checksum"
+          expected_checksum_line="$EXPECTED_ARCHIVE_SHA256  $image_name"
           if (( ${#checksum_lines[@]} != 1 )) || [[ "${checksum_lines[0]}" != "$expected_checksum_line" ]]; then
             echo "::error title=Invalid checksum::The checksum must name and match the expected image."
             exit 1
