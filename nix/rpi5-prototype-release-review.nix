@@ -236,6 +236,7 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
           "nixos/default/kernel.img",
           "nixos/default/overlays/README",
           "nixos/default/overlays/bcm2712d0.dtbo",
+          "nixos/default/overlays/dwc2.dtbo",
           "nixos/default/overlays/overlay_map.dtb"
         ]
         and .persistent_mutable_state == "tmpfs-only"
