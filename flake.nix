@@ -52,6 +52,9 @@
       rpi5DevelopmentPosture = builtins.fromJSON (
         builtins.readFile ./provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
       );
+      rpi5DevelopmentSSHAuthorizedKey = lib.removeSuffix "\n" (
+        builtins.readFile ./provisioning/keys/codex-rpi5-development-2026-09-05.pub
+      );
 
       sourceRevision =
         if self ? rev then
@@ -120,9 +123,10 @@
       # os_prefix viability sentinel, bcm2712d0.dtbo carries the correction,
       # and overlay_map.dtb is the matching firmware overlay-name map. The
       # target module disables inherited optional overlay requests. The
-      # firmware-tree derivation fails if the pinned upstream population
-      # command or this explicit revision-file copy ever adds, removes, or
-      # renames a file.
+      # development image also carries the single dwc2 overlay required for
+      # its fixed USB Ethernet management lane. The firmware-tree derivation
+      # fails if the pinned upstream population command or this explicit
+      # revision-file copy ever adds, removes, or renames a file.
       rpi5SecureBootFirmwareAllowlist = [
         "config.txt"
         "nixos/default/bcm2712-rpi-5-b.dtb"
@@ -131,6 +135,7 @@
         "nixos/default/kernel.img"
         "nixos/default/overlays/README"
         "nixos/default/overlays/bcm2712d0.dtbo"
+        "nixos/default/overlays/dwc2.dtbo"
         "nixos/default/overlays/overlay_map.dtb"
       ];
 
@@ -153,6 +158,7 @@
           expectedCustomerKeyHash,
           bootImageSizeMiB ? 96,
           bootOrderPolicy ? rpi5DevelopmentPosture.boot_order.policy,
+          developmentSSHAuthorizedKey ? rpi5DevelopmentSSHAuthorizedKey,
           rootDataPartitionGUID ? "bdd5be20-f7ea-56e7-ae90-4465ae950596",
           rootHashPartitionGUID ? "62616022-71fb-5036-8cc4-b7949cc6e52c",
           sourceRevision ? defaultTargetSourceRevision,
@@ -164,9 +170,10 @@
               nixos-raspberrypi.nixosModules.sd-image
               nixos-raspberrypi.nixosModules.raspberry-pi-5.base
               nixos-raspberrypi.nixosModules.raspberry-pi-5.page-size-16k
+              nixos-raspberrypi.nixosModules.usb-gadget-ethernet
               provisioning.nixosModules.secure-boot-target
               (import ./nix/images/rpi5-secure-boot-target.nix {
-                inherit expectedCustomerKeyHash sourceRevision;
+                inherit developmentSSHAuthorizedKey expectedCustomerKeyHash sourceRevision;
               })
             ];
           };
@@ -223,7 +230,7 @@
                 # the base DTB. They remain inside os_prefix and therefore
                 # inside the signed boot image.
                 mkdir -p firmware/nixos/default/overlays
-                for revision_file in README bcm2712d0.dtbo overlay_map.dtb; do
+                for revision_file in README bcm2712d0.dtbo dwc2.dtbo overlay_map.dtb; do
                   source_file=${targetConfig.hardware.deviceTree.dtbSource}/overlays/"$revision_file"
                   if ! test -f "$source_file"; then
                     echo "Raspberry Pi kernel DTBs are missing $revision_file" >&2

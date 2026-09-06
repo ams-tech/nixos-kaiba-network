@@ -429,6 +429,9 @@ let
   defaultStationDemoConfig = evaluateConfig provisioningStationDemoDefaultPackage;
   stationDemoIPv6Config = evaluateConfig provisioningStationDemoIPv6;
   secureBootTargetConfig = evaluateConfig secureBootTarget;
+  secureBootTargetPolicy = builtins.fromJSON (
+    secureBootTargetConfig.environment.etc."kaiba-provisioning/target-policy.json".text
+  );
   laneGuardConfig = evaluateConfig provisioningLaneGuard;
   laneGuardActiveLowConfig = evaluateConfig provisioningLaneGuardActiveLow;
   laneGuardManualConfig = evaluateConfig provisioningLaneGuardManual;
@@ -612,8 +615,10 @@ let
     && secureBootTargetConfig.boot.initrd.systemd.dmVerity.enable
     && secureBootTargetConfig.swapDevices == [ ]
     && !secureBootTargetConfig.zramSwap.enable
+    && !secureBootTargetConfig.kaiba.secureBootTarget.developmentAccess.enable
     && !secureBootTargetConfig.services.openssh.enable
     && !secureBootTargetConfig.security.sudo.enable
+    && !secureBootTargetPolicy.development_access.enabled
     &&
       lib.hasInfix ''"rollback_gate":"unimplemented"''
         secureBootTargetConfig.environment.etc."kaiba-provisioning/target-policy.json".text

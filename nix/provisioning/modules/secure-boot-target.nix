@@ -7,10 +7,13 @@
 
 let
   cfg = config.kaiba.secureBootTarget;
+  access = cfg.developmentAccess;
   developmentPosture = builtins.fromJSON (
     builtins.readFile ../../../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
   );
   evidenceDirectory = "/run/kaiba-secure-boot";
+  sshRuntimeDirectory = "/run/kaiba-development-ssh";
+  sshHostKey = "${sshRuntimeDirectory}/ssh_host_ed25519_key";
   expectedHashPattern = "[0-9a-f]{64}";
   bootEvidence = pkgs.writeShellApplication {
     name = "kaiba-boot-evidence";
@@ -83,6 +86,48 @@ let
         "$signed_hex" "$image_hash" "$root_source"
     '';
   };
+  enterRPIBoot = pkgs.writeShellApplication {
+    name = "kaiba-enter-rpiboot";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.libraspberrypi
+    ];
+    text = ''
+      set -euo pipefail
+
+      if [ "$(id -u)" -ne 0 ]; then
+        printf 'kaiba-enter-rpiboot must be run through sudo\n' >&2
+        exit 1
+      fi
+
+      vcmailbox 0x0003808b 4 4 0x3
+      sync
+      exec ${config.systemd.package}/bin/systemctl reboot
+    '';
+  };
+  sshAccessEvidence = pkgs.writeShellApplication {
+    name = "kaiba-development-ssh-evidence";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.openssh
+    ];
+    text = ''
+      set -euo pipefail
+
+      readonly public_host_key=${sshHostKey}.pub
+      test -s "$public_host_key"
+      host_fingerprint="$(ssh-keygen -E sha256 -lf "$public_host_key" | cut -d ' ' -f 2)"
+      case "$host_fingerprint" in
+        SHA256:*) ;;
+        (*)
+          printf 'KAIBA_DEVELOPMENT_SSH=fail reason=malformed-host-key-fingerprint\n' >&2
+          exit 1
+          ;;
+      esac
+      printf 'KAIBA_DEVELOPMENT_SSH=ready user=codex address=10.0.0.2 host_key=%s\n' \
+        "$host_fingerprint"
+    '';
+  };
 in
 {
   options.kaiba.secureBootTarget = {
@@ -99,6 +144,19 @@ in
     sourceRevision = lib.mkOption {
       type = lib.types.str;
       description = "Source revision from which the target image was built.";
+    };
+
+    developmentAccess = {
+      enable = lib.mkEnableOption "the fixed development-only USB SSH management lane";
+
+      authorizedKey = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = ''
+          One public Ed25519 key admitted as the codex development user. The
+          corresponding private key must remain outside Git, Nix and the image.
+        '';
+      };
     };
   };
 
@@ -121,12 +179,23 @@ in
         message = "kaiba.secureBootTarget.sourceRevision must be non-empty";
       }
       {
+        assertion =
+          !access.enable
+          ||
+            builtins.match "ssh-ed25519 [A-Za-z0-9+/]+={0,3} codex-rpi5-development-[0-9-]+" access.authorizedKey
+            != null;
+        message = "development access requires the fixed public Ed25519 session-key form";
+      }
+      {
         assertion = config.fileSystems."/".device == "/dev/mapper/root";
         message = "the secure-boot target root must be systemd's /dev/mapper/root verity mapping";
       }
     ];
 
     boot = {
+      extraModprobeConfig = lib.optionalString access.enable ''
+        options g_ether dev_addr=02:4b:41:49:42:41 host_addr=02:4b:41:49:42:42
+      '';
       initrd = {
         systemd = {
           enable = true;
@@ -139,6 +208,10 @@ in
         ];
         kernelModules = [ "dm_verity" ];
       };
+      kernelModules = lib.optionals access.enable [
+        "dwc2"
+        "g_ether"
+      ];
       kernelParams = [
         "ro"
         "systemd.gpt_auto=no"
@@ -174,34 +247,85 @@ in
 
     networking = {
       firewall.enable = true;
+      firewall.interfaces.usb0.allowedTCPPorts = lib.optionals access.enable [ 22 ];
+      interfaces.usb0.ipv4.addresses = lib.mkIf access.enable (
+        lib.mkForce [
+          {
+            address = "10.0.0.2";
+            prefixLength = 24;
+          }
+        ]
+      );
       useDHCP = false;
+      useNetworkd = access.enable;
     };
     swapDevices = lib.mkForce [ ];
     zramSwap.enable = false;
 
     users = {
-      # NixOS's evaluation-time lockout check requires this for an appliance
-      # with no usable account.  The root hash is locked, getty autologin is
-      # disabled, SSH is absent, and the target has no network configuration.
+      # NixOS's evaluation-time lockout check requires this because every
+      # password remains locked. Development access is public-key-only.
       allowNoPasswordLogin = true;
       mutableUsers = false;
-      users.root = {
-        # Immutable /etc uses systemd-sysusers, which consumes only the
-        # initial password fields.  Keep the account locked without requiring
-        # classic activation to rewrite /etc/shadow on the verified root.
-        hashedPassword = lib.mkForce null;
-        initialHashedPassword = lib.mkForce "!";
+      groups = lib.mkIf access.enable {
+        codex.gid = 991;
+      };
+      users = {
+        root = {
+          # Immutable /etc uses systemd-sysusers, which consumes only the
+          # initial password fields. Keep the account locked without requiring
+          # classic activation to rewrite the immutable metadata layer.
+          hashedPassword = lib.mkForce null;
+          initialHashedPassword = lib.mkForce "!";
+        };
+        codex = lib.mkIf access.enable {
+          isSystemUser = true;
+          uid = 991;
+          group = "codex";
+          home = "/var/lib/kaiba-codex";
+          createHome = false;
+          shell = pkgs.bashInteractive;
+          hashedPassword = lib.mkForce null;
+          initialHashedPassword = lib.mkForce "!";
+          openssh.authorizedKeys.keys = [ access.authorizedKey ];
+        };
       };
     };
 
     services = {
       getty.autologinUser = lib.mkForce null;
       journald.extraConfig = "Storage=volatile";
-      openssh.enable = false;
+      openssh = {
+        authorizedKeysInHomedir = false;
+        enable = access.enable;
+        hostKeys = lib.optionals access.enable [
+          {
+            path = sshHostKey;
+            type = "ed25519";
+          }
+        ];
+        listenAddresses = lib.optionals access.enable [
+          {
+            addr = "10.0.0.2";
+            port = 22;
+          }
+        ];
+        openFirewall = false;
+        settings = lib.mkIf access.enable {
+          AllowUsers = [ "codex" ];
+          AuthenticationMethods = "publickey";
+          KbdInteractiveAuthentication = false;
+          PasswordAuthentication = false;
+          PermitEmptyPasswords = false;
+          PermitRootLogin = "no";
+          UsePAM = true;
+        };
+      };
     };
 
     systemd = {
       coredump.enable = false;
+      network.wait-online.enable = false;
       services.kaiba-secure-boot-evidence = {
         description = "Verify and report the Kaiba Pi 5 signed-boot runtime";
         wantedBy = [ "multi-user.target" ];
@@ -230,11 +354,44 @@ in
           SystemCallArchitectures = "native";
         };
       };
-      tmpfiles.rules = [ "d ${evidenceDirectory} 0700 root root - -" ];
+      services.kaiba-development-ssh-evidence = lib.mkIf access.enable {
+        description = "Report the ephemeral development SSH host key on the trusted UART";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "sshd.service" ];
+        requires = [ "sshd.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = lib.getExe sshAccessEvidence;
+          StandardOutput = "journal+console";
+          StandardError = "journal+console";
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+          ProtectHome = true;
+          ProtectSystem = "strict";
+          CapabilityBoundingSet = "";
+          LockPersonality = true;
+          RestrictNamespaces = true;
+          SystemCallArchitectures = "native";
+        };
+      };
+      tmpfiles.rules = [
+        "d ${evidenceDirectory} 0700 root root - -"
+      ]
+      ++ lib.optionals access.enable [
+        "d ${sshRuntimeDirectory} 0700 root root - -"
+        "d /var/lib/kaiba-codex 0700 codex codex - -"
+      ];
     };
 
     environment = {
-      systemPackages = [ bootEvidence ];
+      systemPackages = [
+        bootEvidence
+      ]
+      ++ lib.optionals access.enable [
+        enterRPIBoot
+        pkgs.iproute2
+        pkgs.openssh
+      ];
       etc."kaiba-provisioning/target-policy.json".text = builtins.toJSON {
         schema = "provisioning.kaiba.network/target-policy/v1alpha1";
         development_posture_id = developmentPosture.posture_id;
@@ -246,9 +403,36 @@ in
         enrollment_ready = false;
         videocore_jtag = developmentPosture.videocore_jtag.policy;
         eeprom_write_protection = developmentPosture.eeprom_write_protection.policy;
+        development_access =
+          if access.enable then
+            {
+              enabled = true;
+              transport = "usb-gadget-ethernet";
+              address = "10.0.0.2";
+              user = "codex";
+              root_via_passwordless_sudo = true;
+              ephemeral_host_key = true;
+            }
+          else
+            {
+              enabled = false;
+            };
       };
     };
 
-    security.sudo.enable = false;
+    security.sudo = {
+      enable = access.enable;
+      extraRules = lib.optionals access.enable [
+        {
+          users = [ "codex" ];
+          commands = [
+            {
+              command = "ALL";
+              options = [ "NOPASSWD" ];
+            }
+          ];
+        }
+      ];
+    };
   };
 }
