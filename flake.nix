@@ -833,10 +833,14 @@
                   ${./.github/workflows/release.yml} \
                   ${./scripts/ci/verify_remote_release_tag.sh}
                 shellcheck \
+                  ${./scripts/ci/read_release_image_binding.sh} \
                   ${./scripts/ci/verify_remote_release_tag.sh} \
                   ${./scripts/ci/verify_release_tag.sh} \
+                  ${./tests/ci/read_release_image_binding_test.sh} \
                   ${./tests/ci/verify_remote_release_tag_test.sh} \
                   ${./tests/ci/verify_release_tag_test.sh}
+                bash ${./tests/ci/read_release_image_binding_test.sh} \
+                  ${./scripts/ci/read_release_image_binding.sh}
                 bash ${./tests/ci/verify_release_tag_test.sh} \
                   ${./scripts/ci/verify_release_tag.sh}
                 bash ${./tests/ci/verify_remote_release_tag_test.sh} \

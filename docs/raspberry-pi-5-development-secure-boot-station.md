@@ -41,10 +41,10 @@ zstd --test kaiba-rpi5-development-secure-boot-station-v0.1.13.img.zst
 The station image does not stage target media and contains no private key or
 signing capability.
 
-## v0.1.14 signed target image
+## v0.1.14 qualification target image
 
-The separate v0.1.14 release contains the flashable signed target media needed
-for the final normal boot:
+The separate v0.1.14 release contains the flashable signed target media used by
+the v0.1.13 station for its final qualified normal boot:
 
 ```text
 kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst
@@ -76,6 +76,35 @@ Write the compressed image directly with Raspberry Pi Imager or another
 Zstandard-aware whole-disk writer. Do not extract or copy its individual
 partitions. Install that card in the sacrificial Pi before the final normal
 boot.
+
+## v0.1.15 development target image
+
+After the target has passed the fixed v0.1.6 qualification above, the v0.1.15
+release provides a newly signed development payload with the USB SSH management
+interface:
+
+```text
+kaiba-rpi5-development-secure-boot-target-v0.1.15.img.zst
+kaiba-rpi5-development-secure-boot-target-v0.1.15.img.zst.sha256
+```
+
+Its annotated release tag binds the exact source revision, compressed archive
+SHA-256, decompressed whole-disk SHA-256, and archive byte size. It contains no
+signing key or signing capability. Download, verify, and write it as a whole
+disk image:
+
+```console
+curl --fail --location --remote-name \
+  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.15/kaiba-rpi5-development-secure-boot-target-v0.1.15.img.zst
+curl --fail --location --remote-name \
+  https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.15/kaiba-rpi5-development-secure-boot-target-v0.1.15.img.zst.sha256
+sha256sum --check --strict \
+  kaiba-rpi5-development-secure-boot-target-v0.1.15.img.zst.sha256
+zstd --test kaiba-rpi5-development-secure-boot-target-v0.1.15.img.zst
+```
+
+The v0.1.13 station does not qualify this later boot digest. Install v0.1.15
+only after the target has completed the station’s v0.1.6 acceptance path.
 
 ## Physical interface
 

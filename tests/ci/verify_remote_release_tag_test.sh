@@ -64,64 +64,70 @@ expect_failure() {
 }
 
 reset_fixture
-bash "$guard" example/kaiba v0.2.0 "$source_revision"
+bash "$guard" example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_REF_FIELDS=$'refs/tags/v0.2.0\tcommit\t'"$source_revision"
 expect_failure "lightweight tag" "Annotated release tag required" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_REF_FIELDS=$'refs/tags/v9.9.9\ttag\t'"$tag_object_sha"
 expect_failure "wrong remote ref" "Annotated release tag required" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_REF_FIELDS=$'refs/tags/v0.2.0\ttag\tnot-an-object-id'
 expect_failure "malformed tag object ID" "Annotated release tag required" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_REF_API_FAILURE=true
 expect_failure "ref API failure" "Release tag unavailable" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_TAG_API_FAILURE=true
 expect_failure "tag-object API failure" "Unable to read tag object" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_TAG_FIELDS="$other_revision"$'\tcommit\t'"$source_revision"
 expect_failure "wrong tag object response" "returned the wrong tag object" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_TAG_FIELDS="$tag_object_sha"$'\ttag\t'"$other_revision"
 expect_failure "nested annotated tag" "Direct commit tag required" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_TAG_FIELDS="$tag_object_sha"$'\tblob\t'"$other_revision"
 expect_failure "non-commit target" "Direct commit tag required" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_TAG_FIELDS="$tag_object_sha"$'\tcommit\tnot-a-commit-id'
 expect_failure "malformed commit ID" "malformed commit ID" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
 
 reset_fixture
 export MOCK_TAG_FIELDS="$tag_object_sha"$'\tcommit\t'"$other_revision"
 expect_failure "source revision mismatch" "Release tag moved" \
-  example/kaiba v0.2.0 "$source_revision"
+  example/kaiba v0.2.0 "$source_revision" "$tag_object_sha"
+
+reset_fixture
+expect_failure "replaced tag object" "Release tag replaced" \
+  example/kaiba v0.2.0 "$source_revision" "$other_revision"
 
 reset_fixture
 expect_failure "malformed repository" "Invalid repository" \
-  invalid-repository v0.2.0 "$source_revision"
+  invalid-repository v0.2.0 "$source_revision" "$tag_object_sha"
 expect_failure "malformed release tag" "Invalid release tag" \
-  example/kaiba latest "$source_revision"
+  example/kaiba latest "$source_revision" "$tag_object_sha"
 expect_failure "malformed source revision" "Invalid source revision" \
-  example/kaiba v0.2.0 not-a-revision
+  example/kaiba v0.2.0 not-a-revision "$tag_object_sha"
+expect_failure "malformed tag object" "Invalid tag object" \
+  example/kaiba v0.2.0 "$source_revision" not-an-object-id
 
 echo "remote release tag guard tests passed"
