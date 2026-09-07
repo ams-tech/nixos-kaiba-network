@@ -4,6 +4,12 @@ This document describes the development-only management interface built into
 the signed Raspberry Pi 5 v0.1.15 target image. The published v0.1.14 target
 image remains immutable and does not contain this access path.
 
+The sacrificial Pi is confirmed to boot a signed development `target`, but the
+repository has not yet reconciled which exact target version and digest is
+running. Do not assume this v0.1.15 management interface is present until its
+UART and release binding are verified against the
+[sacrificial-device state](raspberry-pi-5-sacrificial-state.md).
+
 The development target uses its USB-C power/RPIBOOT connector as a USB Ethernet
 gadget during a normal signed boot. The same cable returns to BCM2712 RPIBOOT
 after an authenticated administrator requests the one-shot transition.

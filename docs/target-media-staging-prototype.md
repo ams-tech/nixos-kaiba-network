@@ -279,10 +279,11 @@ medium contains the expected bytes. Because model, serial, and WWID are not
 collected, and the typed hardware-configuration selector is omitted from
 canonical plans and receipts, it does not prove that this is the same physical
 medium used during staging. The station-local preflight is overwrite-safety
-evidence, not persistent media identity. Offline verification of the
-staged signed artifacts likewise does not prove that a Pi bootloader executed
-them. Live signed-system boot observation and enforcement are later hardware
-goals.
+evidence, not persistent media identity. Offline verification of the staged
+signed artifacts likewise does not prove that a Pi bootloader executed them.
+The operator reports that the fused sacrificial Pi boots a signed target, but
+the exact media and boot digests are not yet bound in a checked post-fuse
+packet.
 
 The generic `kaiba-provision-media-contract finalize` command can correlate
 the stage and verification receipts with a separately reviewed canonical
@@ -305,12 +306,13 @@ included in the software-only integrated rehearsal, or installed in a default
 station image. It must not be used for the SB-04 physical ceremony. Use only
 the plan-specialized production writer and independent verifier above.
 
-## Remaining physical boundary
+## Physical evidence boundary
 
 The production factory, writer, verifier, receipt contracts, and regular-file
-tamper matrix close the software-definition portion of SB-04. They have not
-written or cold-read a sacrificial NVMe device. The legacy initializer, all
-three `fixture-*` commands, both regular-file verifiers, and every Nix build are
+tamper matrix close the software-definition portion of the historical SB-04
+gate. The repository does not contain the sacrificial medium's reconciled
+physical stage and cold-readback packet. The legacy initializer, all three
+`fixture-*` commands, both regular-file verifiers, and every Nix build are
 synthetic software tests: they do not select a block device, access a Pi, cross
 an external power boundary, observe a live signed boot, or read or change EEPROM
 or OTP settings.

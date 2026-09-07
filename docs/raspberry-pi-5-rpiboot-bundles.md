@@ -5,6 +5,12 @@ EEPROM result to a separately customer-counter-signed owned recovery and six
 immutable RPIBOOT or acceptance-test directory trees. None of these builders
 can access USB, GPIO, a block device, EEPROM, OTP, or a private key.
 
+The sacrificial Pi is now fused and boots a signed development target. Its
+fresh bundles are historical inputs and must never be executed against that
+known-owned board again. Only the customer-counter-signed owned paths are
+eligible for separately reviewed readback or recovery; see the
+[sacrificial-device state].
+
 ## Owned-recovery signing
 
 `lib.mkRpi5OwnedRecoverySigningPlan` consumes the exact fresh EEPROM signing
@@ -86,8 +92,8 @@ The two rejection fixtures set `hardware_observed` to `false`. They are
 deterministic test inputs, not evidence that all required boot-source,
 signature, recovery, and dm-verity failure modes have run on a board. In
 particular, a generic UART marker is not enough to promote them to hardware
-evidence. That promotion happens only in the later, transaction-bound physical
-campaign.
+evidence. The operator-confirmed signed boot is recorded separately, and the
+exact post-fuse packet remains to be reconciled.
 
 ## Automated coverage
 
@@ -96,3 +102,5 @@ handling, public signature verification, exact tree construction, deterministic
 mutation, tamper rejection, schema validation, and capability-boundary checks.
 The report intentionally uses `not-observed` on systems where CI did not run
 the derivation and never turns software fixtures into hardware claims.
+
+[sacrificial-device state]: raspberry-pi-5-sacrificial-state.md

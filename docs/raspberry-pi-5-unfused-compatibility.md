@@ -5,6 +5,11 @@ fixture for a Raspberry Pi 5 compatibility run without claiming that secure
 boot was enforced. It is intentionally separate from the physical lane guard
 and has no RPIBOOT, GPIO, UART, block-device, subprocess, or network boundary.
 
+The sacrificial Pi is now fused and boots a signed development target. It is
+not eligible for the fresh-board procedure in this document. Any future
+physical unfused-compatibility run requires a different, separately approved
+fresh board; this document remains primarily a software-verification contract.
+
 The capsule manifest requires four distinct immutable roles:
 
 - `boot.img`;
@@ -195,8 +200,9 @@ prototype verifier.
 
 ## Offline unfused record correlation
 
-After the signed offline result exists, a fresh unfused board may be booted
-manually without supplying any ownership, OTP, or EEPROM programming bundle.
+After the signed offline result exists, a separately approved fresh unfused
+board may be booted manually without supplying any ownership, OTP, or EEPROM
+programming bundle.
 Capture the bounded UART output and create the strict operator record described
 by the verifier. It must bind the signer policy, capsule and role digests, one
 lane and target fingerprint, the all-zero customer-key hash before and after,
@@ -242,8 +248,10 @@ can emit `hardware_observed:true`.
 This offline layer is followed by a separately privileged media stager that can
 overwrite only an operator-selected dedicated disk. Neither offline verifier is
 allowed to carry an OTP or EEPROM programming bundle. The current unfused files
-can support operator correlation, but live hardware provenance and
-customer-signature enforcement remain unproven until the authenticated
-collector and separately reviewed irreversible ceremony exist.
+can support operator correlation, but they do not authenticate physical
+provenance or establish customer-signature enforcement. The operator-confirmed
+signed boot on the fused sacrificial Pi is tracked separately in the
+[sacrificial-device state] until its post-fuse evidence packet is reconciled.
 
 [target-media staging prototype]: target-media-staging-prototype.md
+[sacrificial-device state]: raspberry-pi-5-sacrificial-state.md

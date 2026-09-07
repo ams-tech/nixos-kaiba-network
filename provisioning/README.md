@@ -34,6 +34,14 @@ module and uses only the Go standard library.
   guard's private authenticated prompt socket. It displays the server-selected
   action and accepts only the exact bound confirmation phrase; it cannot select
   an operation, target, boot mode, or physical path.
+- `kaiba-rpi5-development-secure-boot` is the fixed direct runner embedded in
+  the historical v0.1.13 sacrificial station and exposed there only through the
+  `kaiba-secure-boot` wrapper. Its fresh observation and commit path is policy-
+  retired for the now-fused target but remains present in the binary. `status`
+  is read-only; any continuation or
+  reconciliation must follow the state-specific restrictions in the
+  [development station runbook]. An absent or incompatible journal is a stop,
+  not authority to start over.
 - `kaiba-provision-signer`, `kaiba-provision-signing-client`, and
   `kaiba-provision-signing-gate` enforce the immutable approval boundary.
 - `kaiba-provision-yubikey-wrapper` performs the fixed RSA-2048/SHA-256 PIV 9c
@@ -92,7 +100,8 @@ claim that software directly observed an electrical edge. Completed and failed
 terminal references preserve the power mode and closed safe-off basis, using
 `unproven` when disconnection plus USB absence was not established. The
 previously cut VBUS/data-only cable is not a manual RPIBOOT power path. Before
-any OTP-capable run, use and load-qualify an intact power-and-data path through
+any separately authorized OTP-capable run on another eligible target, use and
+load-qualify an intact power-and-data path through
 a Raspberry Pi Powered USB Hub (the upstream `usbboot` recommendation), or
 another reviewed USB 3 source capable of supplying at least 900 mA without
 brownout, with the normal Pi PSU absent. Undervoltage, USB reset, or target
@@ -210,3 +219,5 @@ See the [Raspberry Pi 5 probe](../docs/raspberry-pi-5-provisioning-probe.md),
 as well as the
 [station kiosk](../docs/provisioning-station-kiosk.md) documentation for the
 safety, lifecycle, and operator boundaries.
+
+[development station runbook]: ../docs/raspberry-pi-5-development-secure-boot-station.md

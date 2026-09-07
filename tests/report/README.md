@@ -36,6 +36,9 @@ overall state is respectively `passed`, `failed` if any check failed, or
 `pending`, `passed`, or `failed` and never changes the DNS or automated result.
 Pending qualification has no evidence; a passed or failed qualification must
 cite evidence. `mutation_eligible` is always false in this probe-only report.
+The repository's current passed entry is the sacrificial Pi's historical
+pre-fuse qualification, not its current owned-device state. This report schema
+has no post-fuse reconciliation row yet.
 
 CI can replace a platform's complete set of `not-observed` placeholders with a
 strict, source-revision-bound receipt by repeating:

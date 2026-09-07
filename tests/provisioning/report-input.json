@@ -316,7 +316,7 @@
   },
   "hardware_qualification": {
     "status": "passed",
-    "description": "A sacrificial fresh Raspberry Pi 5 Model B passed the reviewed two-probe, full-power-cycle qualification.",
+    "description": "Historical pre-fuse evidence: the sacrificial Raspberry Pi 5 Model B passed the reviewed two-probe, full-power-cycle qualification. This record does not describe its current owned state.",
     "evidence": [
       "evidence/provisioning/hardware-qualification/sacrificial-pi-5.json"
     ]

@@ -659,13 +659,18 @@ NixOS closure, activate one role at a time, verify health, and retain a tested
 rollback. A CI result can identify the closure eligible for deployment, but CI
 must not possess unrestricted root SSH access to every service.
 
-Production Kaiba devices use a different model. Their dynamic address and
-outbound mTLS identity make a pull protocol preferable to CI pushing over SSH.
-A future update controller should publish signed, immutable channel metadata;
-devices should poll it, verify the release and rollback policy, install into a
-recoverable layout, report boot health, and advance through explicit canary
-cohorts. Hydra supplies candidate bytes and evidence but has no device
-inventory, cohort, activation, or rollback authority.
+Production Kaiba devices use a different model. Their device-side trust and
+update flow is governed by the
+[production security follow-on](raspberry-pi-5-production-security-follow-on.md),
+not by this CI design. Dynamic addresses and outbound authentication make a
+pull protocol preferable to CI pushing over SSH. A future update controller should
+publish delegated-signed, immutable channel metadata and fresh policy
+authorizations. The customer-root-signed stable verifier must authenticate that
+policy and the selected release before protected state opens; only then may the
+device install into a recoverable layout, report boot health, and advance
+through explicit canary cohorts. Hydra supplies candidate bytes and evidence
+but has no device inventory, policy-freshness, cohort, activation, or rollback
+authority.
 
 Native Raspberry Pi secure boot does not provide the anti-rollback primitive
 required by the current enrollment policy. Self-hosting CI does not change

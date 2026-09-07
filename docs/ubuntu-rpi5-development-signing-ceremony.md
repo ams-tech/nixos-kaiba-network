@@ -16,12 +16,19 @@ of ten explicit private-key operations on the reviewed development YubiKey:
 five artifact signatures and five receipt-attestation signatures. Ten is not
 an upper bound if an attempt fails before its durable receipt is complete.
 
-All commands below are templates for a **new post-merge annotated tag, clean
-revision, and public release review**. Do not substitute `v0.1.3`: that tag
+This procedure has one completed public historical instance: the checked
+[`v0.1.6` signed inputs](../provisioning/releases/rpi5-v0.1.6/) contain the five
+grants, authenticated receipts, and signed results used to reconstruct the
+development release. Do not rerun, resign, or extend those grants. Use the
+template below only for a new release with a new approval window and identities.
+
+All commands below are templates for a **new clean post-merge revision, planned
+release, and reserved annotated-tag name**. Do not substitute `v0.1.3`: that tag
 predates the integrated approval, receipt, Ubuntu deployment, and final release
-path and cannot be reused. Run this only after these changes are merged, the
-new main pipeline and release have passed, and the new tag and commit have been
-recorded independently.
+path and cannot be reused. Start only after the exact source commit is merged to
+`main`, its pipeline has passed, its review is recorded independently, and the
+planned tag name is confirmed absent. The artifact-bound tag and public release
+are created only after signing, assembly, and whole-disk archive construction.
 
 Automated tests for this workflow are software-only. Run tests with the token
 removed; never add `ykman`, PC/SC enumeration, PKCS#11 signing, a PIN prompt, or
@@ -310,7 +317,7 @@ for the exact file and permission boundary.
 
 Do this only after all public builds and human review are complete, so the
 grant window is not consumed by build time. The reviewer should independently
-build the exact tagged release intent, release review, and approval tool as in
+build the exact commit-bound release intent, release review, and approval tool as in
 steps 1 and 2. They must compare the expected commit and public review through
 an authenticated channel before approving.
 
@@ -374,7 +381,7 @@ the two SHA-256 values independently of that transfer. A content digest detects
 change; the trusted channel is what authenticates the reviewer.
 
 On the signing host, copy the received directory to a private, new path, then
-verify it again against the locally rebuilt tagged release intent. Set the two
+verify it again against the locally rebuilt commit-bound release intent. Set the two
 expected hashes from the values delivered through the separate authenticated
 channel, not from the transferred `SHA256SUMS` file:
 
@@ -563,7 +570,7 @@ sudo -u kaiba-signing -- jq -e \
 ## 7. Derive the owned-recovery plan, then perform artifact request 5
 
 The fifth input is not signed from the original EEPROM plan. First import the
-fresh EEPROM result into the Nix store and let the exact tagged factory verify
+fresh EEPROM result into the Nix store and let the exact commit-bound factory verify
 it and derive the owned-recovery plan. This phase-transition build is public,
 offline verification; it does not submit a gate request or touch the token.
 
@@ -765,7 +772,7 @@ sha256sum "$HANDOFF_SUMS"
 Transfer the directory and checksum file to the independent/offline verifier
 using an authenticated channel or controlled removable medium. Send the
 checksum-file digest through a separate authenticated channel. On the offline
-host, verify the packet, independently rebuild the exact new tag, and set
+host, verify the packet, independently rebuild the exact pinned commit, and set
 `HANDOFF_DIR`, `RELEASE_INTENT`, `BOOT_PLAN`, and `APPROVAL_TOOL` to that host's
 absolute paths:
 
@@ -915,7 +922,7 @@ for store_path in \
 done
 ```
 
-Call the exact tagged `mkRpi5PrototypeSignedRelease` factory. It independently
+Call the exact commit-bound `mkRpi5PrototypeSignedRelease` factory. It independently
 re-verifies the three result directories, reconstructs the same owned-recovery
 plan, extracts the five result receipt digests, re-verifies the authenticated
 export against the imported registry, builds the six RPIBOOT trees, and runs
@@ -972,24 +979,27 @@ release evidence set. Create the final annotated tag only after the whole-disk
 archive exists, using the repository's release-binding format to bind that
 archive to this same commit. Keep the automated ceremony directory, including
 its indirect GC roots, until those records and the final release have been
-retained under the reviewed evidence policy. The resulting release is ready
-for a separately authorized sacrificial-board test plan; it is not authority
-to write NVMe, program EEPROM, change OTP/JTAG posture, or promote the
-development signer to production.
+retained under the reviewed evidence policy. The resulting release is ready for
+artifact-bound tagging and publication. On the already-fused sacrificial Pi it
+may be considered only as a separately reviewed owned-device update after the
+current state is reconciled; it never authorizes another fresh commit. It is not
+authority to write NVMe, change OTP/JTAG posture, or promote the development
+signer to production.
 
 ## 12. Recovery from a software-only finalizer defect
 
 If assembly writes `assembly-failure.json`, that ceremony is terminal. Preserve
 the failure record, build log, handoff snapshot, verification records, and GC
 roots. Do not remove the record, rerun `assemble`, repeat a signing request, or
-move the original release tag.
+create or move the reserved release tag.
 
 A defect confined to the public, no-authority finalizer does not invalidate
 already authenticated artifact signatures and receipt attestations. After the
 fix has passed review and CI under a new immutable tooling tag, use
 `lib.mkRpi5PrototypeSignedReleaseRecovery` in a new verifier-owned recovery
 directory. The recovery factory evaluates the payload graph from the original
-tag, then feeds that exact verified component graph to the fixed finalizer:
+pinned payload commit, then feeds that exact verified component graph to the
+fixed finalizer:
 
 ```nix
 let
@@ -1010,13 +1020,13 @@ fixed.lib.mkRpi5PrototypeSignedReleaseRecovery {
 ```
 
 The five inputs must be independently imported from the already authenticated
-handoff. Do not use the normal prototype factory from the new tag: it would
-create a different payload revision that the existing signatures do not
-authorize.
+handoff. Do not use the normal prototype factory from the recovery-tool
+revision: it would create a different payload revision that the existing
+signatures do not authorize.
 
 Retain a recovery record containing at least:
 
-- the original payload tag and commit;
+- the original payload commit and reserved release-tag name;
 - the recovery-tool tag and commit;
 - the original handoff-manifest, approval, registry, release-intent, receipt
   export, and assembly-failure digests;
@@ -1025,5 +1035,7 @@ Retain a recovery record containing at least:
 
 Re-run the final publication inspection from section 11 and confirm that its
 `source_revision` and release-intent digest still name the original payload.
+Only after the recovered release, whole-disk archive, and archive binding pass
+review may the reserved release tag be created at that original payload commit.
 Recovery remains software-only; it does not authorize media, EEPROM, OTP, JTAG,
 or other hardware mutation.

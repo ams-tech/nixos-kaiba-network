@@ -3,17 +3,23 @@
 ## Status and scope
 
 This document proposes the engineering path from the current sacrificial
-Raspberry Pi 5 development candidate to a production-oriented appliance built
-on the same native Raspberry Pi secure-boot and NixOS dm-verity architecture.
-The repository currently records a hardware-qualified read-only probe, not a
-completed irreversible secure-boot ceremony or a booting owned device.
+Raspberry Pi 5 development unit to a production-oriented appliance built on the
+same native Raspberry Pi secure-boot and NixOS dm-verity architecture. The
+sacrificial unit is fused and boots a signed development `target` image. The
+checked qualification JSON is its historical pre-fuse snapshot; the repository
+still needs a reconciled public post-fuse evidence packet for the exact running
+target. See the
+[sacrificial-device state](raspberry-pi-5-sacrificial-state.md).
 
 Everything after that current-state statement is proposed future work. It does
 not claim that the hardware interfaces, key uses, protocol, or implementation
 have passed qualification until the acceptance campaign in this document has
-completed. The existing secure-boot design and execution plan remain normative;
-in particular, production enrollment still requires an independently monotonic
-anti-rollback decision before protected material becomes available.
+completed. The existing secure-boot design remains normative for the native
+chain and fail-closed safety rules. The execution plan remains the normative
+reconciliation and acceptance record only for the sacrificial milestone; this
+document is the current production mechanism roadmap. Production enrollment
+still requires an independently monotonic anti-rollback decision before
+protected material becomes available.
 
 The plan evaluates a design that deliberately does not add a TPM. It uses the
 BCM2712 device-private-key OTP region and Raspberry Pi firmware cryptography for
@@ -23,12 +29,23 @@ and online-gated enrollment. The design does not provide hardware-rooted
 measured-boot attestation, and its anti-rollback claim depends on a fresh policy
 decision enforced by the stable verifier before it starts the selected release.
 
-The current sacrificial unit remains a development asset. If its irreversible
-development ceremony is eventually approved and completed, its development
-customer key and every image signed by that key will remain permanently
-authorized by the board. A production cohort must instead start with a new
-production customer key and a fresh board whose first ordinary
-customer-signed image is the stable verifier defined below.
+The current sacrificial unit remains a development asset. Its development
+customer key and every image signed by that key remain permanently authorized
+by the board. It must never re-enter the fresh-board path. A production cohort
+must instead start with a new production customer key and a fresh board whose
+first ordinary customer-signed image is the stable verifier defined below.
+
+That permanent development authorization limits what the sacrificial unit can
+prove about the future design. Older development-key-signed images can bypass a
+new stable verifier and may predate the firmware-key locks required below. The
+board is therefore suitable for disposable functional testing of verifier,
+update, HMAC, LUKS, and enrollment mechanics, but it cannot establish that the
+stable verifier is the only route to protected state or firmware-key use. Do
+not place confidentiality-sensitive data or reusable identity material behind a
+device-private key programmed on this board. The non-bypassability,
+confidentiality, and bootstrap-isolation claims require a fresh canary whose Pi
+customer root authorizes only the stable verifier, narrow recovery, and signed
+EEPROM paths.
 
 This plan assumes that loss of a board or its storage may destroy local data.
 There is no offline escrowed LUKS recovery key. Persistent application state
@@ -213,6 +230,22 @@ including reformatting the same physical drive. `storage_generation` is a
 monotonically increasing control-plane record, but is not a hardware monotonic
 value.
 
+For every normal unlock, the control plane must authorize the complete active
+storage-instance tuple before the firmware HMAC is requested. At minimum that
+tuple contains the logical device instance, `storage_generation`,
+`volume_nonce`, LUKS UUID, and a canonical digest of the expected LUKS header or
+other authenticated storage descriptor. The server compares it with the active
+inventory generation and includes the same values in its fresh signed response.
+A current release authorization for one storage instance must never be reusable
+with an older nonce, generation, header, or volume. Locally stored metadata is
+attacker-controlled input until it matches that fresh server authorization.
+
+Destructive initialization is the only exception: its header digest does not
+exist before `luksFormat`. It therefore uses the two-phase, one-shot pending
+protocol below. A pending tuple is never valid normal-unlock authorization and
+cannot become active until its formatted header and release bytes have been
+read back and bound into the server record.
+
 `storage_innate_id` is a qualification placeholder, not an authenticated media
 identity. NVMe model, serial, WWID, and `/dev/disk/by-id` values are normally
 spoofable operational identifiers and must not silently become trust inputs.
@@ -225,22 +258,34 @@ The HMAC result is a high-entropy LUKS keyslot passphrase. It is not the LUKS
 volume master key. `cryptsetup luksFormat` generates a new random volume master
 key for every initialization.
 
-The initramfs must:
+The customer-root-signed verifier environment must own the complete pre-handoff
+sequence. If the selected design uses Linux, this means a minimal verifier
+initramfs that is part of the stable verifier—not the delegated release's
+initramfs. If U-Boot cannot carry the authorization and protected-state
+continuation safely, it must hand off to such a root-signed verifier initramfs
+or be rejected.
+
+That verifier environment must:
 
 1. obtain and verify a fresh, signed control-plane authorization bound to the
-   exact verifier version, release digest, and security epoch;
+   exact verifier version, release digest, security epoch, logical device
+   instance, storage generation, volume nonce, LUKS UUID, and authenticated
+   storage-descriptor digest;
 2. reject an unauthorized or offline boot before starting the release or
    requesting a storage derivation;
 3. verify the complete boot and dm-verity policy;
 4. resolve exactly one expected block device and, if qualified, its canonical
    storage identifier;
-5. obtain the volume nonce and generation from bounded metadata;
+5. obtain the volume nonce, generation, UUID, and descriptor digest from bounded
+   metadata and require an exact match with the fresh authorization;
 6. request the firmware HMAC operation;
 7. deliver the result to cryptsetup through a private pipe or socket, never
    argv, environment, disk, or logs;
 8. clear temporary buffers after the volume opens;
-9. lock further HMAC operations for the remainder of the boot; and
-10. mount only explicitly permitted mutable paths.
+9. lock further HMAC operations for the remainder of the boot;
+10. hand the delegated OS only the already-open mapping and scoped ephemeral
+    credential, with no firmware crypto device or API; and
+11. mount only explicitly permitted mutable paths.
 
 Every production signed boot image must set `lock_device_private_key=1` so the
 firmware disables raw private-key export before userspace starts. HMAC use is
@@ -256,27 +301,73 @@ replacement, not data recovery:
 1. Boot an approved customer-signed recovery environment.
 2. Verify the board's owned state and exact recovery authorization.
 3. Identify the replacement storage and ensure the old volume is not mounted.
-4. Allocate a new volume nonce, LUKS UUID, storage generation, and logical
-   device-instance identifier.
-5. Derive a new unlock secret and format a new LUKS2 volume.
-6. Install the currently approved signed release.
-7. Revoke the previous instance's certificates and service credentials.
-8. Re-enroll the same hardware as a new logical device instance.
+4. Allocate a new volume nonce, preselected LUKS UUID, storage generation, and
+   logical device-instance identifier.
+5. Create a server-side `pending` storage-instance record that cannot authorize
+   a normal unlock.
+6. Obtain a fresh, one-shot initialization authorization bound to the device,
+   recovery digest, destructive action, request digest, pending generation,
+   nonce, UUID, and every target-storage fact that can be established before
+   formatting. The absent header digest is explicit, not a wildcard.
+7. Request the firmware HMAC and pass it privately to `cryptsetup luksFormat`,
+   forcing the authorized UUID.
+8. Cold-read and validate the new header, record its canonical descriptor
+   digest, install and cold-read the currently approved signed release, and
+   move the pending record through `formatted` and `verified`.
+9. Submit the exact descriptor and release bindings. The server atomically
+   activates the new device/storage generation and retires the old tuple; it
+   never accepts both generations.
+10. Revoke the previous instance's certificates and service credentials.
+11. Re-enroll the same hardware as the newly activated logical device instance.
+
+The initialization request is idempotent only before its destructive action is
+consumed. After an ambiguous format result, recovery may inspect the expected
+UUID and header and continue the exact completion if they validate; it must not
+format the tuple again. If no valid formatted state can be established, retire
+that pending record and allocate a new generation and nonce under a new
+authorization. Power loss at any pre-activation point leaves normal protected
+boot locked.
 
 The hardware identity and OTP HMAC key do not change. The storage and logical
 device generations do.
 
 Changing the volume nonce does not revoke an old derivation. If an old drive
-and its metadata later reappear on the original Pi, the firmware HMAC can
-derive the old passphrase again. The production control plane must therefore
-retire the old device instance and reject its certificates and generation.
-Without an independent hardware monotonic counter, local cryptographic
-rejection of every old volume is not claimed.
+and its metadata later reappear on the original Pi, the firmware HMAC can still
+derive the old passphrase. The stable verifier must prevent that derivation by
+requiring a fresh server authorization for the exact active storage-instance
+tuple before calling HMAC. The server must reject every retired generation and
+mixed tuple, not merely its old certificates. Without the online decision or an
+independent hardware monotonic counter, local cryptographic rejection of every
+old volume is not claimed.
+
+### Customer-root recovery permanence
+
+A recovery payload signed directly by the Pi customer root is as permanent as
+an old stable verifier: native secure boot cannot revoke it. Production should
+therefore root-sign one minimal, stable recovery verifier or dispatcher and put
+changeable recovery behavior behind delegated signatures. Every root-signed
+recovery digest remains in a complete cohort inventory and is treated as
+permanently bootable.
+
+Recovery receives a fresh, one-shot server action authorization bound to the
+device, active storage tuple, requested operation, recovery digest, expiry, and
+challenge transcript. It may inspect owned state, install an approved signed
+release, or destructively initialize a replacement volume. It must not open an
+existing LUKS volume, expose the firmware crypto API to a shell or delegated
+payload, or bypass the stable verifier's freshness policy. Offline recovery may
+repair only public boot state and must not release protected state.
+
+If a cohort ever root-signs an overbroad or vulnerable recovery payload, its
+capabilities are a non-revocable residual risk for every board in that cohort.
+The canary campaign must replay every historical root-signed recovery image and
+prove its exact bounded behavior; signer policy makes new recovery-root signing
+an exceptional, independently approved operation.
 
 ## Stable verifier and delegated boot
 
-The first engineering milestone must prove a stable verifier on the
-sacrificial board. Two bounded implementations are acceptable for the spike:
+The first engineering milestone must exercise a stable verifier on the
+sacrificial board and later prove it on a fresh canary. Two bounded
+implementations are acceptable for the spike:
 
 - a minimal customer-key-signed Linux/initramfs verifier that validates a
   complete release manifest and securely loads verified second-stage bytes; or
@@ -289,7 +380,12 @@ unsigned fallback. It must authenticate every byte that influences the
 second-stage kernel, initramfs, DTB, overlays, command line, and dm-verity root
 selection.
 
-The hardware spike passes only if:
+It must also retain control through the online authorization, storage-tuple
+validation, HMAC request, LUKS open, bootstrap/HMAC locks, and ephemeral-
+credential handoff. A design that exposes the firmware crypto interface to the
+delegated OS or hands off before those locks are applied fails the spike.
+
+The development spike passes its functional checks only if:
 
 - the approved release boots;
 - an altered manifest fails;
@@ -304,6 +400,10 @@ After selection, the verifier implementation, configuration, embedded policy
 roots, and boot script become one reviewed artifact signed by the Pi customer
 root key.
 
+On the sacrificial board, these checks demonstrate the selected verifier path;
+they do not prove that older development-key-signed images cannot bypass it.
+That negative security property is a production-canary acceptance gate.
+
 ## Release freshness without a TPM
 
 Every release carries a signed integer `security_epoch`. The control plane holds
@@ -313,10 +413,40 @@ for each cohort and device instance.
 At each production boot, the stable verifier must use only the restricted
 enrollment/update network to obtain a fresh, signed authorization. The request
 and response bind a server nonce, device instance, verifier version, complete
-release-manifest digest, security epoch, expiry, and a one-boot operational
-public key. The verifier checks that response and refuses to start the selected
-release or request the LUKS derivation unless every bound value matches. The
-server refuses authorization below either minimum.
+release-manifest digest, security epoch, active storage generation, volume
+nonce, LUKS UUID, authenticated storage-descriptor digest, expiry, and a
+one-boot operational public key. The verifier checks that response and refuses
+to start the selected release or request the LUKS derivation unless every bound
+value matches. The server refuses authorization below either minimum or for a
+retired, unknown, or mixed storage tuple.
+
+### Freshness transcript, endpoint trust, and time
+
+The verifier must authenticate the policy endpoint without depending on an
+attacker-controlled local clock or mutable DNS. Its immutable configuration
+must pin the policy authority, protocol, endpoint identity, and trust root or
+raw public key. The bootstrap transport and signed policy envelope must have a
+documented certificate/time-validation strategy; disabling certificate time
+checks is not acceptable. A signed server-time envelope or a separately
+qualified secure time source may establish time, but only after it is
+authenticated by the pinned policy authority.
+
+Each boot requires qualified early entropy. The verifier creates a fresh boot
+nonce and one-boot operational key, obtains a single-use server challenge, and
+returns a bootstrap proof of possession over the challenge, boot nonce,
+one-boot SPKI, verifier/release/epoch values, and complete device/storage tuple.
+The authorization response binds the request digest, both nonces, policy
+sequence, issue time, expiry, and all requested values. The server consumes the
+challenge once and returns the same result only for an idempotent replay of the
+exact request. A changed field, changed key, reused challenge with another
+request, response from an earlier boot, or response outside its bounded
+monotonic-in-boot lifetime fails closed.
+
+The protocol must qualify the early random source and monotonic timer, bound
+the maximum authorization lifetime independently of wall-clock rollback, and
+define server replay retention. If endpoint authentication, entropy, signed
+time, or replay state is unavailable, the verifier remains in restricted
+update/recovery mode and does not request HMAC or release protected state.
 
 A released OS reporting its own version or signing its own state is not remote
 attestation and is not sufficient for this decision. The control instead
@@ -356,6 +486,31 @@ under the key-policy gate above, not an assumed capability.
 An exportable software identity generated inside LUKS can serve as a lower
 assurance operational identity after unlock. It cannot satisfy the verifier's
 pre-unlock bootstrap requirement and provides only at-rest key protection.
+
+### One-boot operational credential lifecycle
+
+The one-boot key is an ephemeral operational generation, not the long-lived
+bootstrap identity. The verifier generates it from qualified early entropy and
+binds its SPKI into the bootstrap proof, freshness request, device and storage
+tuple, verifier and release digests, security epoch, and both nonces. The
+control plane records a boot-session identifier and moves that exact key through
+`pending`, `staged`, `verified`, and short-lived `active` states before
+production services accept it.
+
+Issuance is idempotent for the exact request digest: a retry returns the same
+certificate and serial, while a changed nonce or SPKI creates a new session and
+cannot reuse the old authorization. Activating a newer boot session denies the
+prior session except for an explicitly bounded overlap required by a protocol;
+ordinary reboot has no overlap. Expiry, revocation, failed handoff, or loss of
+the ephemeral private key requires a new boot and key. The verifier and release
+zeroize obsolete copies on handoff failure and shutdown as far as the platform
+allows, and the audit/inventory record retains only public key, certificate,
+session, authorization, and disposition data.
+
+The delegated OS receives only the scoped ephemeral signer or key material
+needed for that boot. This design limits duration and replay; it does not claim
+to protect the session private key after an authorized delegated kernel is
+compromised.
 
 Enrollment must:
 
@@ -480,6 +635,9 @@ storage browser, or arbitrary OTP/EEPROM mutation primitive.
 - [ ] Implement delegated policy, revocation, and release verification.
 - [ ] Bind kernel, initramfs, DTB, overlays, command line, root hash, and epoch.
 - [ ] Implement the fresh server-policy exchange before release handoff.
+- [ ] Keep policy, storage validation, HMAC/LUKS, and per-boot lock operations
+      inside the customer-root-signed verifier environment; deny the delegated
+      OS the firmware crypto interface.
 - [ ] Bind a one-boot operational key using a replaceable test bootstrap provider;
       defer hardware-key and lock claims to Workstream 5.
 - [ ] Add mutate-every-field and wrong-key tests.
@@ -490,7 +648,14 @@ storage browser, or arbitrary OTP/EEPROM mutation primitive.
 - [ ] Pin or vendor the Raspberry Pi firmware crypto and cryptsetup-agent
       implementation used by the target.
 - [ ] Add an irreversible, transaction-bound device-private-key provisioning
-      operation with blank-prestate and post-write checks.
+      operation with device-private-key blank-prestate and post-write checks.
+- [ ] On the already-owned sacrificial board, perform that operation only
+      through a narrowly capable development-customer-key-signed owned-recovery
+      transaction bound to the current customer-key hash, EEPROM hash, target,
+      station journal, and approval; never use the stock pre-fuse probe.
+- [ ] For the sacrificial board, classify any programmed device-private key and
+      encrypted data as disposable test material and prevent reuse of its
+      derived secrets or credentials outside the development campaign.
 - [ ] Add `lock_device_private_key=1` to the signed boot configuration.
 - [ ] Define and test the canonical HMAC derivation contract.
 - [ ] Qualify the exact storage identifier source or remove it from the
@@ -498,6 +663,10 @@ storage browser, or arbitrary OTP/EEPROM mutation primitive.
 - [ ] Add the LUKS2 mutable-state partition and mount policy.
 - [ ] Lock HMAC after unlock and verify raw export remains unavailable.
 - [ ] Implement destructive replacement-drive initialization.
+- [ ] Implement and test the `pending` → `formatted` → `verified` → `active`
+      initialization protocol, including ambiguous-format inspection,
+      abandonment under a new nonce/generation, and atomic retirement of the
+      previous tuple.
 - [ ] Document and test the no-escrow data-loss behavior.
 
 ### Workstream 4: signed A/B releases
@@ -520,6 +689,9 @@ storage browser, or arbitrary OTP/EEPROM mutation primitive.
 - [ ] Prove that released OS code cannot use the bootstrap operation after
       verifier handoff.
 - [ ] Add logical device-instance and storage-generation records.
+- [ ] Bind the active storage generation, volume nonce, LUKS UUID, and
+      authenticated descriptor digest into each fresh authorization; reject
+      retired and mix-and-match tuples before HMAC.
 - [ ] Implement certificate issuance, renewal, revocation, and retirement.
 - [ ] Add signed release epochs and cohort/device minimum-epoch policy.
 - [ ] Restrict pre-enrollment networking and gate operational services.
@@ -536,6 +708,9 @@ storage browser, or arbitrary OTP/EEPROM mutation primitive.
 - [ ] Finalize boot order, partition walk, UART, JTAG, self-update, and EEPROM
       write-protection settings.
 - [ ] Build and verify the narrow production owned-recovery bundle.
+- [ ] Inventory and test every customer-root-signed recovery digest, require
+      one-shot online action authorization, and prove recovery cannot open an
+      existing LUKS volume or expose firmware crypto operations.
 - [ ] Test recovery before applying irreversible finalization settings.
 
 ### Workstream 7: release and operations
@@ -549,26 +724,37 @@ storage browser, or arbitrary OTP/EEPROM mutation primitive.
       unexpected recovery use.
 - [ ] Prove destructive re-enrollment leaves the previous instance retired.
 
-## Hardware acceptance campaign
+## Development campaign and production acceptance
 
-The sacrificial unit must pass the complete design before a production key is
-used:
+The sacrificial unit will first exercise the complete design with
+development-only, disposable secrets. Its campaign covers functional behavior:
 
 - approved delegated release boots through the stable verifier;
-- altered, unsigned, wrong-key, and revoked release bundles fail;
-- each enabled boot source enforces the same verification policy;
+- altered, unsigned, wrong-key, and revoked release bundles fail behind the
+  selected verifier path;
+- each boot source selected by that verifier exercises the same delegated
+  verification policy;
 - dm-verity corruption prevents the system root from mounting;
 - removed storage does not disclose LUKS data;
 - copied storage fails on another Pi; failure on a different medium is required
   only if the storage identifier passes the stated qualification gate;
-- raw OTP-key export fails before userspace;
-- HMAC requests fail after the approved unlock;
-- a released OS cannot use the bootstrap signing operation;
+- raw OTP-key export and HMAC lock behavior are observed on the selected test
+  path, without claiming that older development-signed images cannot bypass
+  that path;
+- the selected verifier path prevents its delegated release from using the
+  bootstrap operation after handoff, without claiming board-wide isolation;
 - replacement storage creates a new nonce, LUKS key, generation, and logical
   device instance;
+- interruption at every initialization phase either resumes exact verified
+  completion or abandons the pending tuple without enabling normal unlock;
 - old instance certificates and leases are rejected;
-- an old correctly signed OS epoch is rejected by the stable verifier before
-  LUKS unlock and cannot obtain protected network service;
+- an old, retired, or mix-and-match storage tuple remains locked even when the
+  board and selected software release are otherwise current;
+- an old delegated release epoch is rejected by the selected stable verifier
+  before LUKS unlock and cannot obtain protected network service;
+- a historical development-customer-root-signed direct image is expected to
+  bypass the new verifier on this board, and that limitation is recorded rather
+  than misreported as a passing negative test;
 - A/B updates recover from power loss at every write and commit boundary;
 - signed owned recovery works and unauthorized recovery fails;
 - final boot order, UART, JTAG, EEPROM update, and write-protection state reads
@@ -576,46 +762,62 @@ used:
 - no image or evidence export contains a signing key, OTP secret, derived LUKS
   passphrase, or active device credential.
 
-After the sacrificial campaign passes, provision one fresh production canary
-with the new production Pi customer key. Repeat the complete acceptance suite
-on that canary before expanding the cohort.
+After the sacrificial functional campaign passes, provision one fresh
+production canary with the new production Pi customer key. Repeat the complete
+acceptance suite on that canary and additionally prove that no customer-root-
+signed legacy or general-purpose image is authorized, raw OTP-key export is
+locked before userspace, HMAC is unavailable after approved unlock, and a
+released OS cannot use the bootstrap operation. Every enabled physical boot
+source must enter the same stable-verifier or narrow-recovery policy. Only the
+fresh canary can close the confidentiality, verifier-non-bypass, and bootstrap-
+isolation claims before the cohort expands.
 
 ## Milestones
 
 ### Milestone 1: stable-verifier development spike
 
-The unfused sacrificial candidate proves that the stable verifier boots only an
-authorized delegated release, rejects every mutated input, obtains and enforces
+This milestone is complete when the fused sacrificial development unit
+demonstrates that a development-key-signed stable verifier boots an authorized
+delegated release, rejects mutated inputs on that path, obtains and enforces
 fresh server policy before release handoff, and binds a one-boot operational key
-using an explicitly non-production test bootstrap identity. This milestone does
-not claim a firmware-backed identity or hardware lock.
+using an explicitly non-production test bootstrap identity. Because older
+development-signed images remain authorized, this milestone does not prove
+verifier non-bypassability, firmware-backed identity, confidentiality, or
+hardware lock.
 
 ### Milestone 2: encrypted and updateable development appliance
 
-After the relevant irreversible development ceremony is separately approved,
-the sacrificial Pi provisions a device OTP key, opens LUKS mutable state through
-firmware HMAC only after verifier authorization, locks the derivation interface,
-and can destructively initialize a replacement drive. It also implements the
-qualified bootstrap-key design and proves its operation is locked before release
-handoff. Delegated-signed A/B releases enforce revocation, authenticate the
-complete kernel-to-root path, and safely handle interrupted updates.
+This milestone is complete after the existing owned state is reconciled, a
+separate irreversible device-private-key operation is reviewed and approved,
+and the sacrificial Pi provisions a disposable test OTP key, exercises LUKS
+unlock through firmware HMAC after verifier authorization, observes derivation-
+interface locking on the selected path, and destructively initializes a
+replacement drive. It also exercises the candidate bootstrap-key design.
+Delegated-signed A/B releases exercise revocation, authenticate the complete
+kernel-to-root path, and safely handle interrupted updates. Security claims
+about lock enforcement, confidentiality, and bypass resistance remain deferred
+to the fresh production canary.
 
 ### Milestone 3: enrolled appliance
 
-The device authenticates with the qualified bootstrap identity, receives a
-short-lived certificate bound to a one-boot operational key, and starts
-protected services only after verifier-enforced server authorization.
+This milestone is complete when the development device authenticates with a
+disposable test bootstrap identity, receives a short-lived test certificate
+bound to a one-boot operational key, and exercises protected-service gating
+after verifier-enforced server authorization. Production identity acceptance
+remains part of the fresh-canary milestone.
 
 ### Milestone 4: hardened production canary
 
-A fresh board uses the production customer key, final debug and EEPROM posture,
-narrow recovery, HSM signing, and the complete production acceptance suite.
+This milestone is complete when a fresh board uses the production customer key,
+final debug and EEPROM posture, narrow recovery, HSM signing, and the complete
+production acceptance suite.
 
 ### Milestone 5: production release
 
-The release pipeline publishes reproducible, independently verified images and
-evidence; operations can update, revoke, destructively re-enroll, quarantine,
-and retire devices without weakening the trust chain.
+This milestone is complete when the release pipeline publishes reproducible,
+independently verified images and evidence and operations can update, revoke,
+destructively re-enroll, quarantine, and retire devices without weakening the
+trust chain.
 
 ## References
 

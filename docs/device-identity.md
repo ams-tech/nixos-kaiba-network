@@ -9,6 +9,10 @@ levels.
 
 The production workflow described here is not implemented by the pilot. The
 current implementation boundary is summarized in [Kaiba mapping and gaps](#kaiba-mapping-and-gaps).
+The current Pi-specific [production security follow-on] specializes part of
+this contract around a no-TPM stable verifier, OTP-HMAC-derived encrypted state,
+and a separately scoped authentication role; it does not supersede this
+identity lifecycle or claim that enrollment is implemented.
 
 ## Security objective
 
@@ -867,6 +871,10 @@ The integration PKI is intentionally a fixture: it generates private keys into
 the Nix store, uses long-lived certificates, and uses one test CA for multiple
 roles. None of those choices defines the production PKI topology.
 
+The fused sacrificial Pi and its signed development boot do not change this
+gap: the board has no repository-backed production identity, credential
+enrollment, rotation, activation, or protected mutable-state implementation.
+
 ## Acceptance criteria for a future implementation
 
 A production provisioning and lifecycle implementation should demonstrate
@@ -938,6 +946,7 @@ that:
 [RFC 7030 updates]: https://www.rfc-editor.org/info/rfc7030
 [RFC 8995]: https://www.rfc-editor.org/rfc/rfc8995.html
 [RFC 9334]: https://www.rfc-editor.org/rfc/rfc9334.html
+[production security follow-on]: raspberry-pi-5-production-security-follow-on.md
 [SPIFFE X.509-SVID specification]: https://spiffe.io/docs/latest/spiffe-specs/x509-svid/
 [SPIFFE trust-domain and bundle specification]: https://spiffe.io/docs/latest/spiffe-specs/spiffe_trust_domain_and_bundle/
 [TCG DICE hardware requirements]: https://trustedcomputinggroup.org/resource/hardware-requirements-for-a-device-identifier-composition-engine/

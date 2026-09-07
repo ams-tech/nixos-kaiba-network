@@ -17,6 +17,12 @@ target, or reconcile inventory. The demo and the hardware-qualified, read-only
 live [Raspberry Pi 5 probe](raspberry-pi-5-provisioning-probe.md) intentionally
 have separate privilege boundaries.
 
+This is a historical workflow model, not the current state of the sacrificial
+board. That Pi is fused and boots a signed development target, so the demo's
+fresh-candidate actions must never be applied to it. The demo also predates and
+does not model the stable-verifier, delegated-release, online-freshness, or
+OTP-HMAC/LUKS work in the [production security follow-on].
+
 The modeled happy path is:
 
 1. pass station admission, create the transaction, acquire the claim, and bind
@@ -221,11 +227,15 @@ postcondition checks. The UI should receive only structured, secret-free state
 and should never accept arbitrary commands, executable paths, payload paths,
 profiles, or device selectors from browser content.
 
-The read-only Pi 5 hardware-qualification milestone now has reviewed evidence,
-but it deliberately grants no mutation authority. The authenticated
-control-to-guard bridge and complete signed release now exist outside the kiosk;
-until the remaining board-specific baseline checks and physical lane campaign
-are complete, use the kiosk only to review the modeled ceremony and use
-`kaiba-provision probe` separately for controlled, non-persistent
-requalification. OTP and EEPROM mutation, owned-device reconciliation, and
+The checked read-only Pi 5 qualification is historical pre-fuse evidence and
+deliberately grants no mutation authority. The authenticated control-to-guard
+bridge and complete signed development release exist outside the kiosk, and the
+sacrificial board has crossed the ownership boundary. Use the kiosk only to
+review the modeled workflow. Do not use its fresh-board states or
+`kaiba-provision probe` to classify the known-owned board; follow the
+[sacrificial-device state] and preserve the real station journal instead. OTP
+and EEPROM mutation, owned-device reconciliation, production storage, and
 identity enrollment remain disabled in the kiosk.
+
+[production security follow-on]: raspberry-pi-5-production-security-follow-on.md
+[sacrificial-device state]: raspberry-pi-5-sacrificial-state.md

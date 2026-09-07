@@ -18,12 +18,16 @@ one-time-programmable memory, secure element, trusted platform module, debug
 interface, boot chain, or storage technology. Hardware-specific behavior is
 supplied by a signed device-class profile and a pinned platform adapter.
 
-This remains the target design rather than a complete implemented station. The
-hardware-qualified, read-only
-[Raspberry Pi 5 provisioning probe](raspberry-pi-5-provisioning-probe.md)
-implements one deliberately non-persistent adapter slice: target observation
-and partial unprovisioned-baseline evaluation. It cannot authorize or perform a
-device mutation. The separate
+This remains the target design rather than a complete production station. The
+hardware-qualified, read-only [Raspberry Pi 5 provisioning
+probe](raspberry-pi-5-provisioning-probe.md) implements one deliberately
+non-persistent adapter slice: target observation and partial
+unprovisioned-baseline evaluation. It cannot authorize or perform a device
+mutation. A separate fixed development station was built for the one
+sacrificial Pi; that board is now fused and boots a signed development target.
+Neither that one-device result nor its specialized runner implements the
+general identity, enrollment, or activation authorities specified here. The
+separate
 [provisioning-station interface demo](provisioning-station-kiosk.md) renders
 mock operator states on a loopback-only service; it has no probe or target
 privilege and is not an implementation of the production station components.
@@ -858,15 +862,20 @@ A future implementation must demonstrate that:
 
 The current repository has a hardware-qualified, read-only Raspberry Pi 5
 probe backed by a stable device-class profile. It also has development
-foundations for durable control and audit, authenticated execute-side
-bridging, a one-shot lane guard, an offline signed-release assembler and Nix
-factory, and software-only production-media writer and verifier contracts. It
-still has no qualified production station, general production coordinator,
-device RA, inventory
-activation service, production bundle authority, or pending-credential
-verifier. The probe and these development foundations grant no mutation or
-activation authority. The integration PKI and file-backed agent key remain
-test fixtures.
+foundations for durable control and audit, authenticated execute-side bridging,
+a one-shot lane guard, an offline signed-release assembler and Nix factory, and
+software-only production-media writer and verifier contracts. The sacrificial
+Pi is operator-confirmed fused and booting a signed development target; the
+exact station/runner identity and post-fuse acceptance packet still need
+repository reconciliation.
+
+The repository still has no qualified production station, general production
+coordinator, device RA, inventory activation service, production bundle
+authority, or pending-credential verifier. The read-only probe grants no
+mutation authority, and the fixed sacrificial runner grants no production or
+activation authority. The integration PKI and file-backed agent key remain test
+fixtures. The current Pi-specific production direction is the [production
+security follow-on](raspberry-pi-5-production-security-follow-on.md).
 
 Completing a production implementation following this design will require, at
 minimum, production qualification or integration of:

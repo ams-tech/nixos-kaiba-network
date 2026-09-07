@@ -6,6 +6,14 @@ or changing OTP. Nix builds only public artifacts. The private key remains
 behind the fixed, approval-gated YubiKey service and is used only by an
 explicit runtime command.
 
+The repository contains one completed public development instance under
+[`provisioning/releases/rpi5-v0.1.6`](../provisioning/releases/rpi5-v0.1.6/).
+It includes the five grants and authenticated receipts plus the signed boot,
+EEPROM, and owned-recovery results needed to reconstruct the exact 18-role
+release. Treat those files as immutable historical signing evidence; do not
+repeat their private-key operations. The generic workflow below remains the
+template for a separately approved new release.
+
 ## Boundaries and outputs
 
 `mkRpi5ReleaseIntent` is the pure, pre-signature authorization boundary. Its
@@ -251,8 +259,10 @@ signing_path="$(readlink -f result-development-signing)"
 
 That build regenerates and checks the Raspberry Pi customer-key representation
 and canonical signer policy without opening PC/SC or invoking the private key.
-The checked-in profile is not production-approved and its initial ceremony has
-not completed the required independent second review.
+The checked-in profile is not production-approved. Its development-only second
+review completed on 2026-08-27 and is recorded under
+[`provisioning/signers/development-prototype`](../provisioning/signers/development-prototype/);
+each new release still requires its own approval and grants.
 
 ### Build the repository prototype release inputs
 
@@ -480,10 +490,10 @@ approval-gated adapter, and offline finalizer. They bind the same
 finalizer reopens the public plan and result, verifies the signatures and
 derived files, and admits only that verified public snapshot.
 
-This is a synthetic/offline foundation only. Current repository evidence does
-not establish that a reviewed production input was signed with a live approved
-token, and an output named `pieeprom.bin` from a synthetic fixture is not the
-production signed-EEPROM deliverable. The separate
+The generic factory remains a synthetic/offline foundation. The checked
+`v0.1.6` development inputs are a completed non-production instance with
+authenticated public signing receipts; they are not a production signed-EEPROM
+deliverable. The separate
 [owned recovery and RPIBOOT bundle workflow] now provides the one-new-request
 `-fr` path, offline replay, and canonical fresh/owned/test trees. Those public
 outputs do not write EEPROM or target media, enter RPIBOOT, change OTP, or
@@ -496,17 +506,18 @@ touches for those reused artifacts.
 
 ## Safety status
 
-Completing this workflow proves that the selected `boot.img` verifies under
-the reviewed public key and that the v1alpha2 public records carry one valid
-release-intent lineage. It does not prove a live YubiKey ceremony unless the
-root-managed receipt and operator evidence are reviewed. The repository's
-v1alpha2 exact 18-role manifest, canonical RPIBOOT bundle-set, and offline
-complete-release assembler do not change that boundary. The synthetic contract
-does assemble every role into immutable content-addressed bytes, but this
-workflow does not produce or assemble the reviewed live-token EEPROM/recovery
-outputs, prove target-media cold readback, grant per-device execution
-authorization, or demonstrate secure-boot enforcement on hardware. Those
-remain prerequisites before any one-time setting may be changed.
+Completing the generic workflow proves that the selected `boot.img` verifies
+under the reviewed public key and that the public records carry one valid
+release-intent lineage. A live-token claim additionally requires the
+root-managed authenticated receipt and operator evidence. The checked `v0.1.6`
+inputs meet that public development-release contract and reconstruct all 18
+roles; they do not become production artifacts or, by themselves, prove a
+target-media cold readback or a hardware boot.
+
+The sacrificial Pi has since been fused and boots a signed development target.
+That operator-confirmed hardware state is separate from this artifact workflow,
+and its exact target and post-fuse packet still require repository
+reconciliation. No step here authorizes repeating the fresh-board commit.
 
 For the complete non-production Ubuntu host procedure—new release approval,
 five artifact requests, five artifact signatures, five canonical receipt

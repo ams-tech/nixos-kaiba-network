@@ -6,6 +6,10 @@ boundary: it exercises campaign order, terminal dispositions, and
 evidence production without opening a device, invoking RPIBOOT, controlling
 power, staging media, or carrying an OTP-capable artifact.
 
+The real sacrificial Pi is now fused and boots a signed development target.
+This rehearsal remains useful for regression testing, but its modeled fresh
+branch cannot classify, reconcile, or authorize work on that known-owned board.
+
 Run the happy path from a checkout:
 
 ```console
@@ -59,7 +63,8 @@ interfaces are deterministic simulations. Consequently, the
 `authenticated-restart-reconciliation` report row is software integration
 evidence only: it is neither live-hardware evidence nor proof of production
 security enforcement. Physical USB, power, RPIBOOT, UART, target-continuity,
-and cold-boot behavior still require a rig test.
+and cold-boot behavior are outside this test. For the sacrificial board, their
+retained or still-missing results belong in the post-fuse reconciliation packet.
 
 For the runnable end-to-end prototype that also exercises durable control,
 audit, approval, intent, plan compilation, and restart binding before invoking

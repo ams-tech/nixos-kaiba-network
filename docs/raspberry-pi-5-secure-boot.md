@@ -7,13 +7,21 @@ firmware and OS boot images. It ends immediately before device-identity
 enrollment. “Factory fresh” is convenient operator shorthand here, not a claim
 of supply-chain provenance or complete absence of earlier state.
 
-This is the production security design and ceremony specification. The
+This is the native secure-boot baseline and the direct-signing ceremony design
+used for the sacrificial development milestone. The current production
+specialization is the [production security follow-on]: the production customer
+root, whose public-key hash is fused into each board, signs only a stable
+verifier, signed EEPROM, and narrow recovery, while delegated keys sign routine
+A/B OS releases. The
 repository now contains a separate, fail-closed development-cohort reference
 implementation for building the target and unsigned artifacts, external
 approval-gated signing, transaction/audit state, and a one-shot physical lane
 guard. See the [live implementation runbook]. Its read-only probe has passed
-physical qualification; the mutation lane and irreversible path have not.
-The implementation deliberately does not claim production enrollment. Do not
+physical qualification. The sacrificial Pi has since been fused and boots a
+signed development target, but its reconciled public post-fuse evidence packet
+is not yet checked in. It is now permanently an owned device; never use the
+fresh-board sequence on it again. See the [sacrificial-device state]. The
+implementation deliberately does not claim production enrollment. Do not
 translate this checklist into ad hoc shell commands.
 
 The primary sources were checked on 2026-08-21. Raspberry Pi's maintained
@@ -60,6 +68,11 @@ qualified_fresh_candidate -> prepared -> commit_in_progress
                                       -> owned_quarantined
 ```
 
+The sacrificial Pi has crossed `commit_in_progress` and boots signed code. Its
+exact `security_applied` versus `owned_quarantined` terminal record remains an
+evidence-reconciliation question, not permission to repeat the commit. In
+either case it can never return to `qualified_fresh_candidate`.
+
 The implemented development milestone terminates at `security_applied`.
 Because native Pi secure boot will accept an older correctly signed image and
 this milestone has no independent monotonic state, every attempt to enter
@@ -78,16 +91,19 @@ The storage precondition is authorization and write safety, not appraisal or
 identity binding. A non-zero unexpected customer-key hash is foreign ownership
 and must cause quarantine; it is not an acceptable variant of fresh.
 
-### Approved posture for the sacrificial development unit
+### Approved compiled posture for the sacrificial development unit
 
-The one-unit development ceremony has this explicit, non-production posture:
+The one-unit development release and ceremony plan have this explicit,
+non-production posture. The actual current EEPROM, debug, and write-protection
+values remain unconfirmed until the post-fuse readback packet is reconciled:
 
 - `BOOT_ORDER=0xf216` is read from right to left and tries NVMe (`6`), then SD
   (`1`), then network/TFTP (`2`), then restarts the sequence (`f`);
 - `ENABLE_SELF_UPDATE=0` disables automatic bootloader self-update scanning;
   it does not prevent a separately authorized RPIBOOT update or make an
   otherwise writable EEPROM immutable;
-- VideoCore JTAG and EEPROM hardware write protection remain unlocked;
+- the approved development policy leaves VideoCore JTAG and EEPROM hardware
+  write protection unlocked;
 - the initial EEPROM/key change is one transaction-bound, one-shot fresh-board
   RPIBOOT commit with an exact prestate and signed EEPROM, followed by direct
   readback; an uncertain result is never retried;
@@ -97,8 +113,8 @@ The one-unit development ceremony has this explicit, non-production posture:
   customer-key-signed RPIBOOT bundle;
 - the persistent root is read-only and dm-verity protected, with permitted
   mutable state held only in tmpfs; and
-- monotonic anti-rollback remains unimplemented, the device stops at
-  `security_applied`, and enrollment remains blocked.
+- monotonic anti-rollback remains unimplemented, the development lifecycle is
+  capped at `security_applied`, and enrollment remains blocked.
 
 Boot-media hardware identity is not a trust input. Neither the development
 posture nor the intended production chain authenticates an NVMe model, serial,
@@ -112,8 +128,10 @@ separate Pi-local configuration selects `/dev/nvme0n1` only on
 configuration, hostname, selector, resolved node, and current attachment, but
 none of them appears in canonical plans or the receipt chain. Trust in the
 running system must eventually come from observing and enforcing the signed boot
-and root-integrity chain, not from identifying the medium. That live enforcement
-remains a later hardware goal for the current development milestone.
+and root-integrity chain, not from identifying the medium. The operator reports
+that the fused unit boots the signed target; retaining the exact boot and
+root-integrity result in a reconciled public packet remains an open evidence
+task.
 
 The development boot order and unlocked VideoCore JTAG are **not
 production-ready**. Production values for both are undecided and require
@@ -207,10 +225,10 @@ are bound to one transaction.
 
 | Artifact | Purpose and required handling |
 | --- | --- |
-| Kaiba boot-signing key | RSA-2048 private key used to authorize EEPROM firmware/configuration, normal boot images, and deliberately approved recovery code. It must not enter Git, the Nix store, a target image, or the provisioning station. Use an HSM-backed signing interface for production and maintain a tested split-custody backup. |
+| Kaiba boot-signing key | RSA-2048 private key used to authorize EEPROM firmware/configuration and deliberately approved customer-root artifacts. The sacrificial milestone also used it for a direct normal-boot image. Production limits it to the stable verifier, signed EEPROM, and narrow recovery; it must not routinely sign OS releases. It must not enter Git, the Nix store, a target image, or the provisioning station. Use an HSM-backed signing interface for production and maintain a tested split-custody backup. |
 | Public key and fingerprint | Public half embedded in the signed EEPROM image; its expected canonical SHA-256 digest is the irreversible value authorized for OTP. Record the canonical public key and digest emitted or consumed by the pinned Raspberry Pi tooling in the transaction and fleet key inventory. Do not substitute a hash of the PEM file's text encoding. |
 | Signed EEPROM image | Pinned Raspberry Pi EEPROM firmware with an exact signed configuration and a customer-counter-signed BCM2712 second stage. Record the source version, complete configuration, digest, and signing result. |
-| Normal `boot.img` and `boot.sig` | Complete boot capsule and detached signature. Record an exact file manifest, image digest, signature-verification result, root-integrity reference, public enrollment-trust version, source revision, and size. |
+| Normal `boot.img` and `boot.sig` | Complete customer-root boot capsule and detached signature. In the sacrificial milestone this contains the development OS boot path; in production it contains only the stable verifier, which authenticates delegated release artifacts. Record an exact file manifest, image digest, signature-verification result, root-integrity reference, public enrollment-trust version, source revision, and size. |
 | Fresh-board commit bundle | RPIBOOT bundle that can execute while the customer-key hash is still zero and that carries the approved signed EEPROM image plus `program_pubkey=1`. Build the EEPROM with the official [update-pieeprom script] `-f` path; do not counter-sign the fresh-board `recovery.bin`. A customer-counter-signed recovery program will not run on a hash-zero BCM2712 board. |
 | Owned-device recovery bundle | Separately approved recovery program counter-signed by the same Kaiba key, built and verified before commit with the official `-fr` path. It must exist before the fuse operation because the current qualification probe and stock recovery payload lack the customer counter-signature and are rejected afterward. Keep its capabilities narrow; a signed recovery shell or mass-storage image is authorized code and can defeat higher-level secret isolation. |
 | Transaction manifest | Secret-free record binding the target fingerprint, expected OTP hash, EEPROM/configuration/boot artifacts, boot order, rollback, debug, storage, and recovery policies, tool versions, signer identity, operator and approver, and every required postcondition. |
@@ -300,9 +318,10 @@ operation, authoritative readback, and a secret-free result.
 ### Prove the owned state
 
 - [ ] Remove all power, then cold-boot the exact approved signed OS image.
-  Reconcile UART signature-verification evidence and, on supported EEPROM
-  firmware, `/proc/device-tree/chosen/bootloader/boot_img_sha256` against the
-  approved image digest.
+  Require EEPROM firmware that emits
+  `/proc/device-tree/chosen/bootloader/boot_img_sha256`, and reconcile both UART
+  signature-verification evidence and that value against the approved image
+  digest. Missing capability or output is an owned-state acceptance failure.
 - [ ] Use the customer-counter-signed owned-device probe to read back the key
   hash, EEPROM/security state, and target identity; require an exact match to
   the transaction and the pre-commit target. Require bit 3 of the bootloader's
@@ -319,7 +338,7 @@ operation, authoritative readback, and a secret-free result.
   may legitimately boot after the bad candidate is rejected. Exercise every
   enabled `BOOT_ORDER` path and partition-walk candidate. In particular,
   isolate both SD and network/TFTP and test unsigned and wrong-key images plus
-  an older correctly development-key-signed image on each. The first two must
+  an older image correctly signed by the development key on each. The first two must
   not execute; the correctly signed rollback case may execute and must prove
   that enrollment remains blocked rather than be reported as a signature
   rejection.
@@ -377,9 +396,12 @@ Ownership changes every later boot operation:
 
 - EEPROM firmware and configuration updates must remain Kaiba-signed, and the
   BCM2712 second stage must remain Raspberry-Pi-signed and Kaiba-counter-signed.
-- Normal and `tryboot` OS capsules must have valid signatures under the fused
-  key. Raspberry Pi's [tryboot documentation] provides a one-shot availability
-  rollback mechanism, not protection against replay of an older signed release.
+- At the native layer, every normal or `tryboot` capsule must have a valid
+  signature under the fused key. In the production design that root-signed
+  capsule is the stable verifier, not the routine OS; delegated keys authorize
+  the A/B releases behind it. Raspberry Pi's [tryboot documentation] provides a
+  one-shot availability rollback mechanism, not protection against replay of an
+  older signed root artifact.
 - RPIBOOT recovery programs must be counter-signed by the fused key. The
   official tooling uses the `-r` signing path for recovery on an already owned
   device; the resulting capability must not be generally distributed.
@@ -413,19 +435,25 @@ commit `42ca50932f67f4571951a11da3c3161561cb49c2` and includes the
 `08d4060ecfd85d402d2134572fe1e11d8b1b2dc8`. The workflow's rpi-eeprom
 submodule is separately attributed to
 [rpi-eeprom commit `25f837ab8009a643ed85b9aad94d911baddaf0c4`][EEPROM helper compatibility commit];
-the selected release's helper files are byte-identical. The contract verifies public
-provenance, bytes, digests, and required capability without a signing key or
-hardware authority. It does not produce the still-required signed EEPROM, and
-hardware emission of `boot_img_sha256` remains a cold-boot gate. Generic
-binaries and modules stay non-mutating until instantiated with fixed store
-paths, digests, lane devices, and an explicit mutation flag.
+the selected release's helper files are byte-identical. The contract verifies
+public provenance, bytes, digests, and required capability without a signing key
+or hardware authority. The checked `v0.1.6` development inputs now include
+signed EEPROM and owned-recovery outputs, but they are not production artifacts.
+Hardware emission of `boot_img_sha256` and the exact post-fuse state still
+require reconciled evidence. Generic binaries and modules stay non-mutating
+until instantiated with fixed store paths, digests, lane devices, and an
+explicit mutation flag.
 
-Production still requires hardware execution and evidence on the qualified
-rig, a distinct owned-device profile and signed probe bundle, independently
-monotonic anti-rollback, encrypted mutable state, device identity enrollment,
-production key backup/rotation, final JTAG, `BOOT_UART`, boot-order,
+The sacrificial board can exercise development behavior, but its permanently
+authorized direct-signing images cannot prove production verifier
+non-bypassability, firmware-key isolation, or storage confidentiality.
+Production still requires a fresh canary with the restricted root-signing
+topology, a distinct owned-device profile and signed probe bundle,
+independently monotonic anti-rollback, encrypted mutable state, device identity
+enrollment, production key backup/rotation, final JTAG, `BOOT_UART`, boot-order,
 self-update, recovery, and write-protection policy, and the complete positive,
-negative, power-loss, recovery, and quarantine campaign.
+negative, power-loss, recovery, and quarantine campaign. The selected future
+direction and canary gate are recorded in the [production security follow-on].
 
 The official [Raspberry Pi Secure Boot Provisioner] is a useful maintained
 reference for the vendor-supported provisioning flow, HSM signing, encrypted
@@ -490,3 +518,5 @@ than assumed.
 [BCM2712 EEPROM release notes]: https://github.com/raspberrypi/rpi-eeprom/blob/05d94be4554ce44a057bfce8d0dd37d951703dab/firmware-2712/release-notes.md
 [Raspberry Pi Secure Boot Provisioner]: https://github.com/raspberrypi/rpi-sb-provisioner
 [live implementation runbook]: ./raspberry-pi-5-live-provisioning.md
+[sacrificial-device state]: ./raspberry-pi-5-sacrificial-state.md
+[production security follow-on]: ./raspberry-pi-5-production-security-follow-on.md

@@ -7,17 +7,25 @@ storage. It implements secure-boot preparation and bounded one-shot mutation,
 reconciliation, and owned-device verification components without claiming a
 complete deployment or production enrollment path.
 
-The successful terminal lifecycle is `security_applied`. The implementation
-cannot enter `enrollment_ready`: native Raspberry Pi secure boot accepts an
-older correctly signed image, and this milestone has no independently
+The modeled successful terminal lifecycle is `security_applied`. The
+implementation cannot enter `enrollment_ready`: native Raspberry Pi secure boot
+accepts an older correctly signed image, and this milestone has no independently
 monotonic rollback state. A UI action, API request, or control-plane command
 that attempts to bypass that gate must be rejected.
+
+The sacrificial Pi has crossed the irreversible customer-key boundary and boots
+a signed development target. It is no longer eligible for any fresh-board step
+in this runbook. Its exact terminal record and post-fuse public evidence still
+need reconciliation, as tracked in the
+[sacrificial-device state](raspberry-pi-5-sacrificial-state.md). Preserve the
+existing station journal and use only the owned-device status, reconciliation,
+recovery, or later signed-update paths.
 
 The existing metadata-only probe and browser demo retain their current safety
 boundaries. The fresh-board profile is not changed to accept an owned key hash,
 and the public transition graph is never a fallback for the live station.
 
-## Approved one-unit development posture
+## Approved compiled one-unit development posture
 
 For the single sacrificial target, the approved EEPROM configuration uses
 `BOOT_ORDER=0xf216`. Raspberry Pi processes this value from right to left, so
@@ -26,7 +34,9 @@ restarts the sequence (`f`). `ENABLE_SELF_UPDATE=0` disables automatic
 bootloader self-update scanning, but it does not disable a separately
 authorized RPIBOOT update or make an unlocked EEPROM immutable.
 
-VideoCore JTAG and EEPROM hardware write protection remain unlocked. The
+The approved development policy leaves VideoCore JTAG and EEPROM hardware write
+protection unlocked. The actual current values remain unconfirmed until the
+post-fuse readback packet is reconciled. The
 fresh-board EEPROM/key change is exactly one transaction-bound RPIBOOT commit,
 using an exact expected prestate and signed EEPROM, followed by authoritative
 readback. A timeout, lost response, or other uncertainty never authorizes a
@@ -35,8 +45,8 @@ customer-key-signed RPIBOOT bundle with narrowly bounded capabilities. The
 bundle must be ready before ownership, but it must not execute until the board
 is owned by the customer key. The persistent root is read-only and dm-verity
 protected; permitted mutable state is tmpfs-only. Anti-rollback is
-unimplemented, so the unit stops at `security_applied` and cannot enter
-enrollment.
+unimplemented, so the development lifecycle is capped at `security_applied` and
+cannot enter enrollment.
 
 Boot-media hardware identity is deliberately outside this policy. NVMe model,
 serial, WWID, and `/dev/disk/by-id` are neither boot-trust inputs nor persistent
@@ -52,8 +62,9 @@ still reject partitions, mounts, root/system/swap devices, holders, and slaves;
 check exact per-run capacity and a 512-byte logical sector for layout
 compatibility; and pin the opened attachment within each operation. They do not
 appraise initial contents or establish media identity. Offline signed-artifact
-verification remains a software foundation; live signed-system boot observation
-and enforcement occur later in the hardware campaign.
+verification remains a software foundation. The operator has now observed the
+fused unit booting a signed target; the exact live boot and root-integrity facts
+still need a reconciled public evidence packet.
 
 The development boot order and unlocked VideoCore JTAG are **not
 production-ready**. Their production values are undecided and require separate
@@ -183,12 +194,13 @@ The repository now constructs a complete, content-addressed signed-release
 publication with the exact 18-role manifest and canonical RPIBOOT directory
 trees. The offline finalizer resolves every role to immutable bytes, verifies
 the complete public signature and release-intent lineage, and reopens the
-published result. The physical lane factory accepts only that typed verified
+published result. The checked `v0.1.6` inputs contain the public development
+grants, authenticated receipts, signed boot and EEPROM results, and owned
+recovery used by the fixed station. They are development artifacts, not reviewed
+production bytes. The physical lane factory accepts only that typed verified
 publication, takes its six bundle paths from the retained verified bundle-set
 provenance, and derives the four release expectations from the publication and
-manifest. Its checked fixture is synthetic: reviewed production bytes and
-live-token ceremony evidence must still be completed before an ownership
-commit.
+manifest.
 
 The production-media factory derives a plan-specialized device stager and an
 independent verifier from that verified release and exact per-run layout
@@ -197,8 +209,10 @@ and fixes it outside its canonical plan and receipt chain while recording it in
 the mandatory operational preflight. The tools can write and cold-read the
 manifest-bound boot, root-data, and root-hash bytes, but that cold readback
 proves expected contents on a fresh attachment, not continuity of one physical
-medium. The repository has not recorded that physical campaign or a live signed
-boot. The lane guard and loopback UI still do not stage media themselves.
+medium. The repository has not checked in the physical media/cold-readback
+packet. The operator reports a live signed boot, but its exact digest-bound
+evidence is not yet reconciled in Git. The lane guard and loopback UI still do
+not stage media themselves.
 
 ## Nix entry points
 
@@ -368,9 +382,10 @@ provenance. Digest-bound operator prompts use `operator-prompt/v1alpha2`; the
 new schema closes each relay or manual prompt kind over both the boot mode and
 authority-bound power-control mode. Old plans, approvals, intents,
 requests, and attempts bound to older digests are not reusable. This remains
-software-only evidence: uncertain live mutation recovery still requires the
-documented sacrificial-hardware qualification and makes no live enforcement
-claim.
+software-only evidence: it neither reconciles the already-owned sacrificial
+board nor makes a live enforcement claim. Any uncertain live result requires
+the retained station journal and a separately reviewed owned-state observation
+or quarantine procedure; fresh qualification cannot resolve it.
 
 The live station uses the following order for every irreversible operation:
 
@@ -526,8 +541,15 @@ payload, or mutation selector.
 
 ### Exact reviewed authority and one-shot sequence
 
+This section is retained as the implementation contract for a separately
+authorized hash-zero target. It is not a runnable plan for the now-fused
+sacrificial Pi. Do not regenerate its draft, claim, intent, or first-commit
+authority; use the existing journal and owned-device reconciliation instead.
+
 This transcript documents the implemented interface; it does **not** authorize
-a live mutation. Use it only after the remaining pre-SB-08 gates below pass.
+a live mutation. For a different hash-zero target, use it only after that
+target's separately reviewed pre-commit gates pass. It is permanently retired
+for the fused sacrificial Pi.
 The released hardware-qualification image is deliberately non-administrative:
 it has no `sudo` and is not this mutation-capable deployment. In the commands
 below, `sudo` denotes an approved administrative/root session on a separately
@@ -812,9 +834,10 @@ every other no-attestation outcome remains uncertain forever. Neither outcome
 authorizes a retry.
 
 Operation 3 deliberately transitions from `commit_attested` to `observed` and
-requires a separately validated installed-EEPROM collector. The v0.1.5 signed
-target contains no such collector, so stop after the verified signed cold boot
-and do not authorize operation 3. Never fill that gap with the expected
+requires a separately validated installed-EEPROM collector. The historical
+v0.1.5 signed target artifact contains no such collector. That fact does not
+establish which collector or interface exists on the currently running board,
+whose exact target version is unreconciled. Never fill the gap with the expected
 artifact digest, a plan value, or an unbound cached value.
 
 Every `propose-*` command first renews only the exact live claim appropriate to
@@ -1303,7 +1326,12 @@ the current immutable lane mode, the guard uses neither relay nor manual prompt;
 it terminalizes the transition as quarantined with `safe_off_basis: unproven`
 and requires external inspection.
 
-## Transaction sequence
+## Original fresh-board transaction sequence
+
+The sequence below documents how the sacrificial transition was designed to
+run. The board has crossed the irreversible boundary, so these fresh-candidate
+steps must not be repeated. They remain useful for evidence reconciliation and
+for reviewing code, not as current operator instructions.
 
 1. Admit the station only when its source revision, configuration, identity,
    journal, time, control services, audit export, and empty lane are healthy.
@@ -1341,7 +1369,7 @@ and requires external inspection.
     reject stock recovery, rerun owned readback, and test altered, unsigned,
     wrong-key, alternate-media, and dm-verity-tampered inputs. Isolate SD and
     network/TFTP in turn, testing each with unsigned and wrong-key images plus
-    an older correctly development-key-signed image. Unsigned and wrong-key
+    an older image correctly signed by the development key. Unsigned and wrong-key
     candidates must not execute; a correctly signed older candidate may
     execute and must demonstrate that enrollment remains blocked.
 12. Reconcile the terminal audit record and record `security_applied` with the
@@ -1352,17 +1380,22 @@ does not create persistent mutable state, does not lock VideoCore JTAG, and
 does not apply EEPROM hardware write protection. These omissions are recorded
 policy, not successful production postconditions.
 
-## Required failure drills
+## Historical pre-commit and current owned-state drills
 
-Before using the mutation backend, the fake lane and then the physical rig must
-exercise process crash, station reboot, power loss, USB replacement, UART
-loss, YubiKey removal, wrong token, PIN/touch timeout, expired approval,
-transferred claim, stale fence epoch, signer mismatch, audit outage, and failure
-before, during, and after the OTP command. Relay mode additionally exercises
-relay-control and relay fail-off. Manual mode instead proves that interruption
-never causes automatic continuation or mutation redispatch, requires a new
-authenticated disconnect before reconciliation, and retains the explicit
-absence of an automated fail-off guarantee in its evidence.
+The original plan required the fake lane and then the physical rig to exercise
+process crash, station reboot, power loss, USB replacement, UART loss, YubiKey
+removal, wrong token, PIN/touch timeout, expired approval, transferred claim,
+stale fence epoch, signer mismatch, audit outage, and failure before, during,
+and after the OTP command. Relay mode additionally covered relay-control and
+relay fail-off. Manual mode instead had to prove that interruption never caused
+automatic continuation or mutation redispatch, required a new authenticated
+disconnect before reconciliation, and retained the absence of automated
+fail-off in its evidence.
+
+Those pre-commit physical results must now be recovered from retained evidence
+or recorded as gaps; they cannot be backfilled by treating the fused Pi as
+fresh. Separately reviewed non-mutating or reversible owned-device drills may
+still close applicable SB-09 acceptance items.
 
 No drill may repeat a one-way operation based only on a timeout or missing
 response. Any partially owned or uncertain board is permanently excluded from
@@ -1387,58 +1420,39 @@ production claim:
   write-protection qualification; and
 - multi-lane scaling.
 
-## Remaining live-only gates before SB-08
+The [production security follow-on](raspberry-pi-5-production-security-follow-on.md)
+is the current roadmap for closing these gaps.
 
-The local software transaction, manual-prompt, public-evidence review, and
-private-evidence-boundary deliverables are complete, but they do not authorize
-a sacrificial ownership mutation. The exact pushed merge/pre-ceremony revision
-must still pass the repository's x86_64 and **native** AArch64 pipeline,
-including its station-image build; that non-live, revision-bound release gate
-is not replaced by local x86_64 results and is not counted below. Exactly these
-five live gates remain:
+## Post-fuse reconciliation and acceptance gap
 
-1. Complete the development-token ceremony and assemble the exact signed
-   release from authenticated live-token results, including PIN, touch,
-   wrong-token, timeout, receipt-lineage, and independent offline-verification
-   evidence. Follow the
-   [Ubuntu development signing ceremony](ubuntu-rpi5-development-signing-ceremony.md)
-   for the software-only signing and assembly portion. This is a development
-   release, not a production release.
-2. Select the typed hardware configuration for the machine that actually runs
-   the writer. On `malak`, use only its fixed USB-reader configuration; use the
-   Pi-local `/dev/nvme0n1` configuration only on `kaiba-rpi5-provisioner` while
-   that Pi is booted from a separate medium. Review the mandatory attachment-
-   bound preflight, stage the approved layout, remove power and reattach the
-   medium, and complete independent cold readback of every manifest-bound byte
-   and dm-verity result. Record content evidence only: do not verify or retain
-   NVMe model, serial, WWID, `/dev/disk/by-id`, or any other boot-media identity.
-3. Qualify the actual UART adapter's voltage, ground, settings, isolation, and
-   stable `/dev/serial/by-id` identity, then prove bounded capture on the fixed
-   lane. This pre-SB-08 work does not claim signed-system-image enforcement;
-   that live enforcement observation remains a later owned-device goal.
-4. Qualify the selected fixed power mode and all power paths. The default relay
-   lane must prove no USB, UART, display, GPIO, or NVMe back-power; observed USB
-   disappearance and the cold interval; and fail-off after relay-control loss,
-   process death, kernel/station restart, complete station power loss, and
-   emergency stop. The sacrificial-development manual exception instead
-   requires the single-source USB-versus-normal-PSU topology above, authenticated
-   connect/disconnect prompts, USB absence and the cold interval, and fail-closed
-   interruption/recovery tests. It explicitly waives automated fail-off and
-   cannot satisfy a production physical-power qualification.
-5. First close every deferred baseline check for the exact candidate board:
-   explicit destructive-use authorization for the selected storage without
-   appraising contents or binding storage identity; the remaining customer-OTP
-   and device-private-key rows; installed EEPROM contents, effective
-   write-protection posture, and EEPROM/recovery authenticity; inventory
-   ownership and prior-transaction history; and non-VideoCore debug or
-   alternate execution paths. Then run the physical wrong-mode,
-   absent/additional/moved/replaced-target, BOOTSEL timing, USB continuity,
-   UART failure, restart/recovery, and source-isolation campaign with inert,
-   explicitly non-OTP-capable payloads. Every ambiguous or unsafe result must
-   cleanly abort or quarantine. The fixed actuator remains deferred and is not
-   a gate for this manual campaign.
+The sacrificial ownership mutation has occurred and the board boots a signed
+target. SB-08 is therefore no longer a future authorization question, and no
+new fresh-board claim, intent, approval, or commit may be created for this Pi.
+The remaining work is to preserve and reconcile what happened, then finish only
+separately reviewed owned-device acceptance tests.
 
-The development `BOOT_ORDER=0xf216`, unlocked VideoCore JTAG, `BOOT_UART=1`,
-self-update, recovery, and EEPROM write-protection postures remain explicitly
-non-production. No value, including `0xf6`, is asserted as a production-ready
+The checked `v0.1.6` directory already supplies the public development signing
+results and reproducible 18-role release. When the private station state and
+hardware are available, recover or record:
+
+1. the immutable station identity, ceremony time, terminal runner status, and
+   complete journal disposition;
+2. the fused customer-key hash, signed EEPROM hash, owned readback, and exact
+   target release, source, boot-image, root-integrity, and media digests;
+3. the attachment-bound media stage and cold-readback result, without promoting
+   model, serial, WWID, or `/dev/disk/by-id` into a trust input;
+4. the signed normal-boot UART facts, including the customer-key bit,
+   `boot_img_sha256`, dm-verity state, and any available power/lane evidence;
+5. authorized recovery plus altered, unsigned, wrong-key, fallback-source,
+   rollback-limit, and dm-verity rejection results; and
+6. the reconciled `security_applied` or `owned_quarantined` control/audit record.
+
+Missing or contradictory evidence cannot authorize a repeat. It leaves the
+already-owned board in reconciliation or quarantine until a separately approved
+owned-device recovery or retirement action resolves it.
+
+The intended development `BOOT_ORDER=0xf216`, unlocked VideoCore JTAG,
+`BOOT_UART=1`, self-update, recovery, and EEPROM write-protection policies are
+explicitly non-production; their actual current readback remains part of the
+missing packet. No value, including `0xf6`, is asserted as a production-ready
 replacement; production values require a separate decision and qualification.

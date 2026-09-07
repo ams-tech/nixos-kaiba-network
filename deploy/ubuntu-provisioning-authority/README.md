@@ -13,6 +13,19 @@ state nor a systemd enablement link and never starts either service. It also
 does not modify UFW or any other firewall policy. Starting the two disabled
 units is a separate operator boundary.
 
+This bundle defines the generic sacrificial lane's transaction-control and
+audit authority. Its presence in the repository does not establish that this
+deployment participated in the completed fuse operation; that identity remains
+part of post-fuse reconciliation. It is not the production device RA/CA,
+release-freshness service, identity issuer, or enrollment authority described
+by the production roadmap.
+
+Never initialize this deployment or create a replacement transaction, claim,
+approval, or intent to reconstruct the known-owned sacrificial board's history.
+Use only retained state and a separately reviewed read-only reconciliation
+path. The installation and start procedure below applies to a new authorized
+development deployment, not to recreating the completed ceremony.
+
 The fixed listener is `192.168.8.249`, with control on TCP 8091 and audit on
 TCP 8092. Before starting either service, determine the provisioning Pi's
 current IPv4 address on the directly connected network and add source- and
@@ -32,12 +45,28 @@ directly beneath `/run`, which the installer verifies is tmpfs; do not copy a
 mutable user-owned packet into a root installation. The output is suitable only
 for this sacrificial development campaign, not production PKI.
 
-Typical live-host sequence (from the immutable Nix deployment output):
+From the repository root, build the deployment and resolve its output to an
+immutable store path before invoking any of its tools:
 
 ```console
-$ sudo kaiba-provision-authority-development-pki --output /run/kaiba-authority-pki-packet
-$ sudo kaiba-ubuntu-provisioning-authority-install --pki-directory /run/kaiba-authority-pki-packet
-$ sudo kaiba-provision-authority-preflight --static
+$ nix --accept-flake-config build \
+    path:.#ubuntu-provisioning-authority-deployment \
+    --out-link result-ubuntu-provisioning-authority-deployment
+$ deployment_path="$(readlink -e result-ubuntu-provisioning-authority-deployment)"
+$ case "$deployment_path" in
+>   /nix/store/*) ;;
+>   *) echo "deployment output is not in /nix/store" >&2; exit 1 ;;
+> esac
+```
+
+Typical live-host sequence (using that immutable deployment output):
+
+```console
+$ sudo "$deployment_path/bin/kaiba-provision-authority-development-pki" \
+    --output /run/kaiba-authority-pki-packet
+$ sudo "$deployment_path/bin/kaiba-ubuntu-provisioning-authority-install" \
+    --pki-directory /run/kaiba-authority-pki-packet
+$ sudo "$deployment_path/bin/kaiba-provision-authority-preflight" --static
 ```
 
 The station packet deliberately contains two different private keys with the
@@ -71,7 +100,8 @@ operation has been reviewed, start and test the services explicitly:
 
 ```console
 $ sudo systemctl start kaiba-provisioning-control.service kaiba-provisioning-audit.service
-$ sudo kaiba-provision-authority-live-smoke --pki-directory /run/kaiba-authority-pki-packet
+$ sudo "$deployment_path/bin/kaiba-provision-authority-live-smoke" \
+    --pki-directory /run/kaiba-authority-pki-packet
 ```
 
 The smoke test performs only GET requests. It proves positive station mTLS,

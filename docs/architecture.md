@@ -126,13 +126,13 @@ not maintain an authoritative active-credential inventory.
 
 The [provisioning station design](provisioning-station.md) defines the dedicated
 execution environment, control-service boundaries, station and lane fencing,
-secret handling, recovery, and acceptance criteria for that future path. It is
-also design documentation rather than an implemented station. The
-hardware-qualified, read-only [Raspberry Pi 5 provisioning
-probe](raspberry-pi-5-provisioning-probe.md)
-implements only target observation and partial baseline evaluation: it has no
-transaction coordinator, mutation authority, key handling, enrollment, or
-activation path.
+secret handling, recovery, and acceptance criteria for a production path. It is
+design documentation rather than a complete production station. The repository
+also contains a hardware-qualified read-only [Raspberry Pi 5 provisioning
+probe](raspberry-pi-5-provisioning-probe.md) and a fixed, development-only
+secure-boot station. The probe itself has no mutation authority. The fixed
+station was built for the one sacrificial board and is not a general
+transaction coordinator, enrollment station, or activation path.
 
 The [provisioning-station interface demo](provisioning-station-kiosk.md) is a
 separate loopback-only mock operator UI. Its service has no raw USB privilege
@@ -156,11 +156,18 @@ credential rotation, production hardware-backed signing, attestation, and
 monitoring.
 
 The Raspberry Pi 5 development lane is no longer wholly deferred. The
-repository contains reviewed read-only hardware-qualification evidence,
-deterministic unsigned boot and dm-verity artifacts, a complete verified signed
-release, an evaluated immutable target, authenticated control-to-guard
-transport, production GPT/FAT/dm-verity media verification, and development
-signing, control, audit, and lane-guard foundations. It still lacks live-token
-evidence and the physical failure campaign required before an irreversible
-ownership ceremony. The fixed-extent media stager and durable software-only
-plan rehearsal remain non-ceremony foundations.
+repository contains historical read-only hardware-qualification evidence,
+deterministic boot and dm-verity artifacts, checked public `v0.1.6` signing
+results, a complete verified development release, immutable station and target
+builds, authenticated control-to-guard transport, media-verification contracts,
+and development signing, control, audit, and lane-guard foundations. The
+sacrificial Pi has crossed the irreversible customer-key boundary and boots a
+signed development target. Its exact target digest and complete post-fuse
+acceptance packet have not yet been reconciled in Git; see the [current
+sacrificial-device state](raspberry-pi-5-sacrificial-state.md).
+
+That result does not implement the production identity, enrollment, encrypted
+mutable state, or independently monotonic release policy described by the
+[production security follow-on](raspberry-pi-5-production-security-follow-on.md).
+The fixed-extent media stager and durable software-only rehearsals remain
+non-hardware evidence foundations.

@@ -16,6 +16,12 @@ qualification. The promotion changed status only and preserved the pinned
 adapter and status-independent policy. Stability applies to this read-only
 classification contract; it does not authorize target mutation.
 
+The checked sacrificial-device result is a historical pre-fuse record. That Pi
+has since been fused and boots a signed development target. Never run or present
+this fresh-candidate workflow as its current lifecycle path; use the
+[sacrificial-device state](raspberry-pi-5-sacrificial-state.md) and owned-device
+reconciliation instead.
+
 ## Safety boundary
 
 Live probing is read-only with respect to persistent target state, but it is
@@ -268,7 +274,9 @@ from authorizing later mutations.
 The profile was promoted from `experimental` to `stable` only after a
 sacrificial fresh Pi 5 Model B passed this ceremony. Any change to the
 read-only policy, adapter, pinned inputs, or live acquisition path requires a
-new frozen qualification before the checked evidence can be replaced.
+new frozen qualification for a separately approved fresh candidate. The
+original sacrificial record remains immutable historical evidence and is not
+replaced with observations from another board.
 
 The hardware findings above changed the profile and qualification contract.
 Any probe result or comparison record produced before this revision is
@@ -332,7 +340,7 @@ their publication with the same care as other hardware evidence. Attach the
 final redacted record to the pull request. Hardware qualification cannot be
 performed by repository CI.
 
-### Sacrificial-device operator runbook
+### Historical fresh-device qualification runbook
 
 Use a fresh, unfused Pi 5 Model B, a labelled data-capable cable and lane, and a
 station installed from the frozen revision. Confirm that exactly one
@@ -343,6 +351,11 @@ latter as a no-swap `tmpfs`; keep that station powered throughout the ceremony
 and restart from probe 1 if it reboots. On another approved station, the
 commands below use placeholders which the operator must set from its frozen
 record:
+
+This sequence is inapplicable to the fused sacrificial Pi. Its stock unsigned
+metadata recovery will not establish current owned state and must never be used
+to infer that the board is blank. Use only a separately approved
+customer-signed owned-state collector for that device.
 
 On the dedicated image, the preferred entry point guides this complete state
 machine while retaining the same CLI and evidence boundaries:
@@ -460,17 +473,15 @@ nix develop ./nix/provisioning --command check-jsonschema \
   /path/to/hardware-qualification.json
 ```
 
-Keep both raw probe files private. Copy only the final qualifier output into
-`tests/provisioning/evidence/sacrificial-pi-5.json` during the reviewed closeout
-change. That change must also update the checked canonical snapshot in
-`tests/provisioning/report-input.json`; the Nix expression derives status and
-the evidence path from the completed record and binds it to the current profile
-policy and pinned probe inputs. The executable digest is checked by the CI job
-whose Nix system matches the recorded station; architecture-independent probe
-inputs are checked by both jobs. The reviewed `experimental`-to-`stable`
-status-only promotion remains valid only while the policy digest is unchanged;
-the checked record therefore retains the status and exact profile digest
-captured during qualification. Reviewers must separately verify that
+Keep both raw probe files private. The existing
+`tests/provisioning/evidence/sacrificial-pi-5.json` is the original board's
+immutable pre-fuse record; do not overwrite it. A different candidate requires
+a separately reviewed evidence identity, filename, importer, report binding,
+and closeout change; the repository does not implement that publication path
+today. The Nix expression must bind any future record to its profile policy and
+pinned probe inputs. The executable digest is checked by the CI job whose Nix
+system matches the recorded station; architecture-independent probe inputs are
+checked by both jobs. Reviewers must separately verify that
 `source_revision` is the frozen ceremony revision. The report is public on
 GitHub Pages; never add raw results or an `incomplete` preflight record.
 

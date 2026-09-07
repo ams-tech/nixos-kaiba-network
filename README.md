@@ -17,6 +17,25 @@ depends on Internet access while running.
 
 - [Project homepage](https://ams-tech.github.io/nixos-kaiba-network/)
 - [Latest main-branch test report](https://ams-tech.github.io/nixos-kaiba-network/reports/latest/)
+- [Documentation map and current state](docs/README.md)
+
+## Current state and direction
+
+The sacrificial Raspberry Pi 5 has been fused and is booting a signed
+development `target` image. It is permanently an owned device and must never
+re-enter a fresh-board or first-commit path. The checked hardware-qualification
+JSON predates the fuse operation and remains historical pre-fuse evidence; the
+repository does not yet contain the reconciled public post-fuse packet that
+identifies the exact running target and closes every owned-state acceptance
+result. See the [current sacrificial-device state](docs/raspberry-pi-5-sacrificial-state.md).
+
+The [production security follow-on](docs/raspberry-pi-5-production-security-follow-on.md)
+is the current device-security roadmap. It carries the work forward from the
+irreversible sacrificial-development milestone toward delegated releases,
+server-enforced freshness before protected state, OTP-HMAC-derived LUKS unlock,
+and production identity and enrollment. See the
+[documentation map](docs/README.md) for the roles and precedence of the detailed
+designs, runbooks, prototypes, and version-bound release documents.
 
 ## Commands
 
@@ -63,12 +82,13 @@ canonical DNS and provisioning JSON, topology diagrams, normalized evidence
 and zone snapshots, and a SHA-256 manifest. The local report records native
 x86 provisioning checks and explicitly marks ARM64 as not observed. CI composes
 the native ARM64 result only after binding it to the checked-out source
-revision. Physical Pi 5 qualification remains a separate manual gate;
-the checked redacted record now reports that gate as passed, while the
-automated result never implies authentication, attestation, or permission to
-mutate a device. On `x86_64-linux`, `nix flake check -L` independently
-enforces the report schemas, required functional and security assertions, Go tests, report tests,
-and both flakes' NixOS module evaluation. The equivalent leaf command is
+revision. Physical Pi 5 qualification remains a separate manual gate; the
+checked redacted record reports the historical pre-fuse qualification as
+passed, while the automated result never implies authentication, attestation,
+or permission to mutate a device. On `x86_64-linux`, `nix flake check -L`
+independently enforces the report schemas, required functional and security
+assertions, Go tests, report tests, and both flakes' NixOS module evaluation.
+The equivalent leaf command is
 `nix build ./nix/dns#dns-test-report -L`. The interactive driver is for
 topology debugging.
 
@@ -76,7 +96,7 @@ The physical ceremony uses `kaiba-provision qualify` to validate and compare
 two private live results and produce a deterministic redacted record. It does
 not automate or prove the required full-power removal or normal-boot check;
 those remain explicit operator confirmations. See the
-[Pi 5 probe runbook](docs/raspberry-pi-5-provisioning-probe.md#sacrificial-device-operator-runbook).
+[historical fresh-device qualification runbook](docs/raspberry-pi-5-provisioning-probe.md#historical-fresh-device-qualification-runbook).
 The root flake also provides a hardened
 [Pi 5 provisioning-station SD image](docs/raspberry-pi-5-provisioning-image.md):
 
@@ -87,12 +107,16 @@ nix --accept-flake-config build -L \
 
 The first hardware-facing secure-boot foundation is intentionally a
 development-cohort reference, not a complete deployment or production
-enrollment path. It provides a deterministic Pi 5 target and dm-verity
-artifact builder, external
-approval-gated YubiKey PIV signing, independent control/audit services, and a
-root-only physical lane guard. It stops at `security_applied`; native Pi secure
-boot has no anti-rollback primitive, so `enrollment_ready` remains blocked.
-See the [live implementation runbook](docs/raspberry-pi-5-live-provisioning.md).
+enrollment path. It provides a deterministic Pi 5 target and dm-verity artifact
+builder, checked-in public `v0.1.6` signing results, independent control/audit
+services, a root-only physical lane guard, and fixed development station and
+target-image paths. Those are software and release artifacts, not a completed
+hardware evidence packet by themselves. The sacrificial Pi has since been fused
+and boots a signed development target, while its exact post-fuse record still
+needs reconciliation. The development lifecycle is capped at `security_applied`;
+native Pi secure boot has no anti-rollback primitive, so `enrollment_ready`
+remains blocked. See the
+[live implementation runbook](docs/raspberry-pi-5-live-provisioning.md).
 
 ## Flake layout and consumption
 
@@ -184,11 +208,15 @@ the successful main-branch CI run, rechecks the archive binding, and publishes
 the image and its SHA-256 checksum.
 The temporary artifact is visible to repository readers, so it must contain no
 secret material. The target image contains no signing key or signing
-capability; install it only after the designated sacrificial Pi completes the
-qualification path. See the
+capability. On the now-fused sacrificial Pi, install a newly published target
+only as a separately reviewed owned-device update after the current
+station/release state is reconciled; the historical pre-fuse qualification is
+not sufficient authorization. See the
 [secure-boot station release and boot procedure](docs/raspberry-pi-5-development-secure-boot-station.md).
-The signed sacrificial-target image exposes the separately documented
+The v0.1.15 target artifact exposes the separately documented
 [development USB SSH and software RPIBOOT interface](docs/raspberry-pi-5-development-target-access.md).
+Do not infer that interface is present on the currently running board until its
+exact target version is reconciled.
 
 The same workflow exposes one no-input manual dispatch solely to recover the
 existing immutable `v0.1.15` draft after its original workflow could not read a
@@ -339,11 +367,16 @@ artifacts and evidence, and the irreversible checklist from a qualified
 candidate through ownership to enrollment readiness. The separate
 [development live implementation](docs/raspberry-pi-5-live-provisioning.md)
 provides the real fail-closed component boundaries. Its non-mutating probe has
-passed hardware qualification, but the irreversible path remains unqualified
-and cannot reach `enrollment_ready`. The
+passed hardware qualification; the sacrificial Pi has since crossed the
+irreversible ownership boundary and boots a signed development target. The
+public post-fuse acceptance packet remains incomplete, and this development
+path cannot reach `enrollment_ready`. The
 [secure-boot execution plan](docs/raspberry-pi-5-secure-boot-execution-plan.md)
-tracks the remaining release, media-staging, enforcement, physical-lane,
-rehearsal, and ceremony gates for one sacrificial development board.
+now serves as the historical milestone checklist and post-fuse reconciliation
+plan for that board.
+The [production security follow-on](docs/raspberry-pi-5-production-security-follow-on.md)
+is the current roadmap after that sacrificial milestone; it does not imply that
+the missing acceptance evidence or production gates have passed.
 The [Ubuntu development signing ceremony](docs/ubuntu-rpi5-development-signing-ceremony.md)
 covers the non-production five-artifact-signature plus five canonical
 receipt-attestation-signature ceremony (a minimum of ten YubiKey private-key

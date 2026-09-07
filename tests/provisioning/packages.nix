@@ -2389,9 +2389,9 @@ let
         status = qualificationEvidence.record.status;
         description =
           if qualificationEvidence.record.status == "passed" then
-            "A sacrificial fresh Raspberry Pi 5 Model B passed the reviewed two-probe, full-power-cycle qualification."
+            "Historical pre-fuse evidence: the sacrificial Raspberry Pi 5 Model B passed the reviewed two-probe, full-power-cycle qualification. This record does not describe its current owned state."
           else
-            "The sacrificial Raspberry Pi 5 Model B qualification failed and requires quarantine review.";
+            "Historical pre-fuse evidence: the sacrificial Raspberry Pi 5 Model B qualification failed and requires quarantine review.";
         evidence = [
           "evidence/provisioning/hardware-qualification/${qualificationEvidence.name}"
         ];

@@ -5,6 +5,12 @@ control, audit, approval, plan-compilation, restart, and seven-operation
 campaign contracts without executing a physical operation or changing a
 one-time setting. Its terminal result is deliberately non-authoritative.
 
+This prototype remains useful for regression and failure testing, but it no
+longer describes the sacrificial Pi's lifecycle state. That board is fused and
+boots a signed development target. Never use this synthetic fresh-target state
+or its local stores to resume, recreate, or authorize work on the known-owned
+board; see the [sacrificial-device state].
+
 ## Start here
 
 Choose a new state path for each run. Reusing a prior path fails closed.
@@ -87,14 +93,19 @@ device selector, subprocess runner, or network listener. It cannot emit
 `security_applied`, construct a production `BoundPlan`, emit an
 `ExecuteRequest`, or invoke `laneguard.Guard`.
 
-## Optional read-only and reversible next layers
+## Optional read-only and reversible layers
 
-Build a deterministic public signing plan, obtain an approval-gated YubiKey
-signature at runtime, and admit the two-file public result into an
-offline-verification derivation using the
+For a new development release, build a deterministic public signing plan,
+obtain an approval-gated YubiKey signature at runtime, and admit the two-file
+public result into an offline-verification derivation using the
 [Raspberry Pi 5 signed-boot workflow](raspberry-pi-5-signed-boot-workflow.md).
 That path exercises the real key only for signing and cannot write a Pi, NVMe,
 EEPROM, or OTP.
+
+The repository already contains the public authenticated signing results and
+complete 18-role reconstruction for development release `v0.1.6`. Those
+checked inputs should be verified and reused as immutable historical release
+evidence, not signed again.
 
 Once the public signing result has been admitted, assemble the signed boot pair
 and the reviewed dm-verity root images with `mkRpi5VerifiedUnfusedCapsule`.
@@ -114,28 +125,27 @@ inspection, complete-partition digest verification, and dm-verity verification
 while rejecting every path beneath `/dev`. See
 [Target-media staging prototype](target-media-staging-prototype.md).
 
-This closes only the synthetic outer-media rehearsal gap. A physical
-compatibility exercise remains blocked on a transaction-reviewed device layout,
-a writer and receipt that bind and independently verify the device GPT/FAT, and
-an unfused target mode that emits the required UART records. When those exist,
-the exercise must use a fresh unfused Pi, never supply an OTP- or
-EEPROM-programming bundle, and record the all-zero customer-key hash before and
-after the run. The passive verifier can correlate the operator-authored record
-and UART transcript with an in-process, signer-anchored capsule verification,
-but unauthenticated capture still keeps `hardware_observed:false`,
-`security_enforced:false`, and `mutation_eligible:false`.
+This closes only the synthetic outer-media rehearsal gap. The repository does
+not contain an authenticated physical unfused-compatibility record. If that
+experiment is still needed for a future release, it requires a separately
+approved fresh unfused Pi; the fused sacrificial board is permanently
+ineligible. The exercise must never supply an OTP- or EEPROM-programming bundle
+and must record the all-zero customer-key hash before and after the run. The
+passive verifier can correlate the operator-authored record and UART transcript
+with an in-process, signer-anchored capsule verification, but unauthenticated
+capture still keeps `hardware_observed:false`, `security_enforced:false`, and
+`mutation_eligible:false`.
 
-## Boundary before any real ownership ceremony
+## Historical ownership boundary and current use
 
-This prototype does not complete SB-03 through SB-07 and does not authorize
-SB-08. Before any one-time setting is changed, the project still needs the
-complete signed release assembled under the repository's exact 18-role
-contract, with every role resolved to reviewed immutable bytes and each actual
-RPIBOOT bundle bound by its canonical directory-tree digest. It also still
-needs the verified GPT/FAT and dm-verity media layout, a qualified
-BOOTSEL/power lane, authenticated service transport around the compiler, the
-complete crash/failure campaign, live development-token evidence, and an
-explicit go/no-go review for one sacrificial board.
+This prototype did not authorize the sacrificial ownership ceremony. Since it
+was written, the repository gained the complete checked `v0.1.6` development
+release and fixed station/target paths, and the sacrificial board crossed the
+irreversible boundary. Missing historical pre-commit evidence cannot be
+recreated by running this prototype and cannot authorize a repeat. It must be
+handled through post-fuse reconciliation or owned-device quarantine.
 
 The synthetic fixture does not satisfy any physical staging, cold-power,
 hardware-observation, secure-boot-enforcement, EEPROM, or OTP gate.
+
+[sacrificial-device state]: raspberry-pi-5-sacrificial-state.md

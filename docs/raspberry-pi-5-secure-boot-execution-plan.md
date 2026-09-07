@@ -1,13 +1,21 @@
 # Raspberry Pi 5 secure-boot execution plan
 
-This plan defines the work required to move exactly one sacrificial Raspberry
-Pi 5 Model B from the repository's completed, non-mutating hardware
-qualification to the development terminal state `security_applied`.
+This plan originally defined the work required to move exactly one sacrificial
+Raspberry Pi 5 Model B from non-mutating hardware qualification to the
+development terminal state `security_applied`.
 
-It is an engineering delivery plan, not an operator command transcript. The
-exact irreversible ceremony must be generated as a separate, frozen, reviewed
-runbook after every prerequisite in this plan is complete. Do not derive ad hoc
-`rpiboot`, EEPROM, OTP, signing, or block-device commands from this document.
+The sacrificial Pi has now been fused and boots a signed development target.
+This plan therefore serves as an evidence-reconciliation and owned-state
+acceptance record for that board, not as authorization to execute the
+fresh-board sequence again. Unchecked pre-commit items identify evidence or
+process gaps that must be reconciled; they cannot return the device to an
+unfused state. See the [sacrificial-device state].
+
+It is an engineering delivery and reconciliation plan, not an operator command
+transcript. The sections below retain the exact evidence that the original
+frozen ceremony should have produced; they are not a request to generate or run
+a replacement ceremony. Do not derive ad hoc `rpiboot`, EEPROM, OTP, signing,
+or block-device commands from this document.
 
 The normative security requirements remain in the [Pi 5 secure-boot design].
 The current component boundaries and intentionally deferred work remain in the
@@ -16,7 +24,7 @@ in the [Pi 5 provisioning-probe runbook].
 
 ## Objective and boundary
 
-The first milestone has one narrow objective:
+The original development milestone had one narrow objective:
 
 > Irreversibly bind one clearly labelled sacrificial Pi 5 to the development
 > boot-signing key, prove the implemented signed-boot, recovery, negative-boot,
@@ -33,17 +41,17 @@ This milestone does not:
 - use a production signing key; or
 - declare the device `enrollment_ready`.
 
-The target remains a sacrificial development asset even after a successful
-ceremony. Native Pi secure boot accepts older correctly signed images, so the
-implemented target must continue to report rollback as unimplemented and
-`enrollment_ready=false`.
+The target remains a sacrificial development asset. Native Pi secure boot
+accepts older correctly signed images, so the implemented target must continue
+to report rollback as unimplemented and `enrollment_ready=false`.
 
 ## Current baseline
 
 The read-only hardware-qualification milestone is complete. The checked
-[qualification record] reports two matching observations, complete power-cycle
-and normal-boot confirmations, an all-zero customer-key hash, unlocked
-VideoCore JTAG, status `passed`, and no quarantine finding.
+[qualification record] is the historical pre-fuse baseline: it reports two
+matching observations, complete power-cycle and normal-boot confirmations, an
+all-zero customer-key hash, unlocked VideoCore JTAG, status `passed`, and no
+quarantine finding.
 
 That result deliberately does not authorize mutation. The same record says:
 
@@ -56,8 +64,16 @@ The profile is now `stable` through a reviewed status-only promotion. Its
 adapter, status-independent policy digest, and eight deferred checks are
 unchanged. Stability covers the qualified read-only classification contract
 only; it neither establishes a fully unprovisioned board nor authorizes
-mutation. The deferred checks must be resolved for the exact
-transaction-bound board before ownership commit.
+mutation. The deferred checks were required for the exact transaction-bound
+board before ownership commit; their retained results must now be reconciled or
+the owned board treated as quarantined.
+
+The ownership commit has since occurred. The operator confirms that the fused
+board boots a signed target, so the pre-fuse record must not be used as current
+lifecycle evidence and the board must never re-enter the fresh path. The
+repository still lacks the reconciled post-fuse packet needed to determine
+whether every `security_applied` acceptance item passed or whether any missing
+or contradictory result requires `owned_quarantined`.
 
 The repository already contains useful foundations:
 
@@ -95,30 +111,32 @@ The repository already contains useful foundations:
   outer FAT/GPT regular-file fixture, a signer-anchored capsule verifier, and an
   offline unfused record correlator that makes no hardware claim.
 
-The repository now contains a complete offline signed-release assembler and
-Nix factory, a complete software-only production-media writer and independent
-verifier contract, and authenticated execute-side control-to-guard transport.
-These remain foundations backed by synthetic or offline evidence: there is no
-production release assembled from reviewed live-token results, recorded
-physical NVMe stage and cold readback, live-hardware authenticated
-post-mutation reconciliation evidence, fully qualified mutation-capable
-station, or proven
-RPIBOOT-to-normal-boot lane transition. In particular, the EEPROM foundation
-is not a production signed EEPROM, owned-recovery signature, hardware write,
-or OTP result.
+The repository now contains a complete offline signed-release assembler and Nix
+factory, a complete software-only production-media writer and independent
+verifier contract, authenticated execute-side control-to-guard transport, and
+checked public `v0.1.6` development signing results. Those inputs include the
+five grants and authenticated receipts, signed boot and EEPROM results, owned
+recovery, and reproducible 18-role release reconstruction used by the fixed
+station. They are not production artifacts. The remaining repository evidence
+gap is physical: the exact NVMe stage/cold-readback packet, authenticated
+post-mutation reconciliation, complete lane/failure results, and digest-bound
+signed boot observation are not checked in.
 
 ## Approved sacrificial-development posture
 
 The following policy is approved only for the one sacrificial development
 unit. It is not a production profile and does not resolve any of the deferred
-exact-board checks:
+exact-board checks. These are compiled/intended values; the actual current
+EEPROM, debug, and write-protection values remain part of post-fuse
+reconciliation:
 
 - `BOOT_ORDER=0xf216`, interpreted from right to left, tries NVMe (`6`), then
   SD (`1`), then network/TFTP (`2`), and finally restarts the sequence (`f`);
 - `ENABLE_SELF_UPDATE=0` disables automatic bootloader self-update scanning,
   but does not disable an explicitly authorized RPIBOOT update or otherwise
   make an unlocked EEPROM immutable;
-- VideoCore JTAG and EEPROM hardware write protection remain unlocked;
+- the development policy leaves VideoCore JTAG and EEPROM hardware write
+  protection unlocked;
 - the initial EEPROM/key operation is one transaction-bound, one-shot
   fresh-board RPIBOOT commit with an exact expected prestate and signed EEPROM;
   an uncertain outcome is reconciled by readback and is never retried;
@@ -141,8 +159,9 @@ Pi-local configuration selects `/dev/nvme0n1` only on
 configuration and current attachment before any writable open; those fields
 remain outside canonical plans and the receipt chain. The media writer retains
 only runtime overwrite-safety and layout-compatibility checks. Offline signature
-and release-lineage verification remain software foundations; observing and
-enforcing a live signed-system boot is a later hardware gate.
+and release-lineage verification remain software foundations. A live signed-
+system boot is now operator-confirmed; its exact release binding and enforcement
+evidence remain post-fuse reconciliation gates.
 
 The development boot order and unlocked VideoCore JTAG posture are **not
 production-ready**. Their production values are undecided and require a new
@@ -191,24 +210,28 @@ These rules apply to every work item and rehearsal:
 
 ## Milestones
 
+These statuses distinguish the physical fact that the board is fused from the
+still-missing public evidence needed to close each gate.
+
 | ID | Milestone | Current status | Exit condition |
 | --- | --- | --- | --- |
-| SB-00 | Read-only hardware qualification | Complete | Reviewed record is checked in and bound to the frozen profile and probe inputs. |
-| SB-01 | Baseline and documentation closeout | In progress; public closeout complete, exact-board and merge-revision gates pending | The profile decision, deferred target checks, documentation, and current-revision CI evidence are reviewed. |
-| SB-02 | Development signing root | Not started | The development YubiKey and signing service pass the live key, PIN, touch, token-binding, and failure tests. |
-| SB-03 | Complete signed release | In progress | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
-| SB-04 | Target-media staging | In progress | The exact NVMe layout is written and cold-read back with matching digests. |
+| SB-00 | Read-only hardware qualification | Complete; historical pre-fuse evidence | Reviewed record is checked in and bound to the frozen profile and probe inputs. |
+| SB-01 | Baseline and documentation closeout | Post-fuse reconciliation required | Retained evidence establishes which exact-board and revision gates passed before commit; any unresolved contradiction quarantines the owned board. |
+| SB-02 | Development signing root | Public signer review and `v0.1.6` results complete; private live custody/failure evidence not checked in | The development YubiKey and signing service pass the live key, PIN, touch, token-binding, and failure tests. |
+| SB-03 | Complete signed release | Complete for the checked `v0.1.6` development release | Every required artifact exists, resolves to bytes, verifies offline, and is bound to one canonical manifest. |
+| SB-04 | Target-media staging | Post-fuse evidence reconciliation required | The exact target layout is written and cold-read back with matching digests. |
 | SB-05 | Enforced transaction plan | Complete (software gate) | The fixed operator workflow, control, audit, bridge, compiler, guard, trusted receipts, and Nix service boundary require the complete ordered campaign and verify every plan, approval, intent, attempt, and artifact binding. This status is not live-hardware qualification. |
-| SB-06 | Qualified physical lane | In progress; software complete, live qualification pending | The selected fixed relay or sacrificial-development manual power mode, authenticated physical prompts, USB, UART, and boot-selection behavior pass their applicable combined physical acceptance tests without overstating manual fail-off. |
-| SB-07 | Rehearsal and failure campaign | In progress; live drills pending | Automated fake/simulated failure coverage exists, but the non-OTP physical failure-mechanics campaign has not passed. |
-| SB-08 | Sacrificial ownership ceremony | Blocked by SB-01 through SB-07 | One approved one-shot commit completes or the target is quarantined; no retry path exists. |
-| SB-09 | Owned-state acceptance | Blocked by SB-08 | All positive, recovery, negative, root-integrity, and evidence-reconciliation gates pass and the board stops at `security_applied`. |
+| SB-06 | Qualified physical lane | Software complete; retained live qualification evidence must be reconciled | The selected fixed relay or sacrificial-development manual power mode, authenticated physical prompts, USB, UART, and boot-selection behavior pass their applicable combined physical acceptance tests without overstating manual fail-off. |
+| SB-07 | Rehearsal and failure campaign | Automated coverage complete; retained or still-required physical drill evidence must be classified | The required non-OTP physical failure-mechanics campaign passes before commit, or any missing precondition is recorded as an owned-state acceptance finding. |
+| SB-08 | Sacrificial ownership ceremony | Irreversible boundary crossed; operator confirms signed boot; terminal packet pending | The one-shot commit and authoritative readback are reconciled as applied, or the already-owned target is quarantined; no retry path exists. |
+| SB-09 | Owned-state acceptance | In progress; signed normal boot operator-confirmed | All positive, recovery, negative, root-integrity, and evidence-reconciliation gates pass and the board records `security_applied`; otherwise it records `owned_quarantined`. |
 | SB-10 | Production readiness | Explicitly deferred | Every production gate in the final section is implemented and separately accepted. |
 
 ### Non-fusing prototype checkpoint
 
-The in-progress statuses above reflect implementation, not milestone exit. The
-repository now has a signed four-role capsule verifier, the legacy fixed-extent
+The software and artifact statuses above do not by themselves close physical
+milestones. The repository now has a signed four-role capsule verifier, the
+legacy fixed-extent
 regular-file rehearsal, a `mkRpi5MediaStagingFixture` factory, a complete
 software-only `mkRpi5ProductionMedia` contract, offline unfused record
 serialization, a complete offline signed-release assembler, and a runnable
@@ -250,16 +273,16 @@ These pieces are packaged in separate capability closures and are described in
 the [non-fusing prototype runbook](non-fusing-secure-boot-prototype.md). A
 synthetic contract now resolves the full release role set, replays both EEPROM
 updater finalizers, and verifies and tampers the resulting content-addressed
-publication. It does not resolve those roles from reviewed live-token outputs,
-prove a physical device write or cold readback, provide authenticated power or
-UART capture, qualify the physical lane, or complete the required failure
-matrix, and it cannot authorize SB-08. The public EEPROM and production-media
-foundations establish software/offline file, updater, signature, lineage,
-layout, writer, verifier, and receipt contracts. None makes a cold-power,
-hardware-observation, EEPROM, recovery-signing, OTP, or secure-boot-enforcement
-claim.
+publication. It does not prove a physical device write or cold readback,
+provide authenticated power or UART capture, qualify the physical lane, or
+complete the required failure matrix. The checked `v0.1.6` inputs add
+authenticated public development signatures and receipts, but neither source
+can retroactively authorize or evidence the already-crossed SB-08 boundary.
+The public EEPROM and production-media foundations establish software/offline
+file, updater, signature, lineage, layout, writer, verifier, and receipt
+contracts; none makes a physical hardware claim.
 
-## Workstream 1: close the qualified baseline
+## Workstream 1: reconcile the qualified baseline
 
 ### Deliverables
 
@@ -278,9 +301,14 @@ claim.
   status-only change that preserves the qualification policy digest.
 - [x] Update repository text that still describes physical qualification as
   pending or the physical foundation as wholly unqualified.
-- [ ] Close, for the exact candidate board, every deferred check in the device
-  profile. This is the exact-board precondition portion of live-only gate 5 in
-  the live runbook:
+- [ ] Define the versioned public post-fuse packet, strict whitelist importer,
+  validator, cross-binding and tamper tests, and a report namespace separate
+  from pre-fuse hardware qualification. The packet must represent observed,
+  failed, and not-observed checks and an explicit `security_applied` or
+  `owned_quarantined` terminal disposition.
+- [ ] Reconcile whether the exact board passed every deferred check before the
+  commit. Missing or contradictory retained evidence is an owned-state finding,
+  not permission to rerun the check as a fresh candidate:
   - explicit destructive-use authorization for the selected storage; existing
     contents are not appraised or bound and storage hardware identity is not a
     trust input;
@@ -292,55 +320,55 @@ claim.
 - [x] Record the approved development posture for JTAG, boot order, EEPROM
   updates, EEPROM write protection, recovery, self-update, root integrity, and
   rollback.
-- [ ] After this branch is pushed, obtain green x86_64 and **native** AArch64
-  checks for the exact merge/pre-ceremony revision, including the provisioning
-  result, secure-boot target evaluation, artifact checks, station image, and
-  `rpiboot` metadata contract. Local x86_64 race, vet, report-build, and flake
-  evaluation results do not substitute for that revision-bound native job.
+- [ ] Recover the green x86_64 and **native** AArch64 run identifiers for the
+  exact revision that was used, including the provisioning result, secure-boot
+  target evaluation, artifact checks, station image, and `rpiboot` metadata
+  contract. A new green run on another revision cannot retroactively close this
+  evidence item.
 
 ### Exit criteria
 
-The exact board is an approved `qualified_fresh_candidate` for this one
-development transaction. The decision is based on the complete transaction
-preconditions, not on changing the probe's intentionally false
-`mutation_eligible` field.
+The original exit condition was an approved `qualified_fresh_candidate` for one
+development transaction. The board is now owned. This workstream exits only
+after the new public packet contract is implemented and the historical
+precondition and post-fuse evidence are reconciled, or after the appropriate
+owned-state quarantine finding is recorded. It can no longer produce a fresh-
+candidate classification.
 
 ## Workstream 2: establish the development signing root
 
 ### Deliverables
 
-- [ ] Use a dedicated development YubiKey that is visibly and operationally
-  distinct from every production token.
+- [x] Record a dedicated development-only signer identity, token serial, and
+  policy that are explicitly not production-approved.
 - [ ] Change the default PIN, PUK, and management key through an interactive
-  administrator ceremony.
-- [ ] Generate the RSA-2048 key in PIV slot 9c with the required always-PIN and
-  always-touch policy.
-- [ ] Retain and independently review the public key, token serial, PIV
+  administrator ceremony; the private operational record is not in Git.
+- [x] Record the attested on-token generation of the RSA-2048 key in PIV slot 9c
+  with the required always-PIN and always-touch policy.
+- [x] Retain and independently review the public key, token serial, PIV
   attestation, fixed PKCS#11 object URI, signer-policy digest, ordinary public
   fingerprint, and canonical Raspberry Pi customer-key hash.
-- [ ] Prove that the pinned Raspberry Pi key converter produces the expected
+- [x] Prove that the pinned Raspberry Pi key converter produces the expected
   264-byte representation and customer-key hash. Never substitute a digest of
   PEM text.
-- [ ] Instantiate `mkDevelopmentYubiKeySigning` with the reviewed public inputs
+- [x] Instantiate `mkDevelopmentYubiKeySigning` with the reviewed public inputs
   and an external root-managed signing-grant registry.
-- [ ] Exercise a real token through the complete wrapper, signing gate, and
-  client chain. Cover success plus wrong token, token removal, PIN failure,
-  touch timeout, expired grant, digest mismatch, signer mismatch, and service
-  restart. Each of the five grants requires two ordered token operations and
-  touches—one artifact signature followed by one gate-derived canonical
-  receipt-attestation signature—for a minimum of ten private-key operations
-  and touches on the failure-free path. A failed or ambiguous attempt stops for
-  review; ten is not an upper bound and does not authorize a blind retry.
-- [ ] Document the development exception that this cohort has no backup token.
+- [x] Retain the checked `v0.1.6` artifact signatures and authenticated gate
+  receipts for all five grants under the reviewed development public key.
+- [ ] Reconcile the private operational evidence for current token custody, PIN
+  handling, required touches, wrong-token/removal/PIN/timeout failures, expired
+  grants, digest and signer mismatch, and service restart. The public outputs do
+  not prove those private ceremony facts.
+- [x] Document the development exception that this cohort has no backup token.
   Loss or failure of the token strands the sacrificial cohort and requires its
-  retirement.
+  retirement. The live foundation and signer profile record this explicitly.
 
 ### Exit criteria
 
-The private key has never left the token, every artifact signature is bound to
-an immutable approved request, every v1alpha3 receipt authenticates its
-canonical metadata, and the team can distinguish the ordinary key fingerprint
-from the irreversible Raspberry Pi customer-key hash.
+The public signer review, key conversion, development signatures, and receipt
+metadata are checked. This workstream is fully closed only when the retained
+private ceremony record establishes token custody and the required live failure
+tests; those facts must not be inferred from public signatures alone.
 
 ## Workstream 3: build and verify a complete signed release
 
@@ -463,12 +491,14 @@ owned-recovery, root-integrity, and canonical RPIBOOT boundaries;
 deterministically replays fresh EEPROM and owned-recovery finalization; and
 publishes immutable objects, trees, lineage records, and the complete manifest
 under digest-derived paths.
-Its synthetic test assembles and tampers a complete fixture, but it does not
-supply reviewed production bytes or verify live-token ceremony evidence. SB-03
-therefore remains in progress.
+Its synthetic test assembles and tampers a complete fixture. The checked
+`v0.1.6` directory additionally supplies one real development release's public
+signing results and is reconstructed and verified by the flake. This closes
+SB-03 for the sacrificial development release only; it does not supply reviewed
+production bytes or hardware evidence.
 
-- [ ] Produce the signed EEPROM image with the pinned firmware, configuration,
-  signing tools, public key, and customer counter-signature.
+- [x] Produce the development signed EEPROM image with the pinned firmware,
+  configuration, signing tools, public key, and customer counter-signature.
 - [x] Pin an EEPROM release with upstream-declared support for the signed
   boot-image SHA-256 device-tree property. Missing source/configuration support
   is a pre-commit failure; absence of `boot_img_sha256` on the owned target is
@@ -491,11 +521,10 @@ including the `bootsys` signing feature introduced by
 The workflow's rpi-eeprom submodule is separately attributed to
 [rpi-eeprom commit `25f837ab8009a643ed85b9aad94d911baddaf0c4`][EEPROM helper compatibility commit];
 the selected release contains byte-identical helper files.
-This proves public source, digest, and capability contracts only. Actual target
-emission of the property cannot be observed until the post-commit signed cold
-boot in SB-09; it is not a pre-SB-08 gate. Its absence there fails acceptance
-and quarantines the owned board. The signed EEPROM deliverable above remains
-incomplete.
+The public contract proves source, digest, and capability bindings. The checked
+`v0.1.6` inputs satisfy the development signed-EEPROM deliverable. Actual target
+emission of the property belongs in the post-fuse evidence packet; its absence
+fails owned-state acceptance and quarantines the board.
 
 The public EEPROM foundation narrows fresh signing to `-f` and owned recovery
 to a separately authorized `-fr` plan. Owned recovery makes exactly one new
@@ -515,36 +544,40 @@ change OTP, or observe a board.
   public plan and result, fixed approval-gated adapter, canonical `boot.sig`,
   release-intent/policy/key/image binding, offline verification, and public Nix
   bundle finalization.
-- [ ] Produce and verify the detached signature for the exact normal
-  release-candidate `boot.img` with the reviewed live development token and
-  retain its gate receipt as private operational evidence.
-- [ ] Produce the production fresh-board commit bundle for a hash-zero BCM2712
-  board from reviewed live-token outputs. The software builder now enforces
-  the vendor's fresh-board signing rules and exact tree layout.
-- [ ] Produce the production customer-counter-signed owned-device readback and
-  recovery bundles before the ownership commit. The separate plan, one-request
-  adapter, replay finalizer, and bundle layouts are implemented; live signing
-  evidence is still required.
-- [ ] Produce narrow, deterministic test artifacts for altered image, altered
+- [x] Produce and verify the detached signature for the exact normal
+  release-candidate `boot.img` under the reviewed development public key and
+  retain its authenticated public gate receipt. This does not by itself prove
+  the private token-custody and touch transcript.
+- [x] Produce the development fresh-board commit bundle for the hash-zero
+  sacrificial BCM2712 board from the checked signing outputs. The software
+  builder enforces the vendor's fresh-board signing rules and exact tree layout.
+- [x] Produce the development customer-counter-signed owned-device readback and
+  recovery bundles. The separate plan, one-request adapter, replay finalizer,
+  and bundle layouts are represented by the checked `v0.1.6` public inputs.
+- [ ] Reconcile retained evidence that the exact owned-recovery bundle was
+  physically available before the ownership commit.
+- [x] Produce narrow, deterministic test artifacts for altered image, altered
   signature, wrong key, unsigned and alternate boot sources, unauthorized
   recovery, and persistent-root tampering. Do not treat one generic marker as
   proof that every required source and failure mode was exercised.
-- [ ] Resolve every manifest entry to immutable bytes and verify its size and
-  SHA-256 digest before approval.
-- [ ] Exercise the completed authorization-lineage foundation for one real
-  release: issue independently reviewed cohort grants for every exact signing
-  input, authenticate and retain their live v1alpha3 gate receipts, verify each
-  artifact and receipt-attestation signature, assemble and verify all 18
-  outputs, compute the final `signed_release_manifest_digest`, and only then
-  authorize a per-device lane plan. Do not reuse one ambiguous `plan_digest`
-  before and after signatures exist.
-- [ ] Verify every artifact signature and canonical receipt-attestation
+- [x] Resolve every checked manifest entry to immutable bytes and verify its
+  size and SHA-256 digest during release reconstruction.
+- [x] Exercise the authorization-lineage foundation for one development
+  release: retain the five grants and authenticated v1alpha3 gate receipts,
+  verify each artifact and receipt-attestation signature, assemble and verify
+  all 18 outputs, and compute the final `signed_release_manifest_digest`.
+- [ ] Reconcile the independent release/grant review and prove that a per-device
+  lane plan was authorized only after final release reconstruction. Do not infer
+  that temporal order from the checked public release alone.
+- [x] Verify every artifact signature and canonical receipt-attestation
   signature offline against the reviewed development public key and
   independently inspect the complete boot-image allowlist and size.
-- [ ] Scan every artifact for signing material, shared enrollment secrets,
-  production credentials, unintended mutable state, and unapproved recovery
-  capability.
-- [ ] Store the final artifacts at immutable content-addressed paths and record
+- [ ] Complete the broad artifact review for signing material, shared enrollment
+  secrets, production credentials, unintended mutable state, and unapproved
+  recovery capability. The checked build scans its public signing inputs for
+  private-key markers, but intentionally treats opaque release payloads as
+  opaque and does not satisfy this wider review.
+- [x] Store the final artifacts at immutable content-addressed paths and record
   the exact source revision and tool versions.
 
 See [owned recovery and RPIBOOT bundles] for the implemented public workflow,
@@ -567,8 +600,9 @@ plan-specialized writer, the independent verifier, and the canonical receipt
 chain. It does not bind or verify storage model, serial, WWID, persistent path,
 physical sector size, or initial contents. Its deterministic regular-file build
 and tamper tests cross no block-device or power boundary and observe no hardware
-or one-time setting. SB-04 therefore remains in progress until the unchecked
-physical gates below are completed.
+or one-time setting. SB-04 therefore remains in reconciliation until the
+historical physical packet is recovered or its missing items are classified as
+owned-state findings.
 
 ### Deliverables
 
@@ -618,19 +652,22 @@ physical gates below are completed.
 - [ ] Produce and independently review the physical instance of the canonical
   receipt chain, including the manual cold-power observation. The software
   receipt definitions and finalizer alone do not satisfy this gate.
-- [ ] Boot the same capsule on an unfused board with `boot_ramdisk=1` and prove
-  that the kernel, initramfs, dm-verity mapping, and pre-enrollment runtime work.
+- [ ] Reconcile whether the historical capsule passed the unfused
+  `boot_ramdisk=1` exercise. The current sacrificial board is fused and cannot
+  supply that evidence; any new compatibility run requires another separately
+  approved fresh board and cannot backfill this board's record.
 - [ ] Confirm that the pre-enrollment runtime contains public trust and policy
   only, starts no enrollment or production-identity service, and exposes no
   mutable protected state.
 
 ### Exit criteria
 
-The exact signed capsule has passed the unfused compatibility boot, and a
-freshly attached, operationally selected NVMe contains exactly the
-manifest-bound bytes expected by the post-fuse target. This exit criterion does
-not establish NVMe hardware identity. Live signed-system boot observation and
-enforcement remain later hardware gates.
+The original exit criterion required the exact signed capsule to pass an
+unfused compatibility boot and the freshly attached, operationally selected
+NVMe to contain the manifest-bound bytes expected by the post-fuse target. The
+operator now confirms a signed target boot, but the capsule identity, physical
+stage/cold-readback, and digest-bound enforcement evidence remain unreconciled.
+No result establishes NVMe hardware identity.
 
 ## Workstream 5: enforce the complete transaction
 
@@ -892,15 +929,18 @@ a separately reviewed protocol.
 This check uses real control, audit, bridge, compiler, lane-guard journal, and
 physical-adapter code, but replaces the adapter's command runner, filesystem,
 GPIO, UART, and timing interfaces with deterministic simulations. It therefore
-closes the authenticated software restart/reconciliation gap only. A physical
-rig must still prove USB, power, RPIBOOT, UART, target continuity, and cold-boot
-behavior before a sacrificial mutation, and the result makes no production
-security-enforcement claim.
+closes the authenticated software restart/reconciliation gap only. USB, power,
+RPIBOOT, UART, target continuity, and cold-boot behavior should have been proved
+before the sacrificial mutation. Any missing retained result is now a
+reconciliation finding and cannot be recreated by repeating the mutation. The
+software result makes no production security-enforcement claim.
 
 These completed deliverables close SB-05 as a **software** gate. They do not
-close SB-06 or SB-07, authorize SB-08, qualify physical wiring or timing, or
-prove that a live target enforced the expected customer key. The exact
-reviewed command sequence is maintained in the [live provisioning runbook].
+close SB-06 or SB-07, retroactively authorize or evidence SB-08, qualify
+physical wiring or timing, or prove that a live target enforced the expected
+customer key. The generic command contract is maintained in the [live
+provisioning runbook]; the direct runner's historical sequence is maintained in
+the [development secure-boot station runbook].
 
 ### Manual boundary limitation
 
@@ -909,8 +949,8 @@ plan or request JSON. Root installs only the authority-free draft reviewed for
 approval; changing it changes the plan digest, and the bridge rejects it unless
 the current independently authenticated approval and durable audit intent bind
 that exact digest. Root-authored executable envelopes remain valid only in
-separate non-mutating test harnesses and cannot satisfy SB-05 or authorize
-SB-08.
+separate non-mutating test harnesses and cannot satisfy SB-05 or serve as
+evidence for the actual SB-08 transition.
 
 ### Exit criteria
 
@@ -989,9 +1029,10 @@ a Raspberry Pi Powered USB Hub (the upstream `usbboot` recommendation), or
 another separately reviewed USB 3 source capable of supplying at least 900 mA
 without brownout, as the target's sole power and data source; the normal PSU is
 absent.
-Qualify that path under load before an OTP-capable run. Any undervoltage, USB
-reset, target disappearance, or other brownout symptom is a stop condition,
-and an unqualified or marginal source must not be used for OTP. Normal signed
+The original ceremony required that path to be qualified under load before the
+OTP-capable run. Retained undervoltage, USB-reset, target-disappearance, and
+brownout evidence must now be reconciled; an unresolved result cannot be cured
+by repeating the ownership operation. Normal signed
 NVMe boot uses the normal target PSU only, with the provisioning USB cable
 completely removed. UART is receive-only from the station's perspective:
 target TX and ground are connected, while adapter VCC and adapter TX remain
@@ -1061,27 +1102,29 @@ production automated-fail-off requirement.
 
 ## Workstream 7: rehearsal and failure campaign
 
-Run the pre-commit campaign first with a fake lane and then on the qualified
-physical rig without an OTP-capable commit bundle. The fake lane exercises the
-complete state machine, including modeled irreversible outcomes and modeled
-negative-source decisions. The pre-SB-08 physical campaign exercises power,
-boot-mode selection, source isolation, topology, UART, restart, and fail-closed
-evidence mechanics only. It must not claim that an unfused board enforced the
-customer key.
+The original plan required the pre-commit campaign first with a fake lane and
+then on the qualified physical rig without an OTP-capable commit bundle. The
+fake lane exercises the complete state machine, including modeled irreversible
+outcomes and modeled negative-source decisions. Retained pre-SB-08 physical
+evidence should cover power, boot-mode selection, source isolation, topology,
+UART, restart, and fail-closed mechanics without claiming that an unfused board
+enforced the customer key. Missing evidence is now reconciled as an owned-state
+finding, not regenerated on the current board as a fresh-device prerequisite.
 
 The automated software portion now covers the fixed operator workflow,
 authenticated prompts, audit-before-control writes, immutable attempt
 ingestion, transition-journal restart recovery, observation-only
 reconciliation, wrong-mode and ambiguity rejection, and fake GPIO, USB, UART,
 power, timeout, cancellation, and safe-off failures. SB-07 remains incomplete
-until the same applicable failure mechanics pass on the qualified physical rig
-with inert, explicitly non-OTP-capable payloads.
+until the applicable retained physical results are reconciled. Separately safe,
+owned-device tests may still be performed under new review, but cannot
+retroactively establish the pre-commit campaign.
 
-Actual customer-key enforcement negatives require an owned board. They run
-only after the SB-08 commit, as part of SB-09 steps 14 through 16, and are not
-prerequisites for authorizing the first ownership mutation. The same is true of
-target-emitted `boot_img_sha256`, which is first observable during the SB-09
-signed cold boot.
+Actual customer-key enforcement negatives require an owned board. They belong
+to SB-09 and may be completed only through separately reviewed, non-mutating or
+reversible owned-device tests. The same is true of target-emitted
+`boot_img_sha256`; the operator-confirmed signed boot does not establish its
+exact value without the retained UART packet.
 
 ### Required drills
 
@@ -1098,7 +1141,7 @@ signed cold boot.
 - altered manifest, artifact bytes, bundle path, expected key hash, EEPROM
   digest, boot-image digest, operation order, or plan digest;
 - fake-lane modeling of isolated SD and network/TFTP fallback attempts using
-  unsigned, wrong-key, and older correctly development-key-signed images,
+  unsigned, wrong-key, and older images correctly signed by the development key,
   including the rule that the correctly signed rollback case cannot enable
   enrollment;
 - physical isolation of SD and network/TFTP source-selection and evidence paths
@@ -1126,7 +1169,8 @@ signed cold boot.
   intended source and evidence path were active and that no OTP-capable payload
   was available; ambiguity produces a clean abort or quarantine.
 
-The following is an SB-09 acceptance rule, not an SB-07 or pre-SB-08 gate:
+The following remains an SB-09 owned-state acceptance rule, not a reason to
+repeat any SB-07 or pre-SB-08 action:
 
 - [ ] Every actual unsigned, wrong-key, altered, recovery, and alternate-source
   negative candidate proves non-execution for its isolated boot source, rather
@@ -1160,17 +1204,20 @@ The frozen revision must add and pass:
 
 ### Exit criteria
 
-The exact release candidate, station configuration, physical rig, operator
-workflow, and recovery/quarantine procedure pass the complete pre-commit
-failure-mechanics campaign. This closes SB-07 without claiming customer-key
-enforcement. Any code, artifact, wiring, firmware, or policy change invalidates
-the affected results and requires targeted repetition before the go/no-go
-review. The post-commit enforcement campaign remains an SB-09 acceptance gate.
+The original exit condition required the exact release candidate, station
+configuration, physical rig, operator workflow, and recovery/quarantine
+procedure to pass the complete pre-commit failure-mechanics campaign. The
+current exit is either reconciled retained evidence for those facts or an
+explicit owned-state finding. New software tests remain valuable, but they do
+not backfill the historical physical record. The post-commit enforcement
+campaign remains an SB-09 acceptance gate.
 
-## Frozen ceremony deliverable
+## Historical frozen ceremony evidence
 
-After SB-01 through SB-07 pass, produce a separate immutable ceremony package.
-It must contain:
+The original plan required a separate immutable ceremony package after SB-01
+through SB-07 passed. Do not manufacture a replacement packet or rerun hardware
+to make this checklist appear complete. Reconcile the retained station,
+control, audit, release, and operator records against the expected contents:
 
 - the exact clean source revision and successful CI run identifiers;
 - the station system closure and configuration digests;
@@ -1191,13 +1238,15 @@ It must contain:
 - the names of the operator, approver, incident lead, and person authorized to
   declare quarantine.
 
-The package must not contain a reusable unrestricted mutation command, private
-key, PIN, TLS private key, shared secret, or unbounded recovery capability.
+Any recovered package must not contain a reusable unrestricted mutation
+command, private key, PIN, TLS private key, shared secret, or unbounded recovery
+capability.
 
-## Final go/no-go review
+## Historical go/no-go checklist
 
-The reviewer answers every item before enabling the mutation-capable lane
-guard:
+These were the questions a reviewer had to answer before enabling the mutation-
+capable lane guard. They are now reconciliation questions only. Do not enable a
+fresh commit or recreate an approval to resolve an unchecked item:
 
 - [ ] The source tree is clean, frozen, reviewed, and green on x86_64 and native
   AArch64.
@@ -1231,14 +1280,16 @@ guard:
   enforcement test of this development key and that failure may permanently
   consume the board.
 
-Any unchecked item is a **no-go**. Schedule pressure, hardware availability,
-or confidence from simulation does not waive a gate.
+Any item that was unchecked at commit time would have been a **no-go**. If the
+historical answer cannot be established now, record the gap and apply the
+owned-state quarantine policy. New confidence from simulation does not waive or
+retroactively satisfy a gate.
 
-## Sacrificial ceremony sequence
+## Historical sacrificial ceremony sequence — do not run
 
-The frozen runbook expands this sequence into exact typed requests, expected
-evidence, timeouts, and abort or quarantine actions. This section defines order
-only.
+This sequence records the intended order so existing evidence can be
+reconciled. The sacrificial Pi is fused; no step may be executed now as a fresh
+ceremony, and no fresh claim, approval, intent, or commit may be created for it.
 
 1. Admit the station and verify its revision, closure, configuration, identity,
    trusted time, journal, control service, audit service, and empty lane.
@@ -1273,7 +1324,7 @@ only.
 15. Exercise every required altered, unsigned, wrong-key, recovery, alternate
     media, boot-order, and partition-walk candidate with isolated evidence.
     For both the SD and network/TFTP fallbacks, include unsigned, wrong-key,
-    and older correctly development-key-signed candidates; record the expected
+    and older candidates correctly signed by the development key; record the expected
     signed-image rollback limitation and prove that it cannot enable
     enrollment.
 16. Demonstrate that persistent-root tampering fails before enrollment services
@@ -1288,9 +1339,9 @@ only.
 
 ### Clean abort
 
-A clean abort is available only before irreversible intent and only when direct
-evidence proves the board remains in the approved reusable prestate. Preserve
-the aborted transaction and audit record.
+A clean abort was available only before irreversible intent and only when direct
+evidence proved the board remained in the approved reusable prestate. It is no
+longer a possible outcome for the known-fused board.
 
 ### Security applied
 
@@ -1341,8 +1392,9 @@ The final secret-free record must include:
   can start;
 - every failure, retry decision, reconciliation action, and quarantine reason;
   and
-- final inventory lifecycle `security_applied`, release classification
-  `development_asset`, rollback `rollback_unimplemented`, and enrollment false.
+- final inventory lifecycle `security_applied` or `owned_quarantined`, release
+  classification `development_asset`, rollback `rollback_unimplemented`, and
+  enrollment false.
 
 The evidence must be canonical, bounded, schema-validated, independently
 manifested, and free of boot-media model, serial, WWID, or persistent selector
@@ -1374,10 +1426,10 @@ combined control-to-hardware tests required by Workstream 5.
 
 ## Production follow-on
 
-The proposed no-TPM storage, delegated-release, and online-gating direction is
+The active no-TPM storage, delegated-release, and online-gating roadmap is
 tracked in the
 [Raspberry Pi 5 production security follow-on](raspberry-pi-5-production-security-follow-on.md).
-That proposal does not reduce the fail-closed requirements below.
+That roadmap does not reduce the fail-closed requirements below.
 
 The sacrificial milestone does not reduce these production requirements:
 
@@ -1404,6 +1456,8 @@ path must continue to reject `enrollment_ready`.
 [Pi 5 secure-boot design]: ./raspberry-pi-5-secure-boot.md
 [live provisioning runbook]: ./raspberry-pi-5-live-provisioning.md
 [Pi 5 provisioning-probe runbook]: ./raspberry-pi-5-provisioning-probe.md
+[sacrificial-device state]: ./raspberry-pi-5-sacrificial-state.md
+[development secure-boot station runbook]: ./raspberry-pi-5-development-secure-boot-station.md
 [qualification record]: ../tests/provisioning/evidence/sacrificial-pi-5.json
 [pinned EEPROM source tag]: https://github.com/raspberrypi/rpi-eeprom/releases/tag/v2026.05.17-2711-0138c0
 [pinned EEPROM source commit]: https://github.com/raspberrypi/rpi-eeprom/commit/05d94be4554ce44a057bfce8d0dd37d951703dab
