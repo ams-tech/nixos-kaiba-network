@@ -49,6 +49,13 @@
         "aarch64-linux"
       ];
       forAllSystems = lib.genAttrs systems;
+      checkCoverageManifest = builtins.toFile "kaiba-evaluated-flake-checks.json" (
+        builtins.toJSON {
+          root = lib.genAttrs systems (system: builtins.attrNames self.checks.${system});
+          provisioning = lib.genAttrs systems (system: builtins.attrNames provisioning.checks.${system});
+          dns = lib.genAttrs systems (system: builtins.attrNames dns.checks.${system});
+        }
+      );
       rpi5DevelopmentPosture = builtins.fromJSON (
         builtins.readFile ./provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
       );
@@ -818,25 +825,42 @@
                 nativeBuildInputs = [
                   pkgs.actionlint
                   pkgs.gitMinimal
+                  pkgs.jq
                   pkgs.python3
                   pkgs.shellcheck
+                  pkgs.zstd
                 ];
               }
               ''
                 actionlint \
                   ${./.github/workflows/ci.yml} \
                   ${./.github/workflows/release.yml}
+                python3 ${./tests/ci/flake_check_coverage.py} \
+                  ${./.github/workflows/ci.yml} \
+                  ${checkCoverageManifest}
+                python3 ${./tests/ci/flake_check_coverage_test.py} \
+                  ${./tests/ci/flake_check_coverage.py}
+                python3 ${./tests/ci/ci_workflow_policy.py} \
+                  ${./.github/workflows/ci.yml}
+                python3 ${./tests/ci/ci_workflow_policy_test.py} \
+                  ${./tests/ci/ci_workflow_policy.py} \
+                  ${./.github/workflows/ci.yml}
                 python3 ${./tests/ci/workflow_cache_policy.py} \
                   ${./.github/workflows/ci.yml} \
                   ${./.github/workflows/release.yml}
                 python3 ${./tests/ci/release_workflow_policy.py} \
                   ${./.github/workflows/release.yml} \
-                  ${./scripts/ci/verify_remote_release_tag.sh}
+                  ${./scripts/ci/verify_remote_release_tag.sh} \
+                  ${./scripts/ci}/publish_verified_release.sh
                 shellcheck \
+                  ${./scripts/ci/publish_verified_release.sh} \
                   ${./scripts/ci/read_release_image_binding.sh} \
                   ${./scripts/ci/verify_remote_release_tag.sh} \
                   ${./scripts/ci/verify_release_tag.sh} \
+                  ${./tests/ci/fake_release_gh.sh} \
+                  ${./tests/ci/publish_verified_release_test.sh} \
                   ${./tests/ci/read_release_image_binding_test.sh} \
+                  ${./tests/ci/release_image_verification_test.sh} \
                   ${./tests/ci/verify_remote_release_tag_test.sh} \
                   ${./tests/ci/verify_release_tag_test.sh}
                 bash ${./tests/ci/read_release_image_binding_test.sh} \
@@ -845,6 +869,11 @@
                   ${./scripts/ci/verify_release_tag.sh}
                 bash ${./tests/ci/verify_remote_release_tag_test.sh} \
                   ${./scripts/ci/verify_remote_release_tag.sh}
+                bash ${./tests/ci/release_image_verification_test.sh} \
+                  ${./.github/workflows/release.yml}
+                bash ${./tests/ci/publish_verified_release_test.sh} \
+                  ${./scripts/ci}/publish_verified_release.sh \
+                  ${./tests/ci/fake_release_gh.sh}
                 mkdir -p "$out"
                 touch "$out/passed"
               '';
