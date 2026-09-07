@@ -273,11 +273,11 @@
         ]
       },
       "locked": {
-        "path": "./nix/provisioning",
+        "path": "./provisioning",
         "type": "path"
       },
       "original": {
-        "path": "./nix/provisioning",
+        "path": "./provisioning",
         "type": "path"
       },
       "parent": []

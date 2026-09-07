@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/70ce234312134a463ba7728e94da2486a1d237ac";
     provisioning = {
-      url = "path:../provisioning";
+      url = "path:../../provisioning";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

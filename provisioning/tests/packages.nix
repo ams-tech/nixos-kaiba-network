@@ -7,7 +7,7 @@
 }:
 
 let
-  secureBootArtifactBuilder = import ../../nix/provisioning/secure-boot-artifacts.nix {
+  secureBootArtifactBuilder = import ../nix/secure-boot-artifacts.nix {
     inherit lib pkgs;
   };
   secureBootFixtureFirmware = pkgs.runCommand "kaiba-secure-boot-fixture-firmware" { } ''
@@ -62,12 +62,12 @@ let
   secureBootFixtureRootB = mkSecureBootFixtureRoot "kaiba-secure-boot-fixture-root-b.img";
   canonicalSourceRevision40 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   canonicalSourceRevision64 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-  signingCeremonyPackage = import ../../nix/development-signing-ceremony.nix {
+  signingCeremonyPackage = import ../nix/development-signing-ceremony.nix {
     inherit pkgs;
     sourceRevision = canonicalSourceRevision40;
     sourceTreeClean = true;
   };
-  signingCeremonyAutomationCheck = import ../signing-ceremony.nix {
+  signingCeremonyAutomationCheck = import ./signing-ceremony.nix {
     ceremony = signingCeremonyPackage;
     inherit pkgs;
   };
@@ -330,7 +330,7 @@ let
   eepromReleaseSigningInputsFixture = built.mkRpi5EEPROMReleaseSigningInputs {
     name = "kaiba-rpi5-eeprom-release-signing-inputs-fixture";
     eepromRelease = built.rpi5EEPROMRelease;
-    bootConfig = ../../provisioning/config/rpi5-prototype-eeprom/boot.conf;
+    bootConfig = ../config/rpi5-prototype-eeprom/boot.conf;
   };
   eepromPlanUnsignedArtifacts = mkReleaseIntentUnsignedArtifacts {
     name = "kaiba-rpi5-eeprom-plan-unsigned-artifacts";
@@ -357,7 +357,7 @@ let
   eepromSigningPlanFixture = built.mkRpi5EEPROMSigningPlan {
     name = "kaiba-rpi5-eeprom-signing-plan-fixture";
     planID = "plan:rpi5-eeprom-fixture:1";
-    bootConfig = ../../provisioning/config/rpi5-prototype-eeprom/boot.conf;
+    bootConfig = ../config/rpi5-prototype-eeprom/boot.conf;
     customerKeyHash = "sha256:${developmentYubiKeyCustomerKeyHash}";
     eepromSigningInputs = eepromReleaseSigningInputsFixture;
     publicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
@@ -494,7 +494,7 @@ let
         {
           name = "kaiba-rpi5-eeprom-signing-plan-evaluation";
           planID = "plan:rpi5-eeprom-fixture:1";
-          bootConfig = ../../provisioning/config/rpi5-prototype-eeprom/boot.conf;
+          bootConfig = ../config/rpi5-prototype-eeprom/boot.conf;
           customerKeyHash = "sha256:${developmentYubiKeyCustomerKeyHash}";
           eepromSigningInputs = eepromReleaseSigningInputsFixture;
           publicKeyFingerprint = developmentYubiKeyPublicKeyFingerprint;
@@ -572,7 +572,7 @@ let
   };
   signedReleaseEvaluationFixture = built.mkRpi5VerifiedSignedRelease {
     name = "kaiba-rpi5-verified-signed-release-evaluation";
-    deviceProfile = ../../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
+    deviceProfile = ../profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
     eepromRelease = built.rpi5EEPROMRelease;
     platformAdapter = signedReleasePlatformAdapterEvaluationFixture;
     rootIntegrity = signedReleaseRootIntegrityEvaluationFixture;
@@ -609,7 +609,7 @@ let
     (builtins.tryEval (
       (built.mkRpi5VerifiedSignedRelease {
         name = "kaiba-rpi5-signed-release-receipt-input-evaluation";
-        deviceProfile = ../../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
+        deviceProfile = ../profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
         eepromRelease = built.rpi5EEPROMRelease;
         platformAdapter = signedReleasePlatformAdapterEvaluationFixture;
         rootIntegrity = signedReleaseRootIntegrityEvaluationFixture;
@@ -1040,7 +1040,7 @@ let
   productionMediaEEPROMSigningPlan = built.mkRpi5EEPROMSigningPlan {
     name = "kaiba-production-media-eeprom-signing-plan-fixture";
     planID = "plan:rpi5-production-media-eeprom-fixture:1";
-    bootConfig = ../../provisioning/config/rpi5-prototype-eeprom/boot.conf;
+    bootConfig = ../config/rpi5-prototype-eeprom/boot.conf;
     customerKeyHash = "sha256:${productionMediaFixtureCustomerKeyHash}";
     eepromSigningInputs = eepromReleaseSigningInputsFixture;
     publicKeyFingerprint = productionMediaFixturePublicKeyFingerprint;
@@ -1308,7 +1308,7 @@ let
   };
   productionMediaSignedReleaseFixture = built.mkRpi5VerifiedSignedRelease {
     name = "kaiba-production-media-verified-signed-release-fixture";
-    deviceProfile = ../../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
+    deviceProfile = ../profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
     eepromRelease = built.rpi5EEPROMRelease;
     platformAdapter = productionMediaPlatformAdapter;
     rootIntegrity = productionMediaRootIntegrity;
@@ -1549,7 +1549,7 @@ let
 
         readonly posture=${developmentPosturePath}
         readonly schema=${developmentPostureSchemaPath}
-        readonly boot_config=${../../provisioning/config/rpi5-prototype-eeprom/boot.conf}
+        readonly boot_config=${../config/rpi5-prototype-eeprom/boot.conf}
         readonly unsigned_manifest=${secureBootFixtureA}/manifest.json
 
         check-jsonschema --check-metaschema "$schema"
@@ -5241,7 +5241,7 @@ let
         fi
         go list -deps ./cmd/kaiba-provision-media-device-stager \
           | grep -F '/internal/provisioning/mediawriter' > /dev/null
-        python3 -m py_compile ${../../nix/provisioning/build-canonical-fat.py}
+        python3 -m py_compile ${../nix/build-canonical-fat.py}
         python3 -m py_compile ${./deterministic-rsa-fixture.py}
 
         readonly production_assets=${productionMediaFixture.kaibaRpi5ProductionMedia.assets}

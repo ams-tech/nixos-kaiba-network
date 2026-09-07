@@ -310,7 +310,7 @@ policy, private state and runtime boundaries, and direct Nix GC roots for both
 the signing package and deployment bundle. It does
 not enable or start the gate, activate PC/SC, read a PIN, enumerate a token, or
 submit a request. See the installed deployment documentation or
-[`deploy/ubuntu-signing-gate/README.md`](../deploy/ubuntu-signing-gate/README.md)
+[`deploy/ubuntu-signing-gate/README.md`](../provisioning/deploy/ubuntu-signing-gate/README.md)
 for the exact file and permission boundary.
 
 ## 4. Have the independent reviewer author the approval

@@ -9,7 +9,7 @@ let
   cfg = config.kaiba.secureBootTarget;
   access = cfg.developmentAccess;
   developmentPosture = builtins.fromJSON (
-    builtins.readFile ../../../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
+    builtins.readFile ../../policies/raspberry-pi-5-development-posture-v1alpha1.json
   );
   evidenceDirectory = "/run/kaiba-secure-boot";
   sshRuntimeDirectory = "/run/kaiba-development-ssh";

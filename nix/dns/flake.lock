@@ -23,11 +23,11 @@
         ]
       },
       "locked": {
-        "path": "../provisioning",
+        "path": "../../provisioning",
         "type": "path"
       },
       "original": {
-        "path": "../provisioning",
+        "path": "../../provisioning",
         "type": "path"
       },
       "parent": []

@@ -236,7 +236,7 @@ let
         test -f "$signingReceiptVerificationInput"
         test ! -L "$signingReceiptVerificationInput"
         check-jsonschema \
-          --schemafile ${../../provisioning/schemas/signing-gate-receipt-verification-v1alpha2.schema.json} \
+          --schemafile ${../schemas/signing-gate-receipt-verification-v1alpha2.schema.json} \
           "$signingReceiptVerificationInput"
         jq -e \
           --arg release_intent_digest "$(jq -r .release_intent_digest \

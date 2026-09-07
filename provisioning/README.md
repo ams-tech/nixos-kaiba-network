@@ -206,11 +206,11 @@ From the repository root, the workspace supports:
 go test ./provisioning/...
 ```
 
-From this directory, the corresponding Nix boundary is `../nix/provisioning`:
+From this directory, the corresponding Nix boundary is `.`:
 
 ```console
-nix flake check ../nix/provisioning -L
-nix build ../nix/provisioning#kaiba-provision -L
+nix flake check . -L
+nix build .#kaiba-provision -L
 ```
 
 See the [Raspberry Pi 5 probe](../docs/raspberry-pi-5-provisioning-probe.md),

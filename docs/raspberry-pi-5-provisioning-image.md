@@ -1,16 +1,9 @@
 # Raspberry Pi 5 provisioning-station SD image
 
-The repository root flake builds the bootable Raspberry Pi 5 SD image originally
-designed for the sacrificial-device hardware-qualification station. It is
-**not** normal-boot media for a target. During any separately approved fresh-
-candidate qualification, the target must stay on a separate, labelled USB lane
-and use its own known-good normal-boot media.
-
-The original sacrificial target has since been fused and boots a signed
-development image. This read-only fresh-candidate station image and its
-qualification workflow are historical for that board; do not attach the
-known-owned Pi as a blank candidate or overwrite its checked pre-fuse record.
-Use the [sacrificial-device state] for current handling.
+The repository root flake builds a bootable Raspberry Pi 5 SD image for the
+station that runs the sacrificial-device hardware qualification. It is **not**
+normal-boot media for the sacrificial target. The target remains attached to a
+separate, labelled USB lane and uses its own known-good normal-boot media.
 
 The image composes the Raspberry Pi 5 kernel, firmware, generation bootloader,
 and SD-image modules from commit
@@ -151,7 +144,7 @@ secure-boot station. Starting with v0.1.13, the operator launches its fixed
 runner in the foreground instead of a boot-time service. Use the [secure-boot
 station release and physical boot
 procedure](raspberry-pi-5-development-secure-boot-station.md) for the GitHub
-asset that was intended for the fixed sacrificial workflow.
+asset that provisions the sacrificial Pi.
 
 ## Flash and boot
 
@@ -238,9 +231,8 @@ also exports `QUALIFICATION_SCHEMA` and sets `umask 077`. `PROFILE` and
 package, so readiness does not depend on generic `/run/current-system/sw/share`
 linking.
 
-Continue with the [fresh-device qualification runbook] only for a separately
-approved fresh qualification candidate when using the manual fallback. It is
-not a requalification path for the fused sacrificial Pi.
+Continue with the [sacrificial-device operator runbook] when using the manual
+fallback.
 
 ### After either workflow
 
@@ -255,19 +247,17 @@ On a clean review-workstation checkout of the exact frozen revision, validate
 the transferred record independently:
 
 ```console
-nix develop ./nix/provisioning --command check-jsonschema \
+nix develop ./provisioning --command check-jsonschema \
   --schemafile provisioning/schemas/rpi5-hardware-qualification-v1alpha1.schema.json \
   /path/to/hardware-qualification.json
 ```
 
-Verify that its `source_revision` equals that frozen revision. The current
-repository importer supports only the historical sacrificial record. Keep a
-different candidate's output private until a separately approved evidence
-identity, filename, importer, and report binding have been implemented; do not
-replace `tests/provisioning/evidence/sacrificial-pi-5.json`. After any approved
-transfer, reboot the station to clear all volatile evidence before starting
-another ceremony.
+Verify that its `source_revision` equals that frozen revision. For a reviewed
+closeout, copy only this final record to
+`provisioning/tests/evidence/sacrificial-pi-5.json` and update
+`provisioning/tests/report-input.json` as described in the runbook. After a
+successful transfer, reboot the station to clear all volatile evidence before
+starting another ceremony.
 
 [`ams-tech/nixos-raspberrypi` fork]: https://github.com/ams-tech/nixos-raspberrypi/tree/kaiba
-[fresh-device qualification runbook]: raspberry-pi-5-provisioning-probe.md#historical-fresh-device-qualification-runbook
-[sacrificial-device state]: raspberry-pi-5-sacrificial-state.md
+[sacrificial-device operator runbook]: raspberry-pi-5-provisioning-probe.md#sacrificial-device-operator-runbook

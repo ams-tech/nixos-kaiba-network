@@ -1,7 +1,7 @@
 {
   pkgs,
   lib,
-  moduleRoot ? ../../provisioning,
+  moduleRoot ? ../.,
 }:
 
 let

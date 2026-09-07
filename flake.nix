@@ -15,7 +15,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/70ce234312134a463ba7728e94da2486a1d237ac";
     nixos-raspberrypi.url = "github:ams-tech/nixos-raspberrypi/24b786fc4750abcce26eb8fc5e9e58632e358ad2";
     provisioning = {
-      url = "path:./nix/provisioning";
+      url = "path:./provisioning";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     dns = {
@@ -325,34 +325,15 @@
         };
 
       ubuntuSigningGateDeploymentFor =
-        system:
-        import ./nix/ubuntu-signing-gate-deployment.nix {
-          pkgs = import nixpkgs { inherit system; };
-        };
+        system: provisioning.lib.mkUbuntuSigningGateDeployment { inherit system; };
 
       ubuntuProvisioningAuthorityDeploymentFor =
-        system:
-        import ./nix/ubuntu-provisioning-authority-deployment.nix {
-          pkgs = import nixpkgs { inherit system; };
-          auditPackage = provisioning.packages.${system}.kaiba-provision-audit;
-          controlPackage = provisioning.packages.${system}.kaiba-provision-control;
-        };
-
-      ubuntuProvisioningAuthorityLoopbackTestDeploymentFor =
-        system:
-        import ./nix/ubuntu-provisioning-authority-deployment.nix {
-          pkgs = import nixpkgs { inherit system; };
-          auditPackage = provisioning.packages.${system}.kaiba-provision-audit;
-          controlPackage = provisioning.packages.${system}.kaiba-provision-control;
-          listenAddress = "127.0.0.1";
-          controlPort = 38091;
-          auditPort = 38092;
-        };
+        system: provisioning.lib.mkUbuntuProvisioningAuthorityDeployment { inherit system; };
 
       developmentSigningCeremonyFor =
         system:
-        import ./nix/development-signing-ceremony.nix {
-          pkgs = import nixpkgs { inherit system; };
+        provisioning.lib.mkDevelopmentSigningCeremony {
+          inherit system;
           sourceRevision = developmentCeremonySourceRevision;
           sourceTreeClean = developmentCeremonySourceTreeClean;
         };
@@ -743,13 +724,8 @@
           moduleEval = import ./tests/module-eval.nix {
             inherit pkgs lib;
             kaibaPackage = dns.packages.${system}.dns-suite;
-            kaibaAuditPackage = provisioning.packages.${system}.kaiba-provision-audit;
-            kaibaAuthorityBridgePackage = provisioning.packages.${system}.kaiba-provision-authority-bridge;
-            kaibaControlPackage = provisioning.packages.${system}.kaiba-provision-control;
-            kaibaLaneGuardPackage = laneGuardFixture;
-            kaibaProvisionPackage = provisioning.packages.${system}.kaiba-provision;
-            kaibaStationDemoPackage = provisioning.packages.${system}.kaiba-provision-station-demo;
             kaibaModules = self.nixosModules;
+            provisioningModuleEval = provisioning.checks.${system}.module-eval;
           };
         in
         {
@@ -813,12 +789,9 @@
           signing-approval = provisioning.checks.${system}.signing-approval;
           signing-receipts = provisioning.checks.${system}.signing-receipts;
           signing-receipts-integration = provisioning.checks.${system}.signing-receipts-integration;
-          ubuntu-provisioning-authority-deployment = import ./tests/ubuntu-provisioning-authority.nix {
-            deployment = ubuntuProvisioningAuthorityDeploymentFor system;
-            runtimeDeployment = ubuntuProvisioningAuthorityLoopbackTestDeploymentFor system;
-            inherit pkgs;
-          };
-          ubuntu-signing-gate-deployment = ubuntuSigningGateDeploymentFor system;
+          ubuntu-provisioning-authority-deployment =
+            provisioning.checks.${system}.ubuntu-provisioning-authority-deployment;
+          ubuntu-signing-gate-deployment = provisioning.checks.${system}.ubuntu-signing-gate-deployment;
           ci-workflow =
             pkgs.runCommand "kaiba-ci-workflow-check"
               {
@@ -880,10 +853,7 @@
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           development-signing = developmentSigning.signing;
-          signing-ceremony = import ./tests/signing-ceremony.nix {
-            ceremony = developmentSigningCeremonyFor system;
-            inherit pkgs;
-          };
+          signing-ceremony = provisioning.checks.${system}.signing-ceremony;
           report-unit = dns.checks.${system}.report-unit;
           dns-schema = dns.checks.${system}.dns-schema;
           dns-topology = dns.checks.${system}.dns-topology;

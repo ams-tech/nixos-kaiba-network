@@ -5,7 +5,7 @@
 
 let
   developmentPosture = builtins.fromJSON (
-    builtins.readFile ../../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
+    builtins.readFile ../policies/raspberry-pi-5-development-posture-v1alpha1.json
   );
 in
 {

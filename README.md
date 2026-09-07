@@ -53,8 +53,8 @@ The DNS integration report and interactive driver are `x86_64-linux` outputs.
 The provisioning and DNS functionality can also be evaluated independently:
 
 ```console
-nix flake check ./nix/provisioning -L
-nix build ./nix/provisioning#kaiba-provision -L
+nix flake check ./provisioning -L
+nix build ./provisioning#kaiba-provision -L
 
 nix flake check ./nix/dns -L
 nix build ./nix/dns#dns-test-report -L
@@ -122,7 +122,7 @@ remains blocked. See the
 
 The repository has two independently consumable leaf flakes:
 
-- `nix/provisioning` owns the Raspberry Pi probe, provisioning-station demo,
+- `provisioning` owns the Raspberry Pi probe, provisioning-station demo,
   device profile, provisioning result, and their NixOS modules and checks.
 - `nix/dns` owns the device agent, controller, publisher, authoritative DNS
   roles, VM topology, validation report, and their NixOS modules and checks.
@@ -146,7 +146,7 @@ provisioning inputs as follows:
     nixpkgs.url = "github:NixOS/nixpkgs";
 
     kaiba-provisioning = {
-      url = "github:ams-tech/nixos-kaiba-network?dir=nix/provisioning";
+      url = "github:ams-tech/nixos-kaiba-network?dir=provisioning";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 

@@ -8,33 +8,33 @@
     let
       lib = nixpkgs.lib;
       repositoryRoot = self.sourceInfo.outPath;
-      moduleRoot = ../../provisioning;
+      moduleRoot = ./.;
       systems = [
         "x86_64-linux"
         "aarch64-linux"
       ];
       forAllSystems = lib.genAttrs systems;
-      hardwareConfigurations = import ../../provisioning/config/hardware;
+      hardwareConfigurations = import ./config/hardware;
 
       packagesFor =
         system:
         let
           pkgs = import nixpkgs { inherit system; };
         in
-        import ./packages.nix {
+        import ./nix/packages.nix {
           inherit pkgs lib moduleRoot;
         };
 
       modules = {
-        default = import ./modules;
-        provisioning-audit = import ./modules/provisioning-audit.nix;
-        provisioning-authority-bridge = import ./modules/provisioning-authority-bridge.nix;
-        provisioning-control = import ./modules/provisioning-control.nix;
-        provisioning-lane-guard = import ./modules/provisioning-lane-guard.nix;
-        provisioning-probe = import ./modules/provisioning-probe.nix;
-        provisioning-signing-gate = import ./modules/provisioning-signing-gate.nix;
-        provisioning-station-demo = import ./modules/provisioning-station-demo.nix;
-        secure-boot-target = import ./modules/secure-boot-target.nix;
+        default = import ./nix/modules;
+        provisioning-audit = import ./nix/modules/provisioning-audit.nix;
+        provisioning-authority-bridge = import ./nix/modules/provisioning-authority-bridge.nix;
+        provisioning-control = import ./nix/modules/provisioning-control.nix;
+        provisioning-lane-guard = import ./nix/modules/provisioning-lane-guard.nix;
+        provisioning-probe = import ./nix/modules/provisioning-probe.nix;
+        provisioning-signing-gate = import ./nix/modules/provisioning-signing-gate.nix;
+        provisioning-station-demo = import ./nix/modules/provisioning-station-demo.nix;
+        secure-boot-target = import ./nix/modules/secure-boot-target.nix;
       };
 
       provisioningFor =
@@ -42,23 +42,65 @@
         let
           pkgs = import nixpkgs { inherit system; };
         in
-        import ../../tests/provisioning/packages.nix {
+        import ./tests/packages.nix {
           inherit hardwareConfigurations pkgs lib;
           built = packagesFor system;
           kaibaModules = modules;
+        };
+
+      mkDevelopmentSigningCeremony =
+        {
+          system,
+          sourceRevision,
+          sourceTreeClean,
+        }:
+        import ./nix/development-signing-ceremony.nix {
+          pkgs = import nixpkgs { inherit system; };
+          inherit sourceRevision sourceTreeClean;
+        };
+
+      mkUbuntuProvisioningAuthorityDeployment =
+        {
+          system,
+          auditPackage ? (packagesFor system).audit,
+          auditPort ? 8092,
+          controlPackage ? (packagesFor system).control,
+          controlPort ? 8091,
+          listenAddress ? "192.168.8.249",
+        }:
+        import ./nix/ubuntu-provisioning-authority-deployment.nix {
+          pkgs = import nixpkgs { inherit system; };
+          inherit
+            auditPackage
+            auditPort
+            controlPackage
+            controlPort
+            listenAddress
+            ;
+        };
+
+      mkUbuntuSigningGateDeployment =
+        { system }:
+        import ./nix/ubuntu-signing-gate-deployment.nix {
+          pkgs = import nixpkgs { inherit system; };
         };
     in
     {
       nixosModules = modules;
 
       lib = {
-        inherit hardwareConfigurations;
+        inherit
+          hardwareConfigurations
+          mkDevelopmentSigningCeremony
+          mkUbuntuProvisioningAuthorityDeployment
+          mkUbuntuSigningGateDeployment
+          ;
 
         mkRpi5SecureBootArtifacts =
           { system, ... }@args:
           let
             pkgs = import nixpkgs { inherit system; };
-            builder = import ./secure-boot-artifacts.nix { inherit pkgs lib; };
+            builder = import ./nix/secure-boot-artifacts.nix { inherit pkgs lib; };
           in
           builder (builtins.removeAttrs args [ "system" ]);
 
@@ -185,6 +227,17 @@
           rpi5-probe-bundle = built.rpi5ProbeBundle;
           rpi5-eeprom-release = built.rpi5EEPROMRelease;
           kaiba-provision-yubikey-wrapper-foundation = built.yubiKeyWrapperFoundation;
+          ubuntu-provisioning-authority-deployment = mkUbuntuProvisioningAuthorityDeployment {
+            inherit system;
+          };
+          ubuntu-signing-gate-deployment = mkUbuntuSigningGateDeployment { inherit system; };
+        }
+        // lib.optionalAttrs (system == "x86_64-linux") {
+          kaiba-provision-signing-ceremony = mkDevelopmentSigningCeremony {
+            inherit system;
+            sourceRevision = "0000000000000000000000000000000000000000";
+            sourceTreeClean = false;
+          };
         }
       );
 
@@ -217,6 +270,17 @@
           signing-receipts = built.signingReceiptsTool;
           signing-receipts-integration = provisioning.signingReceiptVerificationContract;
           unfused-capsule = provisioning.unfusedCapsuleContract;
+          ubuntu-provisioning-authority-deployment = import ./tests/ubuntu-provisioning-authority.nix {
+            deployment = mkUbuntuProvisioningAuthorityDeployment { inherit system; };
+            runtimeDeployment = mkUbuntuProvisioningAuthorityDeployment {
+              inherit system;
+              listenAddress = "127.0.0.1";
+              controlPort = 38091;
+              auditPort = 38092;
+            };
+            inherit pkgs;
+          };
+          ubuntu-signing-gate-deployment = mkUbuntuSigningGateDeployment { inherit system; };
           station-ui =
             pkgs.runCommand "kaiba-provisioning-station-ui-check"
               {
@@ -229,20 +293,30 @@
                 set -eu
                 export PYTHONDONTWRITEBYTECODE=1
                 cd ${repositoryRoot}
-                node --check provisioning/internal/provisioning/stationui/web/app.js
-                node --check provisioning/internal/provisioning/stationui/web/transport.js
-                node --check provisioning/internal/provisioning/livestation/web/app.js
-                node provisioning/internal/provisioning/livestation/web/app.test.cjs
+                node --check internal/provisioning/stationui/web/app.js
+                node --check internal/provisioning/stationui/web/transport.js
+                node --check internal/provisioning/livestation/web/app.js
+                node internal/provisioning/livestation/web/app.test.cjs
                 export KAIBA_STATION_PAGES=${built.stationPages}
                 node --test tests/station-ui/transport.test.mjs
                 python3 -m unittest discover -s tests/station-ui -p 'test_*.py' -v
                 for asset in index.html styles.css transport.js app.js; do
-                  cmp "provisioning/internal/provisioning/stationui/web/$asset" "${built.stationPages}/$asset"
+                  cmp "internal/provisioning/stationui/web/$asset" "${built.stationPages}/$asset"
                 done
                 test "$(find ${built.stationPages} -maxdepth 1 -type f | wc -l)" -eq 6
                 mkdir -p "$out"
                 printf '%s\n' 'provisioning station UI: pass' > "$out/results.txt"
               '';
+        }
+        // lib.optionalAttrs (system == "x86_64-linux") {
+          signing-ceremony = import ./tests/signing-ceremony.nix {
+            ceremony = mkDevelopmentSigningCeremony {
+              inherit system;
+              sourceRevision = "0000000000000000000000000000000000000000";
+              sourceTreeClean = false;
+            };
+            inherit pkgs;
+          };
         }
       );
 

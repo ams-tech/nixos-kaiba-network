@@ -29,7 +29,7 @@ runs `fixture-dry-run`, `fixture-stage`, and `fixture-readback`, and performs th
 final GPT/FAT/dm-verity inspection. Run the closed regression directly:
 
 ```console
-nix build ./nix/provisioning#checks.x86_64-linux.media-staging-fixture \
+nix build ./provisioning#checks.x86_64-linux.media-staging-fixture \
   --no-link -L
 ```
 

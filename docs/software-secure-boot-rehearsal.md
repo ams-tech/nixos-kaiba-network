@@ -13,7 +13,7 @@ branch cannot classify, reconcile, or authorize work on that known-owned board.
 Run the happy path from a checkout:
 
 ```console
-nix run ./nix/provisioning#kaiba-provision-rehearsal -- \
+nix run ./provisioning#kaiba-provision-rehearsal -- \
   --rehearsal-id local-happy-path
 ```
 
@@ -27,10 +27,10 @@ Failure and uncertain-result paths are deterministic and have distinct exit
 codes:
 
 ```console
-nix run ./nix/provisioning#kaiba-provision-rehearsal -- \
+nix run ./provisioning#kaiba-provision-rehearsal -- \
   --rehearsal-id local-failure --inject-at 4 --inject-outcome failed
 
-nix run ./nix/provisioning#kaiba-provision-rehearsal -- \
+nix run ./provisioning#kaiba-provision-rehearsal -- \
   --rehearsal-id local-uncertain --inject-at 1 --inject-outcome uncertain
 ```
 

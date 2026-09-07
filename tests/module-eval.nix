@@ -2,13 +2,8 @@
   pkgs,
   lib,
   kaibaPackage,
-  kaibaAuditPackage,
-  kaibaAuthorityBridgePackage,
-  kaibaControlPackage,
-  kaibaLaneGuardPackage,
-  kaibaProvisionPackage,
-  kaibaStationDemoPackage,
   kaibaModules,
+  provisioningModuleEval,
 }:
 
 let
@@ -20,23 +15,10 @@ let
       kaibaModules
       ;
   };
-  provisioning = import ./provisioning/module-eval.nix {
-    inherit
-      pkgs
-      lib
-      kaibaAuditPackage
-      kaibaAuthorityBridgePackage
-      kaibaControlPackage
-      kaibaLaneGuardPackage
-      kaibaProvisionPackage
-      kaibaStationDemoPackage
-      kaibaModules
-      ;
-  };
 in
 pkgs.runCommand "kaiba-module-evaluation" { } ''
   test -f ${dns}/results.txt
-  test -f ${provisioning}/results.txt
+  test -f ${provisioningModuleEval}/results.txt
 
   mkdir -p "$out"
   printf '%s\n' \

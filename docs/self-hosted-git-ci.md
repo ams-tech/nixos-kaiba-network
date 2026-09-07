@@ -515,7 +515,7 @@ Build products are convenience views over immutable outputs, not an authority
 record. The durable record must retain the source revision, identities and
 digests of all three flake lockfiles, derivation path, output store path or
 content digest, builder identity, Hydra evaluation/build IDs, timestamps, and
-gate results. The three locks are the root, `nix/provisioning`, and `nix/dns`
+gate results. The three locks are the root, `provisioning`, and `nix/dns`
 lockfiles.
 
 Set explicit retention classes rather than one global duration:

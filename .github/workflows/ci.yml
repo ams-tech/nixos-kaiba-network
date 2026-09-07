@@ -47,16 +47,16 @@ jobs:
         run: nix --accept-flake-config fmt -- --ci
 
       - name: Test the inert Ubuntu signing-gate deployment
-        run: tests/deployment/ubuntu_signing_gate_test.sh
+        run: provisioning/tests/deployment/ubuntu_signing_gate_test.sh
 
       - name: Evaluate every flake system
         run: |
           nix --accept-flake-config flake check --all-systems --no-build -L
-          nix flake check ./nix/provisioning --all-systems --no-build -L
+          nix flake check ./provisioning --all-systems --no-build -L
           nix flake check ./nix/dns --all-systems --no-build -L
           git diff --exit-code -- \
             flake.lock \
-            nix/provisioning/flake.lock \
+            provisioning/flake.lock \
             nix/dns/flake.lock
 
       - name: Run fast checks
@@ -97,34 +97,37 @@ jobs:
             .#checks.x86_64-linux.ubuntu-provisioning-authority-deployment \
             .#checks.x86_64-linux.ubuntu-signing-gate-deployment \
             .#checks.x86_64-linux.unit \
-            ./nix/provisioning#checks.x86_64-linux.development-yubikey-signing \
-            ./nix/provisioning#checks.x86_64-linux.device-profile-schema \
-            ./nix/provisioning#checks.x86_64-linux.media-staging-fixture \
-            ./nix/provisioning#checks.x86_64-linux.module-eval \
-            ./nix/provisioning#checks.x86_64-linux.production-media-staging \
-            ./nix/provisioning#checks.x86_64-linux.provisioning-test-result \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-development-posture \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-eeprom-release \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-eeprom-signing \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-probe-bundle \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-rpiboot-bundles \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-signed-release \
-            ./nix/provisioning#checks.x86_64-linux.rpiboot-metadata-stdout \
-            ./nix/provisioning#checks.x86_64-linux.secure-boot-artifacts \
-            ./nix/provisioning#checks.x86_64-linux.signed-boot-plan \
-            ./nix/provisioning#checks.x86_64-linux.signed-release-manifest \
-            ./nix/provisioning#checks.x86_64-linux.signing-approval \
-            ./nix/provisioning#checks.x86_64-linux.signing-receipts \
-            ./nix/provisioning#checks.x86_64-linux.signing-receipts-integration \
-            ./nix/provisioning#checks.x86_64-linux.station-ui \
-            ./nix/provisioning#checks.x86_64-linux.unfused-capsule \
-            ./nix/provisioning#checks.x86_64-linux.unit \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-audit \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-authority-bridge \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-control \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-lane-guard \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-station \
+            ./provisioning#checks.x86_64-linux.development-yubikey-signing \
+            ./provisioning#checks.x86_64-linux.device-profile-schema \
+            ./provisioning#checks.x86_64-linux.media-staging-fixture \
+            ./provisioning#checks.x86_64-linux.module-eval \
+            ./provisioning#checks.x86_64-linux.production-media-staging \
+            ./provisioning#checks.x86_64-linux.provisioning-test-result \
+            ./provisioning#checks.x86_64-linux.rpi5-development-posture \
+            ./provisioning#checks.x86_64-linux.rpi5-eeprom-release \
+            ./provisioning#checks.x86_64-linux.rpi5-eeprom-signing \
+            ./provisioning#checks.x86_64-linux.rpi5-probe-bundle \
+            ./provisioning#checks.x86_64-linux.rpi5-rpiboot-bundles \
+            ./provisioning#checks.x86_64-linux.rpi5-signed-release \
+            ./provisioning#checks.x86_64-linux.rpiboot-metadata-stdout \
+            ./provisioning#checks.x86_64-linux.secure-boot-artifacts \
+            ./provisioning#checks.x86_64-linux.signed-boot-plan \
+            ./provisioning#checks.x86_64-linux.signed-release-manifest \
+            ./provisioning#checks.x86_64-linux.signing-approval \
+            ./provisioning#checks.x86_64-linux.signing-receipts \
+            ./provisioning#checks.x86_64-linux.signing-receipts-integration \
+            ./provisioning#checks.x86_64-linux.signing-ceremony \
+            ./provisioning#checks.x86_64-linux.station-ui \
+            ./provisioning#checks.x86_64-linux.unfused-capsule \
+            ./provisioning#checks.x86_64-linux.ubuntu-provisioning-authority-deployment \
+            ./provisioning#checks.x86_64-linux.ubuntu-signing-gate-deployment \
+            ./provisioning#checks.x86_64-linux.unit \
+            ./provisioning#packages.x86_64-linux.kaiba-provision-audit \
+            ./provisioning#packages.x86_64-linux.kaiba-provision-authority-bridge \
+            ./provisioning#packages.x86_64-linux.kaiba-provision-control \
+            ./provisioning#packages.x86_64-linux.kaiba-provision-lane-guard \
+            ./provisioning#packages.x86_64-linux.kaiba-provision \
+            ./provisioning#packages.x86_64-linux.kaiba-provision-station \
             ./nix/dns#checks.x86_64-linux.module-eval \
             ./nix/dns#checks.x86_64-linux.report-unit \
             ./nix/dns#checks.x86_64-linux.unit
@@ -193,36 +196,38 @@ jobs:
             ./nix/dns#packages.aarch64-linux.kaiba-agent \
             ./nix/dns#packages.aarch64-linux.kaiba-controller \
             ./nix/dns#packages.aarch64-linux.kaiba-publisher \
-            ./nix/provisioning#checks.aarch64-linux.development-yubikey-signing \
-            ./nix/provisioning#checks.aarch64-linux.device-profile-schema \
-            ./nix/provisioning#checks.aarch64-linux.media-staging-fixture \
-            ./nix/provisioning#checks.aarch64-linux.module-eval \
-            ./nix/provisioning#checks.aarch64-linux.production-media-staging \
-            ./nix/provisioning#checks.aarch64-linux.provisioning-test-result \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-development-posture \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-eeprom-release \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-eeprom-signing \
-            ./nix/provisioning#checks.aarch64-linux.unit \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-probe-bundle \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-rpiboot-bundles \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-signed-release \
-            ./nix/provisioning#checks.aarch64-linux.rpiboot-metadata-stdout \
-            ./nix/provisioning#checks.aarch64-linux.secure-boot-artifacts \
-            ./nix/provisioning#checks.aarch64-linux.signed-boot-plan \
-            ./nix/provisioning#checks.aarch64-linux.signed-release-manifest \
-            ./nix/provisioning#checks.aarch64-linux.signing-approval \
-            ./nix/provisioning#checks.aarch64-linux.signing-receipts \
-            ./nix/provisioning#checks.aarch64-linux.signing-receipts-integration \
-            ./nix/provisioning#checks.aarch64-linux.station-ui \
-            ./nix/provisioning#checks.aarch64-linux.unfused-capsule \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-audit \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-authority-bridge \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-control \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-lane-guard \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-pages
+            ./provisioning#checks.aarch64-linux.development-yubikey-signing \
+            ./provisioning#checks.aarch64-linux.device-profile-schema \
+            ./provisioning#checks.aarch64-linux.media-staging-fixture \
+            ./provisioning#checks.aarch64-linux.module-eval \
+            ./provisioning#checks.aarch64-linux.production-media-staging \
+            ./provisioning#checks.aarch64-linux.provisioning-test-result \
+            ./provisioning#checks.aarch64-linux.rpi5-development-posture \
+            ./provisioning#checks.aarch64-linux.rpi5-eeprom-release \
+            ./provisioning#checks.aarch64-linux.rpi5-eeprom-signing \
+            ./provisioning#checks.aarch64-linux.unit \
+            ./provisioning#checks.aarch64-linux.rpi5-probe-bundle \
+            ./provisioning#checks.aarch64-linux.rpi5-rpiboot-bundles \
+            ./provisioning#checks.aarch64-linux.rpi5-signed-release \
+            ./provisioning#checks.aarch64-linux.rpiboot-metadata-stdout \
+            ./provisioning#checks.aarch64-linux.secure-boot-artifacts \
+            ./provisioning#checks.aarch64-linux.signed-boot-plan \
+            ./provisioning#checks.aarch64-linux.signed-release-manifest \
+            ./provisioning#checks.aarch64-linux.signing-approval \
+            ./provisioning#checks.aarch64-linux.signing-receipts \
+            ./provisioning#checks.aarch64-linux.signing-receipts-integration \
+            ./provisioning#checks.aarch64-linux.station-ui \
+            ./provisioning#checks.aarch64-linux.unfused-capsule \
+            ./provisioning#checks.aarch64-linux.ubuntu-provisioning-authority-deployment \
+            ./provisioning#checks.aarch64-linux.ubuntu-signing-gate-deployment \
+            ./provisioning#packages.aarch64-linux.kaiba-provision-audit \
+            ./provisioning#packages.aarch64-linux.kaiba-provision-authority-bridge \
+            ./provisioning#packages.aarch64-linux.kaiba-provision-control \
+            ./provisioning#packages.aarch64-linux.kaiba-provision-lane-guard \
+            ./provisioning#packages.aarch64-linux.kaiba-provision \
+            ./provisioning#packages.aarch64-linux.kaiba-provision-station \
+            ./provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
+            ./provisioning#packages.aarch64-linux.kaiba-provision-station-pages
 
       - name: Verify the signed target SD image release binding
         run: |
@@ -236,7 +241,7 @@ jobs:
             https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst
 
       - name: Build the native provisioning test result
-        run: nix build ./nix/provisioning#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L
+        run: nix build ./provisioning#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L
 
       - name: Bind the provisioning result to this source revision
         id: provisioning_receipt
@@ -244,7 +249,7 @@ jobs:
           SOURCE_REVISION: ${{ github.sha }}
         run: |
           mkdir -p ci-receipt
-          nix develop ./nix/provisioning --command python3 tests/report/platform_receipt.py \
+          nix develop ./provisioning --command python3 tests/report/platform_receipt.py \
             --input provisioning-result/platform.json \
             --source-revision "$SOURCE_REVISION" \
             --output ci-receipt/provisioning-aarch64.json
@@ -458,7 +463,7 @@ jobs:
             echo "::error title=Reserved build path::pages-site must not exist before assembly."
             exit 1
           fi
-          nix build ./nix/provisioning#kaiba-provision-station-pages --out-link station-pages -L
+          nix build ./provisioning#kaiba-provision-station-pages --out-link station-pages -L
           mkdir -p pages-site/reports/latest pages-site/provisioning-demo
           cp --recursive --no-dereference site/. pages-site/
           cp --recursive --no-dereference ci-report/. pages-site/reports/latest/
