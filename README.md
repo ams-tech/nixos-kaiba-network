@@ -152,6 +152,11 @@ pushes to `main`, and manual dispatches. It separates the test workload into:
   followed by deterministic composition of both architectures' provisioning
   results.
 
+A proposed [self-hosted Forgejo and Hydra CI design](docs/self-hosted-git-ci.md)
+maps these jobs and the existing release boundaries onto Forgejo, Hydra,
+dedicated native builders, a protected Nix cache, and separate publication
+workers. It is a design draft, not an implemented deployment path.
+
 The topology job uploads `kaiba-dns-test-report` for 14 days. That artifact now
 contains the DNS topology evidence, automated provisioning checks for x86_64
 and AArch64, and the independent physical-hardware qualification state. On
