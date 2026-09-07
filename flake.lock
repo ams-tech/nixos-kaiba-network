@@ -273,14 +273,18 @@
         ]
       },
       "locked": {
-        "path": "./provisioning",
-        "type": "path"
+        "lastModified": 1788825359,
+        "narHash": "sha256-x9TfRIBAEmT4yQhbS14FpJCiKjcz/1ijHLYq/F/ZUok=",
+        "owner": "PseudoDesign",
+        "repo": "kaiba-provisioning",
+        "rev": "a28b09d03a9f76ec5f806aa971c13aed810aa006",
+        "type": "github"
       },
       "original": {
-        "path": "./provisioning",
-        "type": "path"
-      },
-      "parent": []
+        "owner": "PseudoDesign",
+        "repo": "kaiba-provisioning",
+        "type": "github"
+      }
     },
     "provisioning_2": {
       "inputs": {

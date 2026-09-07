@@ -15,7 +15,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/70ce234312134a463ba7728e94da2486a1d237ac";
     nixos-raspberrypi.url = "github:ams-tech/nixos-raspberrypi/24b786fc4750abcce26eb8fc5e9e58632e358ad2";
     provisioning = {
-      url = "path:./provisioning";
+      url = "github:PseudoDesign/kaiba-provisioning";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     dns = {
