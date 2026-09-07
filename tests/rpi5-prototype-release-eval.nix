@@ -2,13 +2,12 @@
   lib,
   pkgs,
   prototype,
+  provisioningAssets,
   signingProfile,
 }:
 
 let
-  developmentPosture = builtins.fromJSON (
-    builtins.readFile ../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
-  );
+  developmentPosture = provisioningAssets.development.posture;
   metadata = prototype.metadata;
   signingContract = signingProfile.signing.kaibaSigning;
   signerReview = signingProfile.independentReview;
@@ -184,9 +183,9 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-evaluation"
   { nativeBuildInputs = [ pkgs.check-jsonschema ]; }
   ''
     check-jsonschema --check-metaschema \
-      ${../provisioning/schemas/signer-independent-review-v1alpha1.schema.json}
+      ${provisioningAssets.schemas.signerIndependentReviewV1Alpha1}
     check-jsonschema \
-      --schemafile ${../provisioning/schemas/signer-independent-review-v1alpha1.schema.json} \
+      --schemafile ${provisioningAssets.schemas.signerIndependentReviewV1Alpha1} \
       ${signingProfile.independentReviewPath}
     mkdir -p "$out"
     printf '%s\n' \

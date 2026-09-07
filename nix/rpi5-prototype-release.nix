@@ -17,6 +17,7 @@ assert lib.assertMsg (
   builtins.isInt sourceDateEpoch && sourceDateEpoch >= 0 && sourceDateEpoch <= 253402300799
 ) "the Raspberry Pi 5 prototype release requires a canonical fixed source epoch";
 let
+  provisioningAssets = provisioning.lib.assets;
   signingContract = developmentSigning.signing.kaibaSigning;
   planID = "release:rpi5-prototype:${builtins.substring 0 12 sourceRevision}";
   eepromPlanID = "${planID}:eeprom";
@@ -31,7 +32,7 @@ let
   eepromSigningInputs = provisioning.lib.mkRpi5EEPROMReleaseSigningInputs {
     inherit eepromRelease system;
     name = "kaiba-rpi5-prototype-eeprom-signing-inputs";
-    bootConfig = ../provisioning/config/rpi5-prototype-eeprom/boot.conf;
+    bootConfig = provisioningAssets.configuration.prototypeEEPROMBoot;
   };
   releaseIntent = provisioning.lib.mkRpi5ReleaseIntent {
     inherit
@@ -71,7 +72,7 @@ let
       ;
     name = "kaiba-rpi5-prototype-eeprom-signing-plan";
     planID = eepromPlanID;
-    bootConfig = ../provisioning/config/rpi5-prototype-eeprom/boot.conf;
+    bootConfig = provisioningAssets.configuration.prototypeEEPROMBoot;
     customerKeyHash = "sha256:${signingContract.expectedCustomerKeyHash}";
     publicKeyFingerprint = signingContract.publicKeyFingerprint;
     reviewedPublicKeyPEM = developmentSigning.reviewedPublicKeyPEM;
@@ -103,6 +104,7 @@ let
       signingPlan
       unsignedArtifacts
       ;
+    inherit provisioningAssets;
   };
 in
 {

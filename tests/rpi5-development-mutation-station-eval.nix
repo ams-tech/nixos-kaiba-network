@@ -3,6 +3,7 @@
   bindingGuardB,
   directMutationStation,
   lib,
+  manualLaneQualificationSchema,
   mismatchedReleaseIntentSourceRevisionRejected,
   mismatchedUnsignedArtifactSourceRevisionRejected,
   mutationStation,
@@ -264,7 +265,7 @@ pkgs.runCommand "kaiba-rpi5-development-mutation-station-evaluation"
     ];
   }
   ''
-    schema=${../provisioning/schemas/rpi5-manual-lane-qualification-v1alpha1.schema.json}
+    schema=${manualLaneQualificationSchema}
     fixture=${./fixtures/rpi5-manual-lane-qualification.json}
 
     check-jsonschema --check-metaschema "$schema"

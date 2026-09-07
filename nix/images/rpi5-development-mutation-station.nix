@@ -10,6 +10,7 @@
   laneOperatorPackage,
   laneWorkflowPackage,
   manualLaneQualificationDigest,
+  manualLaneQualificationSchema,
   manualLaneQualificationSourceRevision,
   operatorName,
   payloadSourceRevision,
@@ -61,7 +62,7 @@ let
       test "$(stat -c '%u:%g:%a' "$record")" = 0:0:400
 
       check-jsonschema \
-        --schemafile ${../../provisioning/schemas/rpi5-manual-lane-qualification-v1alpha1.schema.json} \
+        --schemafile ${manualLaneQualificationSchema} \
         "$record"
 
       observed="sha256:$(sha256sum "$record" | cut -d ' ' -f 1)"

@@ -16,6 +16,7 @@
 }:
 
 let
+  provisioningAssets = provisioning.lib.assets;
   cleanAbsolute =
     value:
     builtins.isString value
@@ -30,9 +31,9 @@ let
     value: cleanAbsolute (toString value) && lib.hasPrefix "${builtins.storeDir}/" (toString value);
 
   system = "x86_64-linux";
-  platformAdapterSource = ../provisioning/config/rpi5-prototype-release/platform-adapter-v1alpha1.json;
-  platformAdapterSchema = ../provisioning/schemas/rpi5-platform-adapter-v1alpha1.schema.json;
-  deviceProfile = ../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
+  platformAdapterSource = provisioningAssets.configuration.prototypeReleasePlatformAdapter;
+  platformAdapterSchema = provisioningAssets.schemas.platformAdapterV1Alpha1;
+  deviceProfile = provisioningAssets.profiles.raspberryPi5ModelB;
 
   platformAdapter =
     pkgs.runCommand "${name}-platform-adapter.json" { nativeBuildInputs = [ pkgs.check-jsonschema ]; }

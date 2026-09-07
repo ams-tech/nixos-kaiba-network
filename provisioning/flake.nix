@@ -15,6 +15,74 @@
       ];
       forAllSystems = lib.genAttrs systems;
       hardwareConfigurations = import ./config/hardware;
+      assets = rec {
+        development = {
+          posturePath = ./policies/raspberry-pi-5-development-posture-v1alpha1.json;
+          posture = builtins.fromJSON (builtins.readFile development.posturePath);
+          sshAuthorizedKeyPath = ./keys/codex-rpi5-development-2026-09-05.pub;
+          sshAuthorizedKey = lib.removeSuffix "\n" (builtins.readFile development.sshAuthorizedKeyPath);
+        };
+
+        configuration = {
+          prototypeEEPROMBoot = ./config/rpi5-prototype-eeprom/boot.conf;
+          prototypeReleasePlatformAdapter = ./config/rpi5-prototype-release/platform-adapter-v1alpha1.json;
+        };
+
+        profiles = {
+          raspberryPi5ModelB = ./profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json;
+        };
+
+        schemas = {
+          bootSigningPlanV1Alpha2 = ./schemas/rpi5-boot-signing-plan-v1alpha2.schema.json;
+          eepromSigningPlanV1Alpha1 = ./schemas/rpi5-eeprom-signing-plan-v1alpha1.schema.json;
+          hardwareQualificationV1Alpha1 = ./schemas/rpi5-hardware-qualification-v1alpha1.schema.json;
+          manualLaneQualificationV1Alpha1 = ./schemas/rpi5-manual-lane-qualification-v1alpha1.schema.json;
+          platformAdapterV1Alpha1 = ./schemas/rpi5-platform-adapter-v1alpha1.schema.json;
+          releaseIntentV1Alpha1 = ./schemas/rpi5-release-intent-v1alpha1.schema.json;
+          signerIndependentReviewV1Alpha1 = ./schemas/signer-independent-review-v1alpha1.schema.json;
+          unsignedArtifactSetV1Alpha1 = ./schemas/unsigned-artifact-set-v1alpha1.schema.json;
+        };
+
+        signers.developmentPrototype = {
+          independentReviewPath = ./signers/development-prototype/independent-review-2026-08-27.json;
+          independentReview = builtins.fromJSON (
+            builtins.readFile signers.developmentPrototype.independentReviewPath
+          );
+          reviewedBootPublicKey = ./signers/development-prototype/reviewed-boot-public.pem;
+        };
+
+        releases.rpi5V016 = {
+          source = builtins.path {
+            name = "kaiba-rpi5-v016-public-signed-input-source";
+            path = ./releases/rpi5-v0.1.6;
+          };
+          operationalPayloadManifest = builtins.fromJSON (
+            builtins.readFile ./releases/rpi5-v0.1.6/operational-payload-manifest.json
+          );
+          signedInputs = {
+            bootSignedOutput = builtins.path {
+              name = "boot-signed";
+              path = ./releases/rpi5-v0.1.6/signed-inputs/boot-signed;
+            };
+            eepromSignedOutput = builtins.path {
+              name = "eeprom-signed";
+              path = ./releases/rpi5-v0.1.6/signed-inputs/eeprom-signed;
+            };
+            ownedRecoverySignedOutput = builtins.path {
+              name = "owned-recovery-signed";
+              path = ./releases/rpi5-v0.1.6/signed-inputs/owned-recovery-signed;
+            };
+            signingGrantRegistry = builtins.path {
+              name = "signing-grants.json";
+              path = ./releases/rpi5-v0.1.6/signed-inputs/signing-grants.json;
+            };
+            signingReceiptExport = builtins.path {
+              name = "signing-receipts.json";
+              path = ./releases/rpi5-v0.1.6/signed-inputs/signing-receipts.json;
+            };
+          };
+        };
+      };
 
       packagesFor =
         system:
@@ -90,6 +158,7 @@
 
       lib = {
         inherit
+          assets
           hardwareConfigurations
           mkDevelopmentSigningCeremony
           mkUbuntuProvisioningAuthorityDeployment
@@ -249,6 +318,7 @@
           provisioning = provisioningFor system;
         in
         {
+          asset-api = import ./tests/assets.nix { inherit assets pkgs; };
           unit = built.suite;
           development-yubikey-signing = provisioning.developmentYubiKeySigningContract;
           device-profile-schema = provisioning.deviceProfileSchema;

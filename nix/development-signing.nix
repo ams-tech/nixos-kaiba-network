@@ -3,9 +3,10 @@
   system,
 }:
 let
-  reviewedPublicKeyPEM = ../provisioning/signers/development-prototype/reviewed-boot-public.pem;
-  independentReviewPath = ../provisioning/signers/development-prototype/independent-review-2026-08-27.json;
-  independentReview = builtins.fromJSON (builtins.readFile independentReviewPath);
+  signerAssets = provisioning.lib.assets.signers.developmentPrototype;
+  reviewedPublicKeyPEM = signerAssets.reviewedBootPublicKey;
+  independentReviewPath = signerAssets.independentReviewPath;
+  independentReview = signerAssets.independentReview;
 
   metadata = {
     schemaVersion = "kaiba.provisioning.development-boot-root/v1alpha1";

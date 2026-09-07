@@ -1,18 +1,15 @@
 {
   lib,
   pkgs,
+  provisioningAssets,
   target,
 }:
 
 let
-  developmentPosture = builtins.fromJSON (
-    builtins.readFile ../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
-  );
+  developmentPosture = provisioningAssets.development.posture;
   cfg = target.nixosSystem.config;
   targetPolicy = builtins.fromJSON cfg.environment.etc."kaiba-provisioning/target-policy.json".text;
-  developmentAccessKey = lib.removeSuffix "\n" (
-    builtins.readFile ../provisioning/keys/codex-rpi5-development-2026-09-05.pub
-  );
+  developmentAccessKey = provisioningAssets.development.sshAuthorizedKey;
   allAssertionsPass = builtins.all (entry: entry.assertion) cfg.assertions;
 in
 assert lib.assertMsg allAssertionsPass

@@ -97,6 +97,7 @@ jobs:
             .#checks.x86_64-linux.ubuntu-provisioning-authority-deployment \
             .#checks.x86_64-linux.ubuntu-signing-gate-deployment \
             .#checks.x86_64-linux.unit \
+            ./provisioning#checks.x86_64-linux.asset-api \
             ./provisioning#checks.x86_64-linux.development-yubikey-signing \
             ./provisioning#checks.x86_64-linux.device-profile-schema \
             ./provisioning#checks.x86_64-linux.media-staging-fixture \
@@ -196,6 +197,7 @@ jobs:
             ./nix/dns#packages.aarch64-linux.kaiba-agent \
             ./nix/dns#packages.aarch64-linux.kaiba-controller \
             ./nix/dns#packages.aarch64-linux.kaiba-publisher \
+            ./provisioning#checks.aarch64-linux.asset-api \
             ./provisioning#checks.aarch64-linux.development-yubikey-signing \
             ./provisioning#checks.aarch64-linux.device-profile-schema \
             ./provisioning#checks.aarch64-linux.media-staging-fixture \
@@ -468,9 +470,6 @@ jobs:
           cp --recursive --no-dereference site/. pages-site/
           cp --recursive --no-dereference ci-report/. pages-site/reports/latest/
           cp --recursive --no-dereference station-pages/. pages-site/provisioning-demo/
-          for asset in index.html styles.css transport.js app.js; do
-            cmp "provisioning/internal/provisioning/stationui/web/$asset" "pages-site/provisioning-demo/$asset"
-          done
           nix develop ./nix/dns --command python3 tests/site/validate.py pages-site
 
       - name: Upload the project site for GitHub Pages

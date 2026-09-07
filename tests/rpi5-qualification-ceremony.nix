@@ -1,4 +1,8 @@
-{ lib, pkgs }:
+{
+  hardwareQualificationSchema,
+  lib,
+  pkgs,
+}:
 
 let
   fakeProvision = pkgs.writeShellApplication {
@@ -212,7 +216,7 @@ let
       printf 'export PROFILE=%q\n' \
         "$KAIBA_CEREMONY_TEST_ROOT/profile.json"
       printf 'export QUALIFICATION_SCHEMA=%q\n' \
-        '${../provisioning/schemas/rpi5-hardware-qualification-v1alpha1.schema.json}'
+        '${hardwareQualificationSchema}'
       printf 'export PRIVATE=%q\n' \
         "$KAIBA_CEREMONY_TEST_ROOT/private"
     '';
@@ -350,7 +354,7 @@ pkgs.runCommand "kaiba-rpi5-qualification-ceremony-contract"
     done < <(find "$success_session" -type f)
     test "$(stat --format=%a "$case_root/private/hardware-qualification.json")" = 600
     check-jsonschema \
-      --schemafile ${../provisioning/schemas/rpi5-hardware-qualification-v1alpha1.schema.json} \
+      --schemafile ${hardwareQualificationSchema} \
       "$case_root/private/hardware-qualification.json"
     jq -e '.status == "passed" and .quarantine_required == false' \
       "$case_root/private/hardware-qualification.json" > /dev/null

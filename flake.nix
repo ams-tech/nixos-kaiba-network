@@ -56,12 +56,9 @@
           dns = lib.genAttrs systems (system: builtins.attrNames dns.checks.${system});
         }
       );
-      rpi5DevelopmentPosture = builtins.fromJSON (
-        builtins.readFile ./provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
-      );
-      rpi5DevelopmentSSHAuthorizedKey = lib.removeSuffix "\n" (
-        builtins.readFile ./provisioning/keys/codex-rpi5-development-2026-09-05.pub
-      );
+      provisioningAssets = provisioning.lib.assets;
+      rpi5DevelopmentPosture = provisioningAssets.development.posture;
+      rpi5DevelopmentSSHAuthorizedKey = provisioningAssets.development.sshAuthorizedKey;
 
       sourceRevision =
         if self ? rev then
@@ -93,35 +90,9 @@
         else
           throw "mkRpi5SecureBootTarget requires a clean Git source or an explicit canonical sourceRevision";
 
-      v016PublicSignedInputs = {
-        bootSignedOutput = builtins.path {
-          name = "boot-signed";
-          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/boot-signed;
-        };
-        eepromSignedOutput = builtins.path {
-          name = "eeprom-signed";
-          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/eeprom-signed;
-        };
-        ownedRecoverySignedOutput = builtins.path {
-          name = "owned-recovery-signed";
-          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/owned-recovery-signed;
-        };
-        signingGrantRegistry = builtins.path {
-          name = "signing-grants.json";
-          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-grants.json;
-        };
-        signingReceiptExport = builtins.path {
-          name = "signing-receipts.json";
-          path = ./provisioning/releases/rpi5-v0.1.6/signed-inputs/signing-receipts.json;
-        };
-      };
-      v016PublicSignedInputSource = builtins.path {
-        name = "kaiba-rpi5-v016-public-signed-input-source";
-        path = ./provisioning/releases/rpi5-v0.1.6;
-      };
-      v016OperationalPayloadManifest = builtins.fromJSON (
-        builtins.readFile ./provisioning/releases/rpi5-v0.1.6/operational-payload-manifest.json
-      );
+      v016PublicSignedInputs = provisioningAssets.releases.rpi5V016.signedInputs;
+      v016PublicSignedInputSource = provisioningAssets.releases.rpi5V016.source;
+      v016OperationalPayloadManifest = provisioningAssets.releases.rpi5V016.operationalPayloadManifest;
 
       # Keep this list deliberately small and literal.  The target module
       # filters the kernel DTBs to the single supported Pi 5 Model B base file.
@@ -1015,13 +986,15 @@
                 noncanonicalPayloadSourceRevisionRejected
                 pkgs
                 ;
+              manualLaneQualificationSchema = provisioningAssets.schemas.manualLaneQualificationV1Alpha1;
               sourceRevision = fixtureSourceRevision;
             };
           rpi5-qualification-ceremony = import ./tests/rpi5-qualification-ceremony.nix {
             inherit lib pkgs;
+            hardwareQualificationSchema = provisioningAssets.schemas.hardwareQualificationV1Alpha1;
           };
           rpi5-prototype-release-eval = import ./tests/rpi5-prototype-release-eval.nix {
-            inherit lib pkgs;
+            inherit lib pkgs provisioningAssets;
             prototype = rpi5PrototypeRelease;
             signingProfile = developmentSigning;
           };
@@ -1146,7 +1119,7 @@
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
           rpi5-secure-boot-target-eval = import ./tests/rpi5-secure-boot-target-eval.nix {
-            inherit lib pkgs;
+            inherit lib pkgs provisioningAssets;
             target = mkRpi5SecureBootTarget {
               # Evaluation fixture only.  Deployments must supply the reviewed
               # customer-key hash produced by the pinned Raspberry Pi tooling.

@@ -63,6 +63,7 @@ let
         authorityBridgePackage = provisioning.packages.aarch64-linux.kaiba-provision-authority-bridge;
         laneOperatorPackage = provisioning.packages.aarch64-linux.kaiba-provision-lane-operator;
         laneWorkflowPackage = provisioning.packages.aarch64-linux.kaiba-provision-lane-workflow;
+        manualLaneQualificationSchema = provisioning.lib.assets.schemas.manualLaneQualificationV1Alpha1;
       })
     ];
   };

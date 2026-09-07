@@ -4,15 +4,14 @@
   lib,
   metadata,
   pkgs,
+  provisioningAssets,
   releaseIntent,
   signingPlan,
   unsignedArtifacts,
 }:
 
 let
-  developmentPosture = builtins.fromJSON (
-    builtins.readFile ../provisioning/policies/raspberry-pi-5-development-posture-v1alpha1.json
-  );
+  developmentPosture = provisioningAssets.development.posture;
   signingContract = developmentSigning.signing.kaibaSigning;
   planContract = signingPlan.kaibaBootSigningPlan;
   eepromPlanContract = eepromSigningPlan.kaibaRpi5EEPROMSigningPlan;
@@ -200,21 +199,21 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
     cmp "$TMPDIR/expected-eeprom-plan-files" "$TMPDIR/actual-eeprom-plan-files"
 
     check-jsonschema \
-      --schemafile ${../provisioning/schemas/unsigned-artifact-set-v1alpha1.schema.json} \
+      --schemafile ${provisioningAssets.schemas.unsignedArtifactSetV1Alpha1} \
       "$unsigned/manifest.json"
     check-jsonschema \
-      --schemafile ${../provisioning/schemas/rpi5-boot-signing-plan-v1alpha2.schema.json} \
+      --schemafile ${provisioningAssets.schemas.bootSigningPlanV1Alpha2} \
       "$plan/plan.json"
     check-jsonschema \
-      --schemafile ${../provisioning/schemas/rpi5-release-intent-v1alpha1.schema.json} \
+      --schemafile ${provisioningAssets.schemas.releaseIntentV1Alpha1} \
       "$release_intent/release-intent.json"
     check-jsonschema \
-      --schemafile ${../provisioning/schemas/rpi5-eeprom-signing-plan-v1alpha1.schema.json} \
+      --schemafile ${provisioningAssets.schemas.eepromSigningPlanV1Alpha1} \
       "$eeprom_plan/plan.json"
     cmp "$release_intent/release-intent.json" "$plan/release-intent.json"
     cmp "$release_intent/release-intent.json" "$eeprom_plan/release-intent.json"
     cmp "$reviewed_key" "$eeprom_plan/public.pem"
-    cmp ${../provisioning/config/rpi5-prototype-eeprom/boot.conf} "$eeprom_plan/boot.conf"
+    cmp ${provisioningAssets.configuration.prototypeEEPROMBoot} "$eeprom_plan/boot.conf"
 
     jq -e \
       --arg source_revision '${metadata.sourceRevision}' \
