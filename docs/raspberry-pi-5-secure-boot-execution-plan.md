@@ -1374,6 +1374,11 @@ combined control-to-hardware tests required by Workstream 5.
 
 ## Production follow-on
 
+The proposed no-TPM storage, delegated-release, and online-gating direction is
+tracked in the
+[Raspberry Pi 5 production security follow-on](raspberry-pi-5-production-security-follow-on.md).
+That proposal does not reduce the fail-closed requirements below.
+
 The sacrificial milestone does not reduce these production requirements:
 
 - independently monotonic anti-rollback enforced before protected material or
