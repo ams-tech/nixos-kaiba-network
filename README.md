@@ -185,6 +185,23 @@ qualification path. See the
 The signed sacrificial-target image exposes the separately documented
 [development USB SSH and software RPIBOOT interface](docs/raspberry-pi-5-development-target-access.md).
 
+The same workflow exposes one no-input manual dispatch solely to recover the
+existing immutable `v0.1.15` draft after its original workflow could not read a
+draft asset. The recovery must be dispatched from the canonical repository's
+`main` branch. It revalidates the fixed tag object, source revision, image
+binding, draft and asset identities, successful source and workflow CI runs,
+and remote asset digests before it uploads the checksum and makes that exact
+draft public. It cannot select a different tag, create or move a tag, create a
+release, rebuild or sign an image, or publish a provisioning-station image.
+Publishing the draft remains an explicit release action for a repository
+operator with Actions write access:
+
+```console
+gh workflow run release.yml \
+  --repo ams-tech/nixos-kaiba-network \
+  --ref main
+```
+
 ### Nix binary cache
 
 The Nix-building jobs use the public `nixos-kaiba-network` Cachix cache. Pull

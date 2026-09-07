@@ -11,12 +11,13 @@ GUARD_COMMAND = (
     'run: bash scripts/ci/verify_release_tag.sh "$RELEASE_TAG" '
     '"$SOURCE_REVISION" origin/main'
 )
-REMOTE_GUARD_COMMAND = "bash scripts/ci/verify_remote_release_tag.sh"
+REMOTE_GUARD_COMMAND = 'bash "$script_directory/verify_remote_release_tag.sh"'
 REMOTE_GUARD_ARGUMENTS = (
-    '"$GH_REPO" "$RELEASE_TAG" "$SOURCE_REVISION" \\\n'
-    '              "$EXPECTED_TAG_OBJECT_SHA"'
+    '"$gh_repo" "$release_tag" "$source_revision" \\\n'
+    '    "$expected_tag_object_sha"'
 )
 BINDING_COMMAND = "bash scripts/ci/read_release_image_binding.sh"
+PUBLISHER_COMMAND = "run: bash scripts/ci/publish_verified_release.sh release-assets"
 REMOTE_TAG_REF_ENDPOINT = '"repos/$gh_repo/git/ref/tags/$release_tag"'
 REMOTE_TAG_OBJECT_ENDPOINT = '"repos/$gh_repo/git/tags/$tag_object_sha"'
 REMOTE_TAG_REF_QUERY = "--jq '[.ref, .object.type, .object.sha] | @tsv'"
@@ -31,18 +32,42 @@ DIRECT_IMAGE_NAME = (
     'image_name="kaiba-rpi5-development-secure-boot-target-'
     '${RELEASE_TAG}.img.zst"'
 )
+PUBLISHER_IMAGE_NAME = (
+    'image_name="kaiba-rpi5-development-secure-boot-target-'
+    '${release_tag}.img.zst"'
+)
 EXPECTED_JOBS = (
     "validate-release",
     "fetch-draft-image",
     "build-image",
     "publish-release",
 )
+RECOVERY_CONSTANTS = {
+    "RECOVERY_REPOSITORY": "ams-tech/nixos-kaiba-network",
+    "RECOVERY_RELEASE_TAG": "v0.1.15",
+    "RECOVERY_SOURCE_REVISION": "206b204d2ddfdce2e1bb2843df5cd5c7c10d6622",
+    "RECOVERY_TAG_OBJECT_SHA": "7d002d93ef952191e817eebc40819a03198727ef",
+    "RECOVERY_ARCHIVE_SHA256": (
+        "cf9bc81a63cb0eb48ddfec2a1056ca0e6991ed34dc3c533a9e6ce66629d95aea"
+    ),
+    "RECOVERY_MEDIA_SHA256": (
+        "cfc2706ad7d88325b179a27183f23495096dc0e20075a3887f63f2e95fca9ef3"
+    ),
+    "RECOVERY_ARCHIVE_SIZE_BYTES": '"1199718377"',
+    "RECOVERY_RELEASE_ID": '"383678534"',
+    "RECOVERY_IMAGE_ASSET_ID": '"547534361"',
+}
+RECOVERY_CONCURRENCY = (
+    "group: release-${{ github.event_name == 'workflow_dispatch' && "
+    "'refs/tags/v0.1.15' || github.ref }}"
+)
 UNVERIFIED_ARTIFACT = (
     "kaiba-rpi5-development-secure-boot-target-unverified-"
-    "${{ github.sha }}"
+    "${{ needs.validate-release.outputs.source_revision }}"
 )
 VERIFIED_ARTIFACT = (
-    "kaiba-rpi5-development-secure-boot-target-${{ github.sha }}"
+    "kaiba-rpi5-development-secure-boot-target-"
+    "${{ needs.validate-release.outputs.source_revision }}"
 )
 
 
@@ -156,21 +181,36 @@ def require_one_artifact_step(
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 4:
         fail(
             "usage: release_workflow_policy.py RELEASE_WORKFLOW "
-            "REMOTE_TAG_GUARD"
+            "REMOTE_TAG_GUARD PUBLISHER"
         )
 
     workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
     remote_guard = Path(sys.argv[2]).read_text(encoding="utf-8")
+    publisher = Path(sys.argv[3]).read_text(encoding="utf-8")
     jobs = release_jobs(workflow)
     validate_job = jobs["validate-release"][0]
     fetch_job = jobs["fetch-draft-image"][0]
     build_job = jobs["build-image"][0]
-    publish_job, publish_offset = jobs["publish-release"]
+    publish_job = jobs["publish-release"][0]
 
     jobs_marker = workflow.index("jobs:\n")
+    workflow_header = workflow[:jobs_marker]
+    require_once(workflow_header, "  workflow_dispatch:\n")
+    if "inputs:" in workflow_header:
+        fail("the fixed v0.1.15 recovery dispatch must not accept inputs")
+    require_once(workflow_header, RECOVERY_CONCURRENCY)
+    for name, value in RECOVERY_CONSTANTS.items():
+        require_once(workflow_header, f"  {name}: {value}")
+    for forbidden_input in ("inputs.", "github.event.inputs", "github.event.client_payload"):
+        if forbidden_input in workflow:
+            fail(
+                "the recovery release identity must not come from user-controlled "
+                f"workflow data ({forbidden_input!r})"
+            )
+
     if permissions(workflow[:jobs_marker], 0) != {"contents": "read"}:
         fail("the workflow-wide default permission must be contents: read")
     expected_permissions = {
@@ -189,6 +229,35 @@ def main() -> None:
     if workflow.count("contents: write") != 2:
         fail("only draft fetching and publication may receive contents: write")
 
+    for recovery_guard in (
+        'if [[ "$EVENT_NAME" == workflow_dispatch ]]; then',
+        '"$GH_REPO" != "$RECOVERY_REPOSITORY"',
+        '"$EVENT_REF" != refs/heads/main',
+        '"$EVENT_REVISION" != "$WORKFLOW_REVISION"',
+        'release_tag="$RECOVERY_RELEASE_TAG"',
+        '"$source_revision" != "$RECOVERY_SOURCE_REVISION"',
+        '"$archive_sha256" != "$RECOVERY_ARCHIVE_SHA256"',
+        '"$media_sha256" != "$RECOVERY_MEDIA_SHA256"',
+        '"$archive_size_bytes" != "$RECOVERY_ARCHIVE_SIZE_BYTES"',
+        '"$tag_object_sha" != "$RECOVERY_TAG_OBJECT_SHA"',
+    ):
+        if recovery_guard not in validate_job:
+            fail(f"release validation is missing recovery guard {recovery_guard!r}")
+    require_once(validate_job, 'echo "release_tag=$release_tag"')
+    require_once(validate_job, 'echo "source_revision=$source_revision"')
+    require_once(
+        validate_job,
+        "release_tag: ${{ steps.release-context.outputs.release_tag }}",
+    )
+    require_once(
+        validate_job,
+        "source_revision: ${{ steps.release-context.outputs.source_revision }}",
+    )
+    if workflow.count("${{ github.sha }}") != 1:
+        fail("only validation may consume the raw event revision")
+    if workflow.count("${{ github.ref_name }}") != 1:
+        fail("only validation may consume the raw event tag name")
+
     if re.search(r"(?m)^    needs:", validate_job):
         fail("release validation must be the first job in the release DAG")
     require_needs(fetch_job, ("validate-release",))
@@ -203,12 +272,14 @@ def main() -> None:
     if "actions/checkout@" in fetch_job or "actions/checkout@" in build_job:
         fail("the draft fetch and archive verification jobs must not check out code")
     full_checkout = require_once(validate_job, "fetch-depth: 0")
+    release_context = require_once(validate_job, "id: release-context")
     main_lineage = require_once(validate_job, MAIN_LINEAGE_CHECK)
     guard = require_once(validate_job, GUARD_COMMAND)
     binding = require_once(validate_job, BINDING_COMMAND)
     if not (
         validate_checkout
         < full_checkout
+        < release_context
         < main_lineage
         < guard
         < binding
@@ -219,6 +290,7 @@ def main() -> None:
         )
     if workflow.count("persist-credentials: false") != 2:
         fail("both checkouts must disable persisted GitHub credentials")
+    require_once(publish_job, "ref: ${{ github.workflow_sha }}")
 
     fetch_uses = re.findall(r"(?m)^        uses:\s*([^\s#]+)", fetch_job)
     if len(fetch_uses) != 1 or not fetch_uses[0].startswith(
@@ -313,6 +385,20 @@ def main() -> None:
         "EXPECTED_TAG_OBJECT_SHA: ${{ needs.validate-release.outputs.tag_object_sha }}",
     ):
         require_once(publish_job, publish_binding)
+    for job_name, job in (
+        ("fetch-draft-image", fetch_job),
+        ("build-image", build_job),
+        ("publish-release", publish_job),
+    ):
+        require_once(
+            job,
+            "RELEASE_TAG: ${{ needs.validate-release.outputs.release_tag }}",
+        )
+    require_once(
+        publish_job,
+        "SOURCE_REVISION: ${{ needs.validate-release.outputs.source_revision }}",
+    )
+    require_once(publish_job, "WORKFLOW_REVISION: ${{ github.workflow_sha }}")
     for obsolete_binding in (
         "c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a",
         "9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5",
@@ -321,32 +407,34 @@ def main() -> None:
         if obsolete_binding in workflow:
             fail("the release workflow retains a v0.1.14 artifact binding")
     image_names = list(re.finditer(re.escape(DIRECT_IMAGE_NAME), workflow))
-    if len(image_names) != 3:
+    if len(image_names) != 2:
         fail(
-            "the exact signed target release filename must appear in fetch, "
-            "verification, and publication "
+            "the exact signed target release filename must appear in fetch "
+            "and verification "
             f"jobs, found {len(image_names)}"
         )
+    require_once(publisher, PUBLISHER_IMAGE_NAME)
     build_image_name = require_once(build_job, DIRECT_IMAGE_NAME)
-    publish_image_name = require_once(publish_job, DIRECT_IMAGE_NAME)
+    publisher_call = require_once(publish_job, PUBLISHER_COMMAND)
     publish_archive_hash = require_once(
-        publish_job, 'actual_sha256="$(sha256sum "$image"'
+        publisher, 'actual_archive_sha256="$(sha256sum -- "$image"'
     )
     publish_archive_check = require_once(
-        publish_job, '"$actual_sha256" != "$EXPECTED_ARCHIVE_SHA256"'
+        publisher, '"$actual_archive_sha256" != "$expected_archive_sha256"'
     )
     publish_size = require_once(
-        publish_job, 'image_size="$(stat --format=%s "$image")"'
+        publisher, 'actual_archive_size_bytes="$(stat --format=%s -- "$image")"'
     )
     publish_size_check = require_once(
-        publish_job, '"$image_size" != "$EXPECTED_ARCHIVE_SIZE_BYTES"'
+        publisher,
+        '"$actual_archive_size_bytes" != "$expected_archive_size_bytes"',
     )
     publish_checksum_binding = require_once(
-        publish_job,
-        'expected_checksum_line="$EXPECTED_ARCHIVE_SHA256  $image_name"',
+        publisher,
+        'expected_checksum_line="$expected_archive_sha256  $image_name"',
     )
     publish_checksum_check = require_once(
-        publish_job, 'sha256sum --check --strict "$image_name.sha256"'
+        publisher, 'sha256sum --check --strict -- "$checksum_name"'
     )
     if not (
         build_download
@@ -361,18 +449,18 @@ def main() -> None:
     if not (
         publish_checkout
         < publish_download
-        < publish_image_name
-        < publish_archive_hash
+        < publisher_call
+    ):
+        fail("the workflow-SHA publisher must run after the verified handoff")
+    if not (
+        publish_archive_hash
         < publish_archive_check
         < publish_size
         < publish_size_check
         < publish_checksum_binding
         < publish_checksum_check
     ):
-        fail(
-            "the publish job must bind the downloaded archive and checksum "
-            "before publication"
-        )
+        fail("the publisher must bind the downloaded archive and checksum first")
     if ".#packages.aarch64-linux.rpi5-v016-signed-target-sd-image" in workflow:
         fail("the self-hosted target archive cannot be built before its release exists")
     if ".#packages.aarch64-linux.rpi5-provisioning-sd-image" in workflow:
@@ -380,10 +468,10 @@ def main() -> None:
     if ".#packages.aarch64-linux.rpi5-development-secure-boot-station-sd-image" in workflow:
         fail("the signed target release workflow still builds a provisioning-station image")
 
-    remote_guard_call = require_once(workflow, REMOTE_GUARD_COMMAND)
-    require_once(workflow, REMOTE_GUARD_ARGUMENTS)
-    if not publish_offset + publish_checkout < remote_guard_call:
-        fail("the publish job must check out the remote tag guard before invoking it")
+    remote_guard_call = require_once(publisher, REMOTE_GUARD_COMMAND)
+    require_once(publisher, REMOTE_GUARD_ARGUMENTS)
+    if not remote_guard_call < publisher.find("\nverify_remote_tag\n"):
+        fail("the publisher must define its checked-out remote tag guard first")
 
     require_once(remote_guard, REMOTE_TAG_REF_ENDPOINT)
     require_once(remote_guard, REMOTE_TAG_OBJECT_ENDPOINT)
@@ -403,27 +491,107 @@ def main() -> None:
         fail("the commits/tags endpoint does not peel annotated tags")
     remote_checks = [
         match.start()
-        for match in re.finditer(r"(?m)^          verify_remote_tag$", workflow)
+        for match in re.finditer(r"(?m)^verify_remote_tag$", publisher)
     ]
-    if len(remote_checks) != 2:
-        fail(f"expected two publish-time remote tag checks, found {len(remote_checks)}")
+    if len(remote_checks) != 3:
+        fail(
+            "expected pre-mutation, pre-publication, and post-publication "
+            f"remote tag checks, found {len(remote_checks)}"
+        )
 
-    release_create = require_once(workflow, 'gh release create "$RELEASE_TAG"')
-    release_upload = require_once(workflow, 'gh release upload "$RELEASE_TAG"')
-    release_publish = require_once(
-        workflow, 'gh release edit "$RELEASE_TAG" --draft=false'
+    if "gh release create" in workflow or "gh release create" in publisher:
+        fail("the release workflow must require a pre-staged draft")
+    release_upload = require_once(
+        publisher, 'gh release upload "$release_tag" "$checksum"'
     )
-    if not publish_offset + publish_checksum_check < release_create:
+    release_publish = require_once(
+        publisher, 'gh release edit "$release_tag" --draft=false'
+    )
+    if "--clobber" in publisher:
+        fail("publication must preserve the server-verified target asset identity")
+    publish_release_commands = re.findall(r"\bgh release ([a-z-]+)", publisher)
+    if publish_release_commands != ["upload", "edit"]:
+        fail(
+            "publication may only upload the verified checksum and publish "
+            f"the draft, found {publish_release_commands!r}"
+        )
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        if f"--method {method}" in publisher:
+            fail(f"publication contains an unexpected gh api {method} mutation")
+
+    source_ci = require_once(
+        publisher,
+        'require_successful_main_ci "$source_revision" "release source"',
+    )
+    workflow_ci = require_once(
+        publisher,
+        'require_successful_main_ci "$workflow_revision" "release workflow"',
+    )
+    load_calls = [
+        match.start()
+        for match in re.finditer(r"(?m)^load_release$", publisher)
+    ]
+    verify_calls = [
+        match.start()
+        for match in re.finditer(
+            r"(?m)^verify_release (true [12] 2|false 2 2)$", publisher
+        )
+    ]
+    if len(load_calls) != 3 or len(verify_calls) != 3:
+        fail("the release must be checked before upload, publication, and success")
+
+    for server_guard in (
+        'gh api "repos/$gh_repo/releases?per_page=100"',
+        '"$existing_tag" != "$release_tag"',
+        '"$is_draft" != "$expected_draft"',
+        '"$is_prerelease" != false',
+        '"$existing_title" != "$release_title"',
+        '"$existing_body" != "$release_marker"*',
+        '"$image_size_remote" != "$expected_archive_size_bytes"',
+        '"$image_state" != uploaded',
+        '"$image_digest" != "sha256:$expected_archive_sha256"',
+        '"$checksum_size_remote" != "$checksum_size_bytes"',
+        '"$checksum_state" != uploaded',
+        '"$checksum_digest" != "sha256:$checksum_sha256"',
+        '"$release_id" != "${RECOVERY_RELEASE_ID:-}"',
+        '"$image_id" != "${RECOVERY_IMAGE_ASSET_ID:-}"',
+        '"$target_commitish" != main',
+    ):
+        if server_guard not in publisher:
+            fail(f"publication is missing server-side guard {server_guard!r}")
+
+    for recovery_guard in (
+        '"$gh_repo" != "${RECOVERY_REPOSITORY:-}"',
+        '"$release_tag" != "${RECOVERY_RELEASE_TAG:-}"',
+        '"$source_revision" != "${RECOVERY_SOURCE_REVISION:-}"',
+        '"$expected_tag_object_sha" != "${RECOVERY_TAG_OBJECT_SHA:-}"',
+        '"$expected_archive_sha256" != "${RECOVERY_ARCHIVE_SHA256:-}"',
+        '"$expected_archive_size_bytes" != "${RECOVERY_ARCHIVE_SIZE_BYTES:-}"',
+    ):
+        if recovery_guard not in publisher:
+            fail(f"publisher is missing recovery guard {recovery_guard!r}")
+
+    if not publish_checksum_check < remote_checks[0]:
         fail("the immutable archive binding must be checked before any release write")
     if not (
-        remote_guard_call
-        < remote_checks[0]
-        < release_create
+        remote_checks[0]
+        < source_ci
+        < workflow_ci
+        < load_calls[0]
+        < verify_calls[0]
         < release_upload
         < remote_checks[1]
+        < load_calls[1]
+        < verify_calls[1]
         < release_publish
+        < load_calls[2]
+        < verify_calls[2]
+        < remote_checks[2]
     ):
-        fail("remote tag checks must bracket release creation and publication")
+        fail(
+            "source/workflow CI, tag, and server-asset checks and final "
+            "readback must surround the narrowly allowed release mutations"
+        )
 
     print("release workflow policy passed")
 

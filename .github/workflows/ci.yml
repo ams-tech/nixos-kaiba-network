@@ -63,30 +63,62 @@ jobs:
         run: |
           nix --accept-flake-config build --no-link -L \
             .#checks.x86_64-linux.ci-workflow \
+            .#checks.x86_64-linux.development-signing \
+            .#checks.x86_64-linux.development-yubikey-signing \
+            .#checks.x86_64-linux.device-profile-schema \
             .#checks.x86_64-linux.module-eval \
+            .#checks.x86_64-linux.provisioning-test-result \
+            .#checks.x86_64-linux.report-unit \
             .#checks.x86_64-linux.rpi5-development-mutation-station-eval \
-            .#checks.x86_64-linux.rpi5-provisioning-image-eval \
-            .#checks.x86_64-linux.rpi5-v016-signed-target-image-eval \
-            .#checks.x86_64-linux.rpi5-prototype-signed-release-eval \
-            .#checks.x86_64-linux.rpi5-v016-operational-payload-reconstruction \
-            .#checks.x86_64-linux.rpi5-root-integrity-record \
+            .#checks.x86_64-linux.rpi5-development-posture \
+            .#checks.x86_64-linux.rpi5-media-staging-fixture \
+            .#checks.x86_64-linux.rpi5-probe-bundle \
             .#checks.x86_64-linux.rpi5-production-media-staging \
+            .#checks.x86_64-linux.rpi5-provisioning-image-eval \
+            .#checks.x86_64-linux.rpi5-prototype-release-eval \
+            .#checks.x86_64-linux.rpi5-prototype-signed-release-eval \
             .#checks.x86_64-linux.rpi5-qualification-ceremony \
-            .#checks.x86_64-linux.unit \
+            .#checks.x86_64-linux.rpi5-root-integrity-record \
+            .#checks.x86_64-linux.rpi5-signed-release \
+            .#checks.x86_64-linux.rpi5-signed-release-manifest \
+            .#checks.x86_64-linux.rpi5-unfused-capsule \
+            .#checks.x86_64-linux.rpi5-unfused-verifier \
+            .#checks.x86_64-linux.rpi5-v016-operational-payload-reconstruction \
+            .#checks.x86_64-linux.rpi5-v016-public-signed-inputs \
+            .#checks.x86_64-linux.rpi5-v016-signed-target-image-eval \
+            .#checks.x86_64-linux.rpiboot-metadata-stdout \
+            .#checks.x86_64-linux.secure-boot-artifacts \
+            .#checks.x86_64-linux.signed-boot-plan \
             .#checks.x86_64-linux.signing-approval \
             .#checks.x86_64-linux.signing-ceremony \
             .#checks.x86_64-linux.signing-receipts \
             .#checks.x86_64-linux.signing-receipts-integration \
+            .#checks.x86_64-linux.station-ui \
             .#checks.x86_64-linux.ubuntu-provisioning-authority-deployment \
             .#checks.x86_64-linux.ubuntu-signing-gate-deployment \
+            .#checks.x86_64-linux.unit \
             ./nix/provisioning#checks.x86_64-linux.development-yubikey-signing \
             ./nix/provisioning#checks.x86_64-linux.device-profile-schema \
+            ./nix/provisioning#checks.x86_64-linux.media-staging-fixture \
             ./nix/provisioning#checks.x86_64-linux.module-eval \
+            ./nix/provisioning#checks.x86_64-linux.production-media-staging \
             ./nix/provisioning#checks.x86_64-linux.provisioning-test-result \
+            ./nix/provisioning#checks.x86_64-linux.rpi5-development-posture \
+            ./nix/provisioning#checks.x86_64-linux.rpi5-eeprom-release \
+            ./nix/provisioning#checks.x86_64-linux.rpi5-eeprom-signing \
             ./nix/provisioning#checks.x86_64-linux.rpi5-probe-bundle \
+            ./nix/provisioning#checks.x86_64-linux.rpi5-rpiboot-bundles \
+            ./nix/provisioning#checks.x86_64-linux.rpi5-signed-release \
             ./nix/provisioning#checks.x86_64-linux.rpiboot-metadata-stdout \
             ./nix/provisioning#checks.x86_64-linux.secure-boot-artifacts \
+            ./nix/provisioning#checks.x86_64-linux.signed-boot-plan \
+            ./nix/provisioning#checks.x86_64-linux.signed-release-manifest \
+            ./nix/provisioning#checks.x86_64-linux.signing-approval \
+            ./nix/provisioning#checks.x86_64-linux.signing-receipts \
+            ./nix/provisioning#checks.x86_64-linux.signing-receipts-integration \
             ./nix/provisioning#checks.x86_64-linux.station-ui \
+            ./nix/provisioning#checks.x86_64-linux.unfused-capsule \
+            ./nix/provisioning#checks.x86_64-linux.unit \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-audit \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-authority-bridge \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-control \
@@ -94,7 +126,8 @@ jobs:
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision \
             ./nix/provisioning#packages.x86_64-linux.kaiba-provision-station \
             ./nix/dns#checks.x86_64-linux.module-eval \
-            ./nix/dns#checks.x86_64-linux.report-unit
+            ./nix/dns#checks.x86_64-linux.report-unit \
+            ./nix/dns#checks.x86_64-linux.unit
 
   aarch64-packages:
     name: ARM64 production packages
@@ -130,16 +163,58 @@ jobs:
       - name: Build and test all production binaries
         run: |
           nix build --no-link -L \
+            .#checks.aarch64-linux.ci-workflow \
+            .#checks.aarch64-linux.development-yubikey-signing \
+            .#checks.aarch64-linux.device-profile-schema \
+            .#checks.aarch64-linux.module-eval \
+            .#checks.aarch64-linux.provisioning-test-result \
+            .#checks.aarch64-linux.rpi5-development-posture \
+            .#checks.aarch64-linux.rpi5-media-staging-fixture \
+            .#checks.aarch64-linux.rpi5-probe-bundle \
+            .#checks.aarch64-linux.rpi5-production-media-staging \
             .#checks.aarch64-linux.rpi5-secure-boot-target-eval \
+            .#checks.aarch64-linux.rpi5-signed-release \
+            .#checks.aarch64-linux.rpi5-signed-release-manifest \
+            .#checks.aarch64-linux.rpi5-unfused-capsule \
+            .#checks.aarch64-linux.rpi5-unfused-verifier \
+            .#checks.aarch64-linux.rpi5-v016-public-signed-inputs \
+            .#checks.aarch64-linux.rpiboot-metadata-stdout \
+            .#checks.aarch64-linux.secure-boot-artifacts \
+            .#checks.aarch64-linux.signed-boot-plan \
+            .#checks.aarch64-linux.signing-approval \
+            .#checks.aarch64-linux.signing-receipts \
+            .#checks.aarch64-linux.signing-receipts-integration \
+            .#checks.aarch64-linux.station-ui \
+            .#checks.aarch64-linux.ubuntu-provisioning-authority-deployment \
+            .#checks.aarch64-linux.ubuntu-signing-gate-deployment \
+            .#checks.aarch64-linux.unit \
+            ./nix/dns#checks.aarch64-linux.module-eval \
             ./nix/dns#checks.aarch64-linux.unit \
             ./nix/dns#packages.aarch64-linux.kaiba-agent \
             ./nix/dns#packages.aarch64-linux.kaiba-controller \
             ./nix/dns#packages.aarch64-linux.kaiba-publisher \
+            ./nix/provisioning#checks.aarch64-linux.development-yubikey-signing \
+            ./nix/provisioning#checks.aarch64-linux.device-profile-schema \
+            ./nix/provisioning#checks.aarch64-linux.media-staging-fixture \
+            ./nix/provisioning#checks.aarch64-linux.module-eval \
             ./nix/provisioning#checks.aarch64-linux.production-media-staging \
+            ./nix/provisioning#checks.aarch64-linux.provisioning-test-result \
+            ./nix/provisioning#checks.aarch64-linux.rpi5-development-posture \
+            ./nix/provisioning#checks.aarch64-linux.rpi5-eeprom-release \
+            ./nix/provisioning#checks.aarch64-linux.rpi5-eeprom-signing \
             ./nix/provisioning#checks.aarch64-linux.unit \
             ./nix/provisioning#checks.aarch64-linux.rpi5-probe-bundle \
+            ./nix/provisioning#checks.aarch64-linux.rpi5-rpiboot-bundles \
+            ./nix/provisioning#checks.aarch64-linux.rpi5-signed-release \
             ./nix/provisioning#checks.aarch64-linux.rpiboot-metadata-stdout \
             ./nix/provisioning#checks.aarch64-linux.secure-boot-artifacts \
+            ./nix/provisioning#checks.aarch64-linux.signed-boot-plan \
+            ./nix/provisioning#checks.aarch64-linux.signed-release-manifest \
+            ./nix/provisioning#checks.aarch64-linux.signing-approval \
+            ./nix/provisioning#checks.aarch64-linux.signing-receipts \
+            ./nix/provisioning#checks.aarch64-linux.signing-receipts-integration \
+            ./nix/provisioning#checks.aarch64-linux.station-ui \
+            ./nix/provisioning#checks.aarch64-linux.unfused-capsule \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-audit \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-authority-bridge \
             ./nix/provisioning#packages.aarch64-linux.kaiba-provision-control \
@@ -319,8 +394,15 @@ jobs:
         run: sha256sum --check manifest.sha256
 
       - name: Enforce schema, security, and functional gates
+        id: enforce_gates
         run: |
           nix build --no-link -L \
+            .#checks.x86_64-linux.dns-schema \
+            .#checks.x86_64-linux.dns-security \
+            .#checks.x86_64-linux.dns-topology \
+            ./nix/dns#checks.x86_64-linux.dns-schema \
+            ./nix/dns#checks.x86_64-linux.dns-security \
+            ./nix/dns#checks.x86_64-linux.dns-topology \
             ./nix/dns#dns-schema-gate \
             ./nix/dns#dns-security-gate \
             ./nix/dns#dns-test-gate
@@ -362,7 +444,7 @@ jobs:
 
       - name: Assemble and validate the GitHub Pages site
         id: assemble_pages
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.verify_report.outcome == 'success' && steps.collect_report.outcome == 'success' }}
+        if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.enforce_gates.outcome == 'success' && steps.verify_report.outcome == 'success' && steps.collect_report.outcome == 'success' }}
         run: |
           if [[ -e site/reports ]]; then
             echo "::error title=Reserved site path::site/reports is reserved for generated reports."
@@ -388,7 +470,7 @@ jobs:
 
       - name: Upload the project site for GitHub Pages
         id: pages_artifact
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.assemble_pages.outcome == 'success' }}
+        if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.enforce_gates.outcome == 'success' && steps.assemble_pages.outcome == 'success' }}
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: pages-site/
@@ -397,7 +479,7 @@ jobs:
   deploy-report:
     name: Publish project site
     needs: dns-integration
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.dns-integration.outputs.pages_artifact_id != '' }}
+    if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.dns-integration.outputs.pages_artifact_id != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
