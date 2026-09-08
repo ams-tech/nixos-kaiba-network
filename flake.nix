@@ -52,7 +52,6 @@
       checkCoverageManifest = builtins.toFile "kaiba-evaluated-flake-checks.json" (
         builtins.toJSON {
           root = lib.genAttrs systems (system: builtins.attrNames self.checks.${system});
-          provisioning = lib.genAttrs systems (system: builtins.attrNames provisioning.checks.${system});
           dns = lib.genAttrs systems (system: builtins.attrNames dns.checks.${system});
         }
       );
@@ -325,6 +324,7 @@
             ;
           sourceDateEpoch = self.lastModified;
           sourceRevision = defaultTargetSourceRevision;
+          provisioningSource = provisioning.outPath;
         };
 
       mkRpi5PrototypeVerifiedUnfusedCapsule =
@@ -1120,6 +1120,7 @@
         // lib.optionalAttrs (system == "aarch64-linux") {
           rpi5-secure-boot-target-eval = import ./tests/rpi5-secure-boot-target-eval.nix {
             inherit lib pkgs provisioningAssets;
+            provisioningSource = provisioning.outPath;
             target = mkRpi5SecureBootTarget {
               # Evaluation fixture only.  Deployments must supply the reviewed
               # customer-key hash produced by the pinned Raspberry Pi tooling.

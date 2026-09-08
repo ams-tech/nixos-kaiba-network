@@ -55,7 +55,7 @@ v1alpha3 wire response with the resulting v1alpha3 receipt digest. Receipt
 export and independent receipt-verification records use v1alpha2.
 
 The independent signer review in
-[`provisioning/signers/development-prototype`](../provisioning/signers/development-prototype/)
+[`signers/development-prototype`](https://github.com/PseudoDesign/kaiba-provisioning/tree/main/signers/development-prototype)
 may be reused only while the exact token, slot, key, public-key fingerprint,
 signer/cohort identity, and signer policy remain unchanged. The release
 approval is never reusable: it binds one exact release intent and source
@@ -310,7 +310,7 @@ policy, private state and runtime boundaries, and direct Nix GC roots for both
 the signing package and deployment bundle. It does
 not enable or start the gate, activate PC/SC, read a PIN, enumerate a token, or
 submit a request. See the installed deployment documentation or
-[`deploy/ubuntu-signing-gate/README.md`](../provisioning/deploy/ubuntu-signing-gate/README.md)
+[`deploy/ubuntu-signing-gate/README.md`](https://github.com/PseudoDesign/kaiba-provisioning/blob/main/deploy/ubuntu-signing-gate/README.md)
 for the exact file and permission boundary.
 
 ## 4. Have the independent reviewer author the approval

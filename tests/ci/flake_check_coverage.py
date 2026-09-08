@@ -15,7 +15,6 @@ from typing import Any
 SYSTEMS = ("x86_64-linux", "aarch64-linux")
 FLAKE_PREFIXES = {
     "root": ".",
-    "provisioning": "./provisioning",
     "dns": "./nix/dns",
 }
 
@@ -25,7 +24,7 @@ INTENTIONAL_EXCLUSIONS: dict[tuple[str, str, str], str] = {}
 
 CHECK_NAME = re.compile(r"[a-z][a-z0-9-]*")
 CHECK_TARGET = re.compile(
-    r"(?P<prefix>\.|\./provisioning|\./nix/dns)"
+    r"(?P<prefix>\.|\./nix/dns)"
     r"#checks\.(?P<system>x86_64-linux|aarch64-linux)\."
     r"(?P<name>[a-z][a-z0-9-]*)"
 )
@@ -45,8 +44,7 @@ def evaluated_checks(path: Path) -> set[tuple[str, str, str]]:
 
     if not isinstance(manifest, dict) or set(manifest) != set(FLAKE_PREFIXES):
         fail(
-            "evaluated manifest must contain exactly the root, provisioning, "
-            "and dns flakes"
+            "evaluated manifest must contain exactly the root and dns flakes"
         )
 
     expected: set[tuple[str, str, str]] = set()

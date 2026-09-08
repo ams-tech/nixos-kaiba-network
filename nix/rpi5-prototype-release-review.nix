@@ -5,6 +5,7 @@
   metadata,
   pkgs,
   provisioningAssets,
+  provisioningSource,
   releaseIntent,
   signingPlan,
   unsignedArtifacts,
@@ -253,7 +254,7 @@ pkgs.runCommand "kaiba-rpi5-prototype-release-review"
       ' "$unsigned/manifest.json" > /dev/null
 
     (
-      cd ${../provisioning}
+      cd ${provisioningSource}
       KAIBA_SIGNED_RELEASE_TEST_UNSIGNED_ARTIFACT_SET="$unsigned/manifest.json" \
         go test ./internal/provisioning/signedrelease \
           -run '^TestReviewedUnsignedArtifactSetMatchesFinalizerContract$' \

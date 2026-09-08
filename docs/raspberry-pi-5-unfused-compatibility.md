@@ -38,8 +38,8 @@ result used by both commands in this runbook:
 nix build path:.#rpi5-unfused-verifier \
   --out-link result-rpi5-unfused-verifier
 verifier_path="$(readlink -f result-rpi5-unfused-verifier)"
-reviewed_public_key="$(readlink -f \
-  provisioning/signers/development-prototype/reviewed-boot-public.pem)"
+reviewed_public_key="$(nix eval --raw \
+  github:PseudoDesign/kaiba-provisioning#lib.assets.signers.developmentPrototype.reviewedBootPublicKey)"
 ```
 
 Other deployments must instantiate `mkDevelopmentYubiKeySigning` with their

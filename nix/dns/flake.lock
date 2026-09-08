@@ -23,11 +23,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1788825359,
-        "narHash": "sha256-x9TfRIBAEmT4yQhbS14FpJCiKjcz/1ijHLYq/F/ZUok=",
+        "lastModified": 1788826388,
+        "narHash": "sha256-ZdEIp7ceB3EBBS68sKV3Yqm3MSZbLt1055f+DoYeVtA=",
         "owner": "PseudoDesign",
         "repo": "kaiba-provisioning",
-        "rev": "a28b09d03a9f76ec5f806aa971c13aed810aa006",
+        "rev": "043800811031e5a29bc7df8fc52731231a8e382f",
         "type": "github"
       },
       "original": {

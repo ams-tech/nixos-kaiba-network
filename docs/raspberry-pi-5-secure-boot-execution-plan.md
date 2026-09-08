@@ -1399,7 +1399,7 @@ path must continue to reject `enrollment_ready`.
 [Pi 5 secure-boot design]: ./raspberry-pi-5-secure-boot.md
 [live provisioning runbook]: ./raspberry-pi-5-live-provisioning.md
 [Pi 5 provisioning-probe runbook]: ./raspberry-pi-5-provisioning-probe.md
-[qualification record]: ../provisioning/tests/evidence/sacrificial-pi-5.json
+[qualification record]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/tests/evidence/sacrificial-pi-5.json
 [pinned EEPROM source tag]: https://github.com/raspberrypi/rpi-eeprom/releases/tag/v2026.05.17-2711-0138c0
 [pinned EEPROM source commit]: https://github.com/raspberrypi/rpi-eeprom/commit/05d94be4554ce44a057bfce8d0dd37d951703dab
 [pinned Pi 5 recovery payload]: https://github.com/raspberrypi/rpi-eeprom/blob/05d94be4554ce44a057bfce8d0dd37d951703dab/firmware-2712/latest/recovery.bin
@@ -1407,18 +1407,18 @@ path must continue to reject `enrollment_ready`.
 [pinned A/B signing workflow]: https://github.com/raspberrypi/usbboot/commit/42ca50932f67f4571951a11da3c3161561cb49c2
 [A/B bootsys signing feature]: https://github.com/raspberrypi/usbboot/commit/08d4060ecfd85d402d2134572fe1e11d8b1b2dc8
 [EEPROM helper compatibility commit]: https://github.com/raspberrypi/rpi-eeprom/commit/25f837ab8009a643ed85b9aad94d911baddaf0c4
-[signed-release manifest contract]: ../provisioning/internal/provisioning/bundle/release.go
-[signed-release assembler]: ../provisioning/internal/provisioning/signedrelease/verify.go
-[signed-release Nix factory]: ../provisioning/signed-release.nix
-[secure-boot bundle manifest]: ../provisioning/internal/provisioning/bundle/manifest.go
-[artifact-role vocabulary]: ../provisioning/internal/provisioning/bundle/role.go
-[release-intent contract]: ../provisioning/internal/provisioning/releaseintent/release_intent.go
-[signed-boot lineage contract]: ../provisioning/internal/provisioning/signedboot/types.go
-[EEPROM signing foundation]: ../provisioning/internal/provisioning/eepromsigning/types.go
+[signed-release manifest contract]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/bundle/release.go
+[signed-release assembler]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/signedrelease/verify.go
+[signed-release Nix factory]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/nix/signed-release.nix
+[secure-boot bundle manifest]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/bundle/manifest.go
+[artifact-role vocabulary]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/bundle/role.go
+[release-intent contract]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/releaseintent/release_intent.go
+[signed-boot lineage contract]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/signedboot/types.go
+[EEPROM signing foundation]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/eepromsigning/types.go
 [owned recovery and RPIBOOT bundles]: raspberry-pi-5-rpiboot-bundles.md
-[lane-guard plan contract]: ../provisioning/internal/provisioning/laneguard/contracts.go
-[control-plane terminal workflow]: ../provisioning/internal/provisioning/controlplane/workflow.go
-[physical Pi 5 adapter]: ../provisioning/internal/provisioning/physicalrpi5/adapter.go
-[live-station entry point]: ../provisioning/cmd/kaiba-provision-station/main.go
-[Pi 5 device profile]: ../provisioning/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json
-[hardware-evidence handling rules]: ../provisioning/tests/evidence/README.md
+[lane-guard plan contract]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/laneguard/contracts.go
+[control-plane terminal workflow]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/controlplane/workflow.go
+[physical Pi 5 adapter]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/internal/provisioning/physicalrpi5/adapter.go
+[live-station entry point]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/cmd/kaiba-provision-station/main.go
+[Pi 5 device profile]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/profiles/device-classes/raspberry-pi-5-model-b-v1alpha1.json
+[hardware-evidence handling rules]: https://github.com/PseudoDesign/kaiba-provisioning/blob/main/tests/evidence/README.md

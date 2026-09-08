@@ -2,6 +2,7 @@
   lib,
   pkgs,
   provisioningAssets,
+  provisioningSource,
   target,
 }:
 
@@ -218,7 +219,7 @@ pkgs.runCommand "kaiba-rpi5-secure-boot-target-evaluation"
     readonly dbus_unit="$(readlink -f ${target.system}/etc/systemd/system/dbus.service)"
 
     (
-      cd ${../provisioning}
+      cd ${provisioningSource}
       KAIBA_SIGNED_RELEASE_TEST_UNSIGNED_ARTIFACT_SET=${target.unsignedArtifacts}/manifest.json \
         go test ./internal/provisioning/signedrelease \
           -run '^TestReviewedUnsignedArtifactSetMatchesFinalizerContract$' \

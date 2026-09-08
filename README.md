@@ -53,25 +53,24 @@ The DNS integration report and interactive driver are `x86_64-linux` outputs.
 The provisioning and DNS functionality can also be evaluated independently:
 
 ```console
-nix flake check ./provisioning -L
-nix build ./provisioning#kaiba-provision -L
+nix flake check github:PseudoDesign/kaiba-provisioning -L
+nix build github:PseudoDesign/kaiba-provisioning#kaiba-provision -L
 
 nix flake check ./nix/dns -L
 nix build ./nix/dns#dns-test-report -L
 nix run ./nix/dns#dns-test-driver
 ```
 
-The Go implementation follows the same boundary. `dns` and `provisioning`
-are independent modules, coordinated for local development by the root
-`go.work` file:
+The Go implementation follows the same boundary. The DNS module remains in
+this repository, while provisioning is developed and tested in its own
+repository:
 
 ```console
 go test ./dns/...
-go test ./provisioning/...
 ```
 
-See the [DNS module guide](dns/README.md) and
-[provisioning module guide](provisioning/README.md) for their commands,
+See the [DNS module guide](dns/README.md) and the
+[provisioning repository](https://github.com/PseudoDesign/kaiba-provisioning) for their commands,
 packages, dependencies, and corresponding Nix flakes. Neither Go module
 depends on the other; cross-domain report and site composition remains at the
 repository integration layer.
@@ -120,9 +119,10 @@ remains blocked. See the
 
 ## Flake layout and consumption
 
-The repository has two independently consumable leaf flakes:
+The project composes two independently consumable flakes:
 
-- `provisioning` owns the Raspberry Pi probe, provisioning-station demo,
+- [`PseudoDesign/kaiba-provisioning`](https://github.com/PseudoDesign/kaiba-provisioning)
+  owns the Raspberry Pi probe, provisioning-station demo,
   device profile, provisioning result, and their NixOS modules and checks.
 - `nix/dns` owns the device agent, controller, publisher, authoritative DNS
   roles, VM topology, validation report, and their NixOS modules and checks.
@@ -132,13 +132,13 @@ an explicit one-way input on the provisioning leaf. The root `flake.nix`
 composes both leaves and preserves the original package, check, app, module,
 development-shell, and formatter attribute paths.
 
-The same-repository nested input graph requires Nix 2.30 or newer. Each leaf
-carries its own lock file for direct use, while the root lock makes both leaves follow
-the root `nixpkgs` pin when they are composed.
+The nested DNS flake requires Nix 2.30 or newer. Each repository carries its
+own lock file for direct use, while the root lock makes both composed flakes
+follow the root `nixpkgs` pin.
 
-New consumers that need only one boundary can address its repository
-subdirectory directly. A consumer that uses both can share its `nixpkgs` and
-provisioning inputs as follows:
+New consumers that need only one boundary can address that flake directly. A
+consumer that uses both can share its `nixpkgs` and provisioning inputs as
+follows:
 
 ```nix
 {
@@ -146,7 +146,7 @@ provisioning inputs as follows:
     nixpkgs.url = "github:NixOS/nixpkgs";
 
     kaiba-provisioning = {
-      url = "github:ams-tech/nixos-kaiba-network?dir=provisioning";
+      url = "github:PseudoDesign/kaiba-provisioning";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -167,7 +167,7 @@ Consumers that want the complete compatibility surface can continue to use
 The GitHub Actions workflow in `.github/workflows/ci.yml` runs on pull requests,
 pushes to `main`, and manual dispatches. It separates the test workload into:
 
-- x86 formatting, flake evaluation, Go tests, report and Pages site tests,
+- x86 formatting, flake evaluation, DNS Go tests, report and Pages site tests,
   workflow linting, and NixOS module evaluation;
 - native ARM64 builds and tests for all five packaged binaries and a
   commit-bound provisioning result;
@@ -175,6 +175,9 @@ pushes to `main`, and manual dispatches. It separates the test workload into:
 - the complete seven-VM DNS topology with KVM acceleration when available,
   followed by deterministic composition of both architectures' provisioning
   results.
+
+The standalone provisioning repository has its own x86_64 and native ARM64 CI
+for its formatting, Go tests, modules, checks, and operator-facing packages.
 
 A proposed [self-hosted Forgejo and Hydra CI design](docs/self-hosted-git-ci.md)
 maps these jobs and the existing release boundaries onto Forgejo, Hydra,

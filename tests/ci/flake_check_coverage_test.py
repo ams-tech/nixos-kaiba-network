@@ -47,9 +47,9 @@ inline = """
 jobs:
   example:
     steps:
-      - run: nix build ./provisioning#checks.x86_64-linux.inline-check
+      - run: nix build .#checks.x86_64-linux.inline-check
 """
-inline_target = ("provisioning", "x86_64-linux", "inline-check")
+inline_target = ("root", "x86_64-linux", "inline-check")
 if policy.workflow_targets(inline) != {inline_target: 1}:
     raise SystemExit("an inline nix build target was not discovered")
 

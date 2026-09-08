@@ -247,15 +247,16 @@ On a clean review-workstation checkout of the exact frozen revision, validate
 the transferred record independently:
 
 ```console
-nix develop ./provisioning --command check-jsonschema \
-  --schemafile provisioning/schemas/rpi5-hardware-qualification-v1alpha1.schema.json \
+nix develop github:PseudoDesign/kaiba-provisioning --command check-jsonschema \
+  --schemafile "$(nix eval --raw github:PseudoDesign/kaiba-provisioning#lib.assets.schemas.hardwareQualificationV1Alpha1)" \
   /path/to/hardware-qualification.json
 ```
 
 Verify that its `source_revision` equals that frozen revision. For a reviewed
-closeout, copy only this final record to
-`provisioning/tests/evidence/sacrificial-pi-5.json` and update
-`provisioning/tests/report-input.json` as described in the runbook. After a
+closeout in the
+[standalone provisioning repository](https://github.com/PseudoDesign/kaiba-provisioning),
+copy only this final record to `tests/evidence/sacrificial-pi-5.json` and update
+`tests/report-input.json` as described in the runbook. After a
 successful transfer, reboot the station to clear all volatile evidence before
 starting another ceremony.
 

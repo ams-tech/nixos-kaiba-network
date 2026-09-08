@@ -250,10 +250,11 @@ The public construction boundaries are:
 The repository contains one checked-in, public-only deployment instance for
 the explicitly sacrificial development prototype. It records the development
 token serial, reviewed public key, customer-key hash, and signer-policy digest
-under [`provisioning/signers/development-prototype`](../provisioning/signers/development-prototype/README.md).
+under [`signers/development-prototype`](https://github.com/PseudoDesign/kaiba-provisioning/tree/main/signers/development-prototype).
 That exception contains no credential or signing authority and is not approved
 for production. A separate checked-in public-only hardware configuration under
-[`provisioning/config/hardware`](../provisioning/config/hardware/) selects the
+[`config/hardware`](https://github.com/PseudoDesign/kaiba-provisioning/tree/main/config/hardware)
+selects the
 sacrificial station's target-media path; that path is operational wiring and is
 copied only into the station-local operational preflight, not canonical plans or
 the receipt chain. Production target-media hardware configurations, signer

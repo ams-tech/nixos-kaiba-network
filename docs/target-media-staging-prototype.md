@@ -29,7 +29,7 @@ runs `fixture-dry-run`, `fixture-stage`, and `fixture-readback`, and performs th
 final GPT/FAT/dm-verity inspection. Run the closed regression directly:
 
 ```console
-nix build ./provisioning#checks.x86_64-linux.media-staging-fixture \
+nix build github:PseudoDesign/kaiba-provisioning#checks.x86_64-linux.media-staging-fixture \
   --no-link -L
 ```
 
@@ -74,8 +74,9 @@ hardware identity or a boot-trust input.
 The canonical plan and every receipt deliberately omit the boot medium's model,
 serial, WWID, physical sector size, persistent path, and initial-content digest.
 In particular, `/dev/disk/by-id` is not accepted as an identity or selector.
-The versioned, typed hardware-configuration catalog under
-`provisioning/config/hardware/` supplies one local operational selector naming
+The versioned, typed hardware-configuration catalog in
+[`config/hardware/`](https://github.com/PseudoDesign/kaiba-provisioning/tree/main/config/hardware)
+supplies one local operational selector naming
 either an immediate raw whole-device node or one
 `/dev/disk/by-path/<whole-device>` alias. There is deliberately no generic
 sacrificial-device entry. The two checked-in choices are:

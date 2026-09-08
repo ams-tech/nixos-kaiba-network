@@ -60,7 +60,7 @@ provisioning leaf:
 
 ```nix
 inputs.kaiba-provisioning = {
-  url = "github:ams-tech/nixos-kaiba-network?dir=provisioning";
+  url = "github:PseudoDesign/kaiba-provisioning";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -94,9 +94,9 @@ input may keep `inputs.kaiba.nixosModules.provisioning-station-demo` and
 From a checkout, evaluate the leaf or build either interface package directly:
 
 ```console
-nix flake check ./provisioning -L
-nix build ./provisioning#kaiba-provision-station-demo -L
-nix build ./provisioning#kaiba-provision-station-pages -L
+nix flake check github:PseudoDesign/kaiba-provisioning -L
+nix build github:PseudoDesign/kaiba-provisioning#kaiba-provision-station-demo -L
+nix build github:PseudoDesign/kaiba-provisioning#kaiba-provision-station-pages -L
 ```
 
 `listenAddress` accepts only `127.0.0.1` or `::1`. The service has no

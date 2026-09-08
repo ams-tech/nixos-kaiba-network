@@ -4,6 +4,7 @@
   mkRpi5SecureBootTarget,
   pkgs,
   provisioning,
+  provisioningSource,
   sourceDateEpoch,
   sourceRevision,
   system,
@@ -103,6 +104,7 @@ let
       releaseIntent
       signingPlan
       unsignedArtifacts
+      provisioningSource
       ;
     inherit provisioningAssets;
   };
