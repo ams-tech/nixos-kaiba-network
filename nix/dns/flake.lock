@@ -16,30 +16,9 @@
         "type": "github"
       }
     },
-    "provisioning": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1788826388,
-        "narHash": "sha256-ZdEIp7ceB3EBBS68sKV3Yqm3MSZbLt1055f+DoYeVtA=",
-        "owner": "PseudoDesign",
-        "repo": "kaiba-provisioning",
-        "rev": "043800811031e5a29bc7df8fc52731231a8e382f",
-        "type": "github"
-      },
-      "original": {
-        "owner": "PseudoDesign",
-        "repo": "kaiba-provisioning",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs",
-        "provisioning": "provisioning"
+        "nixpkgs": "nixpkgs"
       }
     }
   },

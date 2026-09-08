@@ -3,8 +3,6 @@
   lib,
   kaibaPackage,
   kaibaModules,
-  provisioningTestResult,
-  stationPages,
 }:
 
 let
@@ -32,12 +30,6 @@ let
         input="$TMPDIR/input"
         mkdir -p "$input"
         cp -R ${raw}/raw/. "$input/"
-        if test -e "$input/evidence/provisioning"; then
-          echo "raw DNS evidence uses the reserved provisioning namespace" >&2
-          exit 1
-        fi
-        chmod u+w "$input/evidence"
-        cp -R --no-dereference ${provisioningTestResult}/evidence/. "$input/evidence/"
         mkdir -p "$out"
         python3 ${../report/render.py} \
           --result "$input/result.json" \
@@ -46,8 +38,6 @@ let
           --zones "$input/zones" \
           --topology ${../topology.json} \
           --schema ${../report/result.schema.json} \
-          --provisioning ${provisioningTestResult}/report-input.json \
-          --provisioning-schema ${../report/provisioning.schema.json} \
           --output "$out"
       '';
 
@@ -76,12 +66,8 @@ let
         python3 ${../report/schema_gate.py} \
           --schema ${report}/result.schema.json \
           --instance ${report}/result.json
-        python3 ${../report/schema_gate.py} \
-          --schema ${report}/provisioning.schema.json \
-          --instance ${report}/provisioning.json
         mkdir -p "$out"
         cp ${report}/result.schema.json "$out/result.schema.json"
-        cp ${report}/provisioning.schema.json "$out/provisioning.schema.json"
       '';
 
   securityGate =
@@ -110,7 +96,6 @@ let
       ''
         set -eu
         export PYTHONDONTWRITEBYTECODE=1
-        export KAIBA_STATION_PAGES=${stationPages}
         cd ${../..}
         node --check site/site.js
         python3 -m unittest discover -s tests/report -p 'test_*.py' -v

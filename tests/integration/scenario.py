@@ -2098,7 +2098,7 @@ claims = {
         },
         {
             "id": "test-pki",
-            "statement": "Private test PKI substitutes for production device provisioning and public Web PKI.",
+            "statement": "Private test PKI substitutes for production credential issuance and public Web PKI.",
         },
     ],
     "deferred": [
@@ -2110,7 +2110,7 @@ claims = {
         {"id": "fleet-scale", "statement": "Fleet-scale load, sharding, multi-zone publication, and geographic latency are deferred."},
         {
             "id": "device-platform",
-            "statement": "Physical Raspberry Pi images, secure-boot mutation, persistent provisioning, production secrets, and monitoring are deferred; probe software verification is reported separately.",
+            "statement": "Physical device images, hardware mutation, production secrets, and monitoring are outside this DNS test.",
         },
     ],
 }

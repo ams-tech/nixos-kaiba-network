@@ -1,20 +1,10 @@
 {
   description = "Kaiba secure dynamic DNS";
 
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/70ce234312134a463ba7728e94da2486a1d237ac";
-    provisioning = {
-      url = "github:PseudoDesign/kaiba-provisioning";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/70ce234312134a463ba7728e94da2486a1d237ac";
 
   outputs =
-    {
-      self,
-      nixpkgs,
-      provisioning,
-    }:
+    { self, nixpkgs }:
     let
       lib = nixpkgs.lib;
       repositoryRoot = self.sourceInfo.outPath;
@@ -61,14 +51,11 @@
         let
           pkgs = import nixpkgs { inherit system; };
           built = packagesFor system;
-          provisioningPackages = provisioning.packages.${system};
         in
         import ../../tests/integration/packages.nix {
           inherit pkgs lib;
           kaibaPackage = built.suite;
           kaibaModules = modules;
-          provisioningTestResult = provisioningPackages.provisioning-test-result;
-          stationPages = provisioningPackages.kaiba-provision-station-pages;
         };
     in
     {
