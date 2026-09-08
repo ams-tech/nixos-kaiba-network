@@ -221,8 +221,9 @@ merely because the key is stored outside a normal file.
 The logical roles are:
 
 - **Device**: generates or contains the key and proves possession.
-- **[Provisioning station](provisioning-station.md)**: controls physical or
-  bootstrap access and runs the approved provisioning bundle.
+- **Provisioning station**: controls physical or bootstrap access and runs the
+  approved provisioning bundle. Its implementation is maintained in the
+  [separate provisioning repository](https://github.com/PseudoDesign/kaiba-provisioning).
 - **Device registration authority (device RA)**: authenticates the device and
   operator, assigns the logical ID, and applies issuance policy. This role is
   distinct from the domain-name registrar discussed in [the architecture
@@ -281,10 +282,9 @@ authorization gates, retry, audit, and activation workflow semantics;
 authoritative policy decisions and records remain with the applicable control
 services. A signed device-class profile declares the required behavior, and a
 platform adapter supplies hardware-specific capabilities and operations
-without changing those semantics. The
-[provisioning station design](provisioning-station.md) defines the execution
-environment and separates its authority from the coordinator, inventory, RA,
-CA, artifact authority, verifier, and audit service.
+without changing those semantics. The station execution environment must keep
+its authority separate from the coordinator, inventory, RA, CA, artifact
+authority, verifier, and audit service.
 
 Each device-class profile must:
 
@@ -338,9 +338,9 @@ the following stages once for every device:
    signer posture in its declared order. Durably record intent immediately
    before each irreversible operation and read back its effective state; a
    successful command return is not a sufficient postcondition. Controls that
-   must remain open until identity installation are finalized in stage 9. The
-   [Raspberry Pi 5 secure-boot guide](raspberry-pi-5-secure-boot.md) specializes
-   this stage through the enrollment-ready boundary for that device class.
+   must remain open until identity installation are finalized in stage 9.
+   Platform-specific ownership and secure-boot procedures belong to the
+   independent provisioning implementation.
 7. **Establish device-unique material.** Prefer generating or deriving each
    root and private key inside its final protection boundary. Use distinct keys
    or explicitly domain-separated derivations for bootstrap, operational

@@ -16,26 +16,9 @@
         "type": "github"
       }
     },
-    "provisioning": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "path": "../provisioning",
-        "type": "path"
-      },
-      "original": {
-        "path": "../provisioning",
-        "type": "path"
-      },
-      "parent": []
-    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs",
-        "provisioning": "provisioning"
+        "nixpkgs": "nixpkgs"
       }
     }
   },

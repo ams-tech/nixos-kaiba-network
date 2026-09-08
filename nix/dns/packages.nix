@@ -12,7 +12,7 @@ let
     pname = "kaiba-dns-pilot";
     inherit version;
 
-    # The physical Go module boundary keeps provisioning code and repository
+    # The physical Go module boundary keeps unrelated repository concerns and
     # integration fixtures out of the DNS source closure.
     src = goSource;
 

@@ -1,7 +1,6 @@
 # DNS Go module
 
-This module implements the secure-device dynamic DNS pilot. It has no Go
-dependency on the provisioning module.
+This self-contained module implements the secure-device dynamic DNS pilot.
 
 ## Commands
 

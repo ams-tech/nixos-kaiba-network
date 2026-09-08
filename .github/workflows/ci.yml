@@ -18,7 +18,7 @@ jobs:
   quality:
     name: Formatting, unit tests, and module evaluation
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,8 +30,8 @@ jobs:
         with:
           enable_kvm: false
           extra_nix_config: |
-            extra-substituters = https://nixos-raspberrypi.cachix.org https://nixos-kaiba-network.cachix.org
-            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
+            extra-substituters = https://nixos-kaiba-network.cachix.org
+            extra-trusted-public-keys = nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
           github_access_token: ${{ github.token }}
 
       - name: Publish reusable outputs to the project binary cache
@@ -46,96 +46,25 @@ jobs:
       - name: Check formatting
         run: nix --accept-flake-config fmt -- --ci
 
-      - name: Test the inert Ubuntu signing-gate deployment
-        run: tests/deployment/ubuntu_signing_gate_test.sh
-
       - name: Evaluate every flake system
         run: |
           nix --accept-flake-config flake check --all-systems --no-build -L
-          nix flake check ./nix/provisioning --all-systems --no-build -L
           nix flake check ./nix/dns --all-systems --no-build -L
-          git diff --exit-code -- \
-            flake.lock \
-            nix/provisioning/flake.lock \
-            nix/dns/flake.lock
+          git diff --exit-code -- flake.lock nix/dns/flake.lock
 
       - name: Run fast checks
         run: |
           nix --accept-flake-config build --no-link -L \
             .#checks.x86_64-linux.ci-workflow \
-            .#checks.x86_64-linux.development-signing \
-            .#checks.x86_64-linux.development-yubikey-signing \
-            .#checks.x86_64-linux.device-profile-schema \
             .#checks.x86_64-linux.module-eval \
-            .#checks.x86_64-linux.provisioning-test-result \
             .#checks.x86_64-linux.report-unit \
-            .#checks.x86_64-linux.rpi5-development-mutation-station-eval \
-            .#checks.x86_64-linux.rpi5-development-posture \
-            .#checks.x86_64-linux.rpi5-media-staging-fixture \
-            .#checks.x86_64-linux.rpi5-probe-bundle \
-            .#checks.x86_64-linux.rpi5-production-media-staging \
-            .#checks.x86_64-linux.rpi5-provisioning-image-eval \
-            .#checks.x86_64-linux.rpi5-prototype-release-eval \
-            .#checks.x86_64-linux.rpi5-prototype-signed-release-eval \
-            .#checks.x86_64-linux.rpi5-qualification-ceremony \
-            .#checks.x86_64-linux.rpi5-root-integrity-record \
-            .#checks.x86_64-linux.rpi5-signed-release \
-            .#checks.x86_64-linux.rpi5-signed-release-manifest \
-            .#checks.x86_64-linux.rpi5-unfused-capsule \
-            .#checks.x86_64-linux.rpi5-unfused-verifier \
-            .#checks.x86_64-linux.rpi5-v016-operational-payload-reconstruction \
-            .#checks.x86_64-linux.rpi5-v016-public-signed-inputs \
-            .#checks.x86_64-linux.rpi5-v016-signed-target-image-eval \
-            .#checks.x86_64-linux.rpiboot-metadata-stdout \
-            .#checks.x86_64-linux.secure-boot-artifacts \
-            .#checks.x86_64-linux.signed-boot-plan \
-            .#checks.x86_64-linux.signing-approval \
-            .#checks.x86_64-linux.signing-ceremony \
-            .#checks.x86_64-linux.signing-receipts \
-            .#checks.x86_64-linux.signing-receipts-integration \
-            .#checks.x86_64-linux.station-ui \
-            .#checks.x86_64-linux.ubuntu-provisioning-authority-deployment \
-            .#checks.x86_64-linux.ubuntu-signing-gate-deployment \
-            .#checks.x86_64-linux.unit \
-            ./nix/provisioning#checks.x86_64-linux.development-yubikey-signing \
-            ./nix/provisioning#checks.x86_64-linux.device-profile-schema \
-            ./nix/provisioning#checks.x86_64-linux.media-staging-fixture \
-            ./nix/provisioning#checks.x86_64-linux.module-eval \
-            ./nix/provisioning#checks.x86_64-linux.production-media-staging \
-            ./nix/provisioning#checks.x86_64-linux.provisioning-test-result \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-development-posture \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-eeprom-release \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-eeprom-signing \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-probe-bundle \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-rpiboot-bundles \
-            ./nix/provisioning#checks.x86_64-linux.rpi5-signed-release \
-            ./nix/provisioning#checks.x86_64-linux.rpiboot-metadata-stdout \
-            ./nix/provisioning#checks.x86_64-linux.secure-boot-artifacts \
-            ./nix/provisioning#checks.x86_64-linux.signed-boot-plan \
-            ./nix/provisioning#checks.x86_64-linux.signed-release-manifest \
-            ./nix/provisioning#checks.x86_64-linux.signing-approval \
-            ./nix/provisioning#checks.x86_64-linux.signing-receipts \
-            ./nix/provisioning#checks.x86_64-linux.signing-receipts-integration \
-            ./nix/provisioning#checks.x86_64-linux.station-ui \
-            ./nix/provisioning#checks.x86_64-linux.unfused-capsule \
-            ./nix/provisioning#checks.x86_64-linux.unit \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-audit \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-authority-bridge \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-control \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-lane-guard \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision \
-            ./nix/provisioning#packages.x86_64-linux.kaiba-provision-station \
-            ./nix/dns#checks.x86_64-linux.module-eval \
-            ./nix/dns#checks.x86_64-linux.report-unit \
-            ./nix/dns#checks.x86_64-linux.unit
+            .#checks.x86_64-linux.unit
 
   aarch64-packages:
-    name: ARM64 production packages
+    name: ARM64 DNS packages
     needs: quality
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
-    outputs:
-      provisioning_receipt_sha256: ${{ steps.provisioning_receipt.outputs.sha256 }}
+    timeout-minutes: 30
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -147,164 +76,23 @@ jobs:
         with:
           enable_kvm: false
           extra_nix_config: |
-            extra-substituters = https://nixos-raspberrypi.cachix.org https://nixos-kaiba-network.cachix.org
-            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
+            extra-substituters = https://nixos-kaiba-network.cachix.org
+            extra-trusted-public-keys = nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
           github_access_token: ${{ github.token }}
 
-      - name: Publish reusable outputs to the project binary cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
-        with:
-          name: nixos-kaiba-network
-          authToken: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.CACHIX_AUTH_TOKEN || '' }}
-          skipAddingSubstituter: true
-          skipPush: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || secrets.CACHIX_AUTH_TOKEN == '' }}
-
-      - name: Build and test all production binaries
+      - name: Build and test DNS outputs
         run: |
-          nix build --no-link -L \
+          nix --accept-flake-config build --no-link -L \
             .#checks.aarch64-linux.ci-workflow \
-            .#checks.aarch64-linux.development-yubikey-signing \
-            .#checks.aarch64-linux.device-profile-schema \
             .#checks.aarch64-linux.module-eval \
-            .#checks.aarch64-linux.provisioning-test-result \
-            .#checks.aarch64-linux.rpi5-development-posture \
-            .#checks.aarch64-linux.rpi5-media-staging-fixture \
-            .#checks.aarch64-linux.rpi5-probe-bundle \
-            .#checks.aarch64-linux.rpi5-production-media-staging \
-            .#checks.aarch64-linux.rpi5-secure-boot-target-eval \
-            .#checks.aarch64-linux.rpi5-signed-release \
-            .#checks.aarch64-linux.rpi5-signed-release-manifest \
-            .#checks.aarch64-linux.rpi5-unfused-capsule \
-            .#checks.aarch64-linux.rpi5-unfused-verifier \
-            .#checks.aarch64-linux.rpi5-v016-public-signed-inputs \
-            .#checks.aarch64-linux.rpiboot-metadata-stdout \
-            .#checks.aarch64-linux.secure-boot-artifacts \
-            .#checks.aarch64-linux.signed-boot-plan \
-            .#checks.aarch64-linux.signing-approval \
-            .#checks.aarch64-linux.signing-receipts \
-            .#checks.aarch64-linux.signing-receipts-integration \
-            .#checks.aarch64-linux.station-ui \
-            .#checks.aarch64-linux.ubuntu-provisioning-authority-deployment \
-            .#checks.aarch64-linux.ubuntu-signing-gate-deployment \
             .#checks.aarch64-linux.unit \
-            ./nix/dns#checks.aarch64-linux.module-eval \
-            ./nix/dns#checks.aarch64-linux.unit \
-            ./nix/dns#packages.aarch64-linux.kaiba-agent \
-            ./nix/dns#packages.aarch64-linux.kaiba-controller \
-            ./nix/dns#packages.aarch64-linux.kaiba-publisher \
-            ./nix/provisioning#checks.aarch64-linux.development-yubikey-signing \
-            ./nix/provisioning#checks.aarch64-linux.device-profile-schema \
-            ./nix/provisioning#checks.aarch64-linux.media-staging-fixture \
-            ./nix/provisioning#checks.aarch64-linux.module-eval \
-            ./nix/provisioning#checks.aarch64-linux.production-media-staging \
-            ./nix/provisioning#checks.aarch64-linux.provisioning-test-result \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-development-posture \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-eeprom-release \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-eeprom-signing \
-            ./nix/provisioning#checks.aarch64-linux.unit \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-probe-bundle \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-rpiboot-bundles \
-            ./nix/provisioning#checks.aarch64-linux.rpi5-signed-release \
-            ./nix/provisioning#checks.aarch64-linux.rpiboot-metadata-stdout \
-            ./nix/provisioning#checks.aarch64-linux.secure-boot-artifacts \
-            ./nix/provisioning#checks.aarch64-linux.signed-boot-plan \
-            ./nix/provisioning#checks.aarch64-linux.signed-release-manifest \
-            ./nix/provisioning#checks.aarch64-linux.signing-approval \
-            ./nix/provisioning#checks.aarch64-linux.signing-receipts \
-            ./nix/provisioning#checks.aarch64-linux.signing-receipts-integration \
-            ./nix/provisioning#checks.aarch64-linux.station-ui \
-            ./nix/provisioning#checks.aarch64-linux.unfused-capsule \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-audit \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-authority-bridge \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-control \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-lane-guard \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-demo \
-            ./nix/provisioning#packages.aarch64-linux.kaiba-provision-station-pages
-
-      - name: Verify the signed target SD image release binding
-        run: |
-          contract=.#packages.aarch64-linux.rpi5-v016-signed-target-sd-image.kaibaRpi5SignedTargetImage
-          test "$(nix eval --raw "$contract.expectedArchiveDigest")" = \
-            sha256:c82a0fad4aa859ba51cd31f35f041450b4b96d767060c9da31cdae98cd36bf8a
-          test "$(nix eval --json "$contract.expectedArchiveSizeBytes")" = 1166253581
-          test "$(nix eval --raw "$contract.expectedMediaDigest")" = \
-            sha256:9ba3e880a81d35b2fef237840f3791a81bd79c095a3b6f19c44b3f142a22d4b5
-          test "$(nix eval --raw "$contract.sourceURL")" = \
-            https://github.com/ams-tech/nixos-kaiba-network/releases/download/v0.1.14/kaiba-rpi5-development-secure-boot-target-v0.1.14.img.zst
-
-      - name: Build the native provisioning test result
-        run: nix build ./nix/provisioning#packages.aarch64-linux.provisioning-test-result --out-link provisioning-result -L
-
-      - name: Bind the provisioning result to this source revision
-        id: provisioning_receipt
-        env:
-          SOURCE_REVISION: ${{ github.sha }}
-        run: |
-          mkdir -p ci-receipt
-          nix develop ./nix/provisioning --command python3 tests/report/platform_receipt.py \
-            --input provisioning-result/platform.json \
-            --source-revision "$SOURCE_REVISION" \
-            --output ci-receipt/provisioning-aarch64.json
-          receipt_sha256="$(sha256sum ci-receipt/provisioning-aarch64.json | cut -d ' ' -f 1)"
-          if [[ ! "$receipt_sha256" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "::error title=Invalid receipt digest::The provisioning receipt digest is malformed."
-            exit 1
-          fi
-          echo "sha256=$receipt_sha256" >> "$GITHUB_OUTPUT"
-
-      - name: Upload the native provisioning result
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: kaiba-provisioning-aarch64-${{ github.sha }}
-          path: ci-receipt/provisioning-aarch64.json
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 9
-
-  provisioning-image:
-    name: Raspberry Pi 5 operator-started secure-boot station image
-    needs: quality
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          enable_kvm: false
-          extra_nix_config: |
-            extra-substituters = https://nixos-raspberrypi.cachix.org https://nixos-kaiba-network.cachix.org
-            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= nixos-kaiba-network.cachix.org-1:BCAt/P9Fo2JFexLB4T7eB3o0csSQI/Dy+hx+3RwzA8U=
-          github_access_token: ${{ github.token }}
-
-      - name: Build the operator-started secure-boot station SD image
-        run: |
-          nix --accept-flake-config build -L \
-            --out-link provisioning-image \
-            .#packages.aarch64-linux.rpi5-development-secure-boot-station-sd-image
-
-      - name: Verify the image archive
-        run: |
-          image=provisioning-image/sd-image/kaiba-rpi5-development-secure-boot-station.img.zst
-          if [[ -L "$image" || ! -f "$image" ]]; then
-            echo "::error title=Image unavailable::Expected one regular image at $image."
-            exit 1
-          fi
-          zstd --test "$image"
-          sha256sum "$image"
+            .#packages.aarch64-linux.kaiba-agent \
+            .#packages.aarch64-linux.kaiba-controller \
+            .#packages.aarch64-linux.kaiba-publisher
 
   dns-integration:
     name: Seven-VM DNS topology and canonical report
-    needs:
-      - quality
-      - aarch64-packages
+    needs: quality
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:
@@ -325,15 +113,6 @@ jobs:
             system-features = nixos-test benchmark big-parallel kvm
           github_access_token: ${{ github.token }}
 
-      - name: Publish reusable outputs to the project binary cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
-        with:
-          name: nixos-kaiba-network
-          authToken: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.CACHIX_AUTH_TOKEN || '' }}
-          skipAddingSubstituter: true
-          skipPush: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || secrets.CACHIX_AUTH_TOKEN == '' }}
-
       - name: Report virtualization mode
         run: |
           if [[ -r /dev/kvm && -w /dev/kvm ]]; then
@@ -342,95 +121,31 @@ jobs:
             echo "::warning title=KVM unavailable::The topology will use its slower QEMU TCG fallback."
           fi
 
-      - name: Build the deterministic base report
-        run: nix build ./nix/dns#dns-test-report --out-link base-result -L
-
-      - name: Download the native ARM64 provisioning result
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: kaiba-provisioning-aarch64-${{ github.sha }}
-          path: ci-input/aarch64
-
-      - name: Verify the native ARM64 provisioning result
-        env:
-          EXPECTED_SHA256: ${{ needs.aarch64-packages.outputs.provisioning_receipt_sha256 }}
-        run: |
-          mapfile -d '' receipt_entries < <(find ci-input/aarch64 -mindepth 1 -print0)
-          if (( ${#receipt_entries[@]} != 1 )); then
-            echo "::error title=Unexpected receipt contents::The ARM64 result artifact must contain exactly one entry."
-            exit 1
-          fi
-          receipt=ci-input/aarch64/provisioning-aarch64.json
-          if [[ -L "$receipt" || ! -f "$receipt" ]]; then
-            echo "::error title=Unsafe receipt::The ARM64 result must be one regular, non-symbolic-link file."
-            exit 1
-          fi
-          actual_sha256="$(sha256sum "$receipt" | cut -d ' ' -f 1)"
-          if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ || "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
-            echo "::error title=Receipt digest mismatch::The downloaded ARM64 result does not match its producing job."
-            exit 1
-          fi
-
-      - name: Compose the canonical test report
-        env:
-          SOURCE_REVISION: ${{ github.sha }}
-        run: |
-          nix develop ./nix/dns --command python3 tests/report/render.py \
-            --result base-result/result.json \
-            --events base-result/events.jsonl \
-            --evidence base-result/evidence \
-            --zones base-result/zones \
-            --topology base-result/topology.json \
-            --schema base-result/result.schema.json \
-            --provisioning base-result/provisioning.json \
-            --provisioning-schema base-result/provisioning.schema.json \
-            --provisioning-platform-result ci-input/aarch64/provisioning-aarch64.json \
-            --expected-source-revision "$SOURCE_REVISION" \
-            --output ci-report
+      - name: Build the canonical DNS test report
+        run: nix --accept-flake-config build .#dns-test-report --out-link result -L
 
       - name: Verify the report manifest
         id: verify_report
-        working-directory: ci-report
+        working-directory: result
         run: sha256sum --check manifest.sha256
 
       - name: Enforce schema, security, and functional gates
-        id: enforce_gates
         run: |
-          nix build --no-link -L \
-            .#checks.x86_64-linux.dns-schema \
-            .#checks.x86_64-linux.dns-security \
-            .#checks.x86_64-linux.dns-topology \
-            ./nix/dns#checks.x86_64-linux.dns-schema \
-            ./nix/dns#checks.x86_64-linux.dns-security \
-            ./nix/dns#checks.x86_64-linux.dns-topology \
-            ./nix/dns#dns-schema-gate \
-            ./nix/dns#dns-security-gate \
-            ./nix/dns#dns-test-gate
-          cmp base-result/result.schema.json ci-report/result.schema.json
-          cmp base-result/provisioning.schema.json ci-report/provisioning.schema.json
-          nix develop ./nix/dns --command python3 tests/report/schema_gate.py \
-            --schema ci-report/result.schema.json \
-            --instance ci-report/result.json
-          nix develop ./nix/dns --command python3 tests/report/schema_gate.py \
-            --schema ci-report/provisioning.schema.json \
-            --instance ci-report/provisioning.json
-          nix develop ./nix/dns --command python3 tests/report/gate.py \
-            --manifest tests/report/required-assertions.json \
-            --scope functional \
-            ci-report/result.json
-          nix develop ./nix/dns --command python3 tests/report/gate.py \
-            --manifest tests/report/required-assertions.json \
-            --scope security \
-            ci-report/result.json
+          nix --accept-flake-config build --no-link -L \
+            .#dns-schema-gate \
+            .#dns-security-gate \
+            .#dns-test-gate
 
       - name: Collect the DNS test report
         id: collect_report
         if: ${{ always() }}
         run: |
-          if [[ ! -f ci-report/manifest.sha256 ]]; then
-            echo "::error title=Report unavailable::Canonical report composition did not complete."
+          if [[ ! -e result ]]; then
+            echo "::error title=Report unavailable::The report derivation did not produce an output."
             exit 1
           fi
+          mkdir -p ci-report
+          cp --recursive --dereference result/. ci-report/
 
       - name: Upload the DNS test report
         if: ${{ always() }}
@@ -444,33 +159,24 @@ jobs:
 
       - name: Assemble and validate the GitHub Pages site
         id: assemble_pages
-        if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.enforce_gates.outcome == 'success' && steps.verify_report.outcome == 'success' && steps.collect_report.outcome == 'success' }}
+        if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.verify_report.outcome == 'success' && steps.collect_report.outcome == 'success' }}
         run: |
           if [[ -e site/reports ]]; then
             echo "::error title=Reserved site path::site/reports is reserved for generated reports."
-            exit 1
-          fi
-          if [[ -e site/provisioning-demo ]]; then
-            echo "::error title=Reserved site path::site/provisioning-demo is generated from the shared station UI."
             exit 1
           fi
           if [[ -e pages-site ]]; then
             echo "::error title=Reserved build path::pages-site must not exist before assembly."
             exit 1
           fi
-          nix build ./nix/provisioning#kaiba-provision-station-pages --out-link station-pages -L
-          mkdir -p pages-site/reports/latest pages-site/provisioning-demo
+          mkdir -p pages-site/reports/latest
           cp --recursive --no-dereference site/. pages-site/
           cp --recursive --no-dereference ci-report/. pages-site/reports/latest/
-          cp --recursive --no-dereference station-pages/. pages-site/provisioning-demo/
-          for asset in index.html styles.css transport.js app.js; do
-            cmp "provisioning/internal/provisioning/stationui/web/$asset" "pages-site/provisioning-demo/$asset"
-          done
           nix develop ./nix/dns --command python3 tests/site/validate.py pages-site
 
       - name: Upload the project site for GitHub Pages
         id: pages_artifact
-        if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.enforce_gates.outcome == 'success' && steps.assemble_pages.outcome == 'success' }}
+        if: ${{ success() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.assemble_pages.outcome == 'success' }}
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: pages-site/

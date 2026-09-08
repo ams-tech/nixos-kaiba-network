@@ -1,4 +1,4 @@
-# Deterministic pilot validation reports
+# Deterministic DNS test reports
 
 The integration test records structured observations; this directory turns
 them into a stable, reviewable report without contacting the network. The
@@ -13,8 +13,6 @@ Run:
 ```console
 python3 tests/report/render.py \
   --result /path/to/result.json \
-  --provisioning /path/to/provisioning.json \
-  --provisioning-schema tests/report/provisioning.schema.json \
   --events /path/to/events.jsonl \
   --evidence /path/to/evidence \
   --zones /path/to/zone-snapshots \
@@ -26,51 +24,6 @@ The schema defaults to `result.schema.json` beside the renderer. Packagers that
 copy the script separately can pass `--schema /path/to/result.schema.json`
 explicitly. `--zones` is optional, but the integration topology supplies it so
 canonical snapshots appear under `zones/`.
-
-The provisioning input follows
-[`provisioning.schema.json`](provisioning.schema.json). It records automated
-checks per target system and a separate manual hardware-qualification state.
-Automated checks may be `passed`, `failed`, or `not-observed`; their derived
-overall state is respectively `passed`, `failed` if any check failed, or
-`partial` if at least one check was not observed. Hardware qualification is
-`pending`, `passed`, or `failed` and never changes the DNS or automated result.
-Pending qualification has no evidence; a passed or failed qualification must
-cite evidence. `mutation_eligible` is always false in this probe-only report.
-The repository's current passed entry is the sacrificial Pi's historical
-pre-fuse qualification, not its current owned-device state. This report schema
-has no post-fuse reconciliation row yet.
-
-CI can replace a platform's complete set of `not-observed` placeholders with a
-strict, source-revision-bound receipt by repeating:
-
-```console
---provisioning-platform-result /path/to/platform-result.json
-```
-
-Each receipt names exactly one supported system, a lowercase 40- or 64-hex
-source revision, and every placeholder check for that system. Receipts cannot
-add checks, replace already-observed checks, alter source-controlled check
-descriptions, or combine different source revisions.
-
-CI should bind all supplied receipts to its checked-out commit with
-`--expected-source-revision <revision>`. Supplying this option without a receipt,
-or supplying any receipt from another revision, is an error.
-
-The native result intentionally has no source revision because Nix builds it
-without ambient VCS metadata. Bind it at the CI boundary with the strict,
-new-file-only receipt writer:
-
-```console
-python3 tests/report/platform_receipt.py \
-  --input /path/to/platform.json \
-  --source-revision <revision> \
-  --output /new/path/to/platform-receipt.json
-```
-
-The writer rejects duplicate or unknown fields, malformed or oversized input,
-unsupported result values, and non-canonical revision identifiers. The report
-renderer still verifies the exact platform/check placeholder set and revision
-before incorporating the receipt.
 
 `result.json` follows [`result.schema.json`](result.schema.json). Each exercised
 claim cites one or more assertion IDs. Every evidence reference begins with
@@ -98,7 +51,6 @@ The renderer writes:
 ```text
 result.json                 index.html
 result.schema.json          index.md
-provisioning.json           provisioning.schema.json
 events.jsonl                junit.xml
 topology.json               topology.dot
 topology.svg                evidence/
@@ -108,20 +60,11 @@ zones/                      manifest.sha256
 Input ordering and line endings are canonicalized. The manifest covers every
 output except itself.
 
-JUnit contains the DNS assertions and automated provisioning checks;
-`not-observed` checks are skipped. Manual hardware qualification is deliberately
-excluded from JUnit. Automated checks do not execute physical recovery firmware
-and do not establish device authentication, attestation, or a complete
-unprovisioned state.
-
 ## Diagnostics and enforcement
 
-The report and its gates belong to the DNS leaf. From a checkout,
-`nix build ./nix/dns#dns-test-report -L` accepts a consistent
-`overall: "failed"` result and exits successfully so a complete diagnostic
-artifact survives a functional failure. The repository-root compatibility
-facade preserves the original `nix build .#dns-test-report -L` command.
-Enforcement is separate:
+`nix build .#dns-test-report -L` accepts a consistent `overall: "failed"`
+result and exits successfully so a complete diagnostic artifact survives a
+functional failure. Enforcement is separate:
 
 ```console
 python3 tests/report/schema_gate.py \
@@ -140,12 +83,9 @@ misclassified, or failed assertions. The security scope independently enforces
 the manifest's security subset. Gates exit zero for a passing suite, one for a
 validation or assertion failure, and two for malformed input or schema.
 
-The DNS flake exposes these as `dns-schema-gate`, `dns-test-gate`, and
-`dns-security-gate`; on `x86_64-linux`, `nix flake check ./nix/dns -L` runs all
-three as separate checks after report rendering. It also runs `report-unit`.
-The root facade
-re-exports the same package and check names, so `nix flake check -L` continues
-to validate the combined project on that platform.
+The flake exposes these as `dns-schema-gate`, `dns-test-gate`, and
+`dns-security-gate`; `nix flake check -L` runs all three as separate checks
+after report rendering. It also runs `report-unit`.
 
 ## Reproducibility and safety
 
@@ -160,10 +100,8 @@ topology.
 Run the focused tests in their pinned Nix environment with:
 
 ```console
-nix build ./nix/dns#report-unit -L
+nix build .#report-unit -L
 ```
-
-`nix build .#report-unit -L` remains available through the root facade.
 
 Or, with the `jsonschema` Python package available, run them directly:
 
